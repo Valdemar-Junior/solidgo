@@ -114,24 +114,12 @@ export class BackgroundSyncService {
   }
 
   private async syncDeliveryConfirmation(data: any): Promise<void> {
-    const { order_id, route_id, action, signature, return_reason, local_timestamp, user_id } = data;
+    const { order_id, route_id, action, signature, local_timestamp, user_id } = data;
 
-    // Update route_order in Supabase
-    const updateData: any = {
-      status: action,
-      delivered_at: local_timestamp,
-      delivered_by: user_id,
-      synced: true,
-      synced_at: new Date().toISOString(),
-    };
-
-    if (signature) {
-      updateData.signature_url = signature;
-    }
-
-    if (return_reason) {
-      updateData.return_reason = return_reason;
-    }
+    const updateData: any = { status: action };
+    if (action === 'delivered') updateData.delivered_at = local_timestamp;
+    if (action === 'returned') updateData.returned_at = local_timestamp;
+    if (signature) updateData.signature_url = signature;
 
     const { error } = await supabase
       .from('route_orders')
@@ -143,19 +131,20 @@ export class BackgroundSyncService {
       throw new Error(`Failed to update route order: ${error.message}`);
     }
 
-    // Update order status if delivered
     if (action === 'delivered') {
       const { error: orderError } = await supabase
         .from('orders')
         .update({ status: 'delivered' })
         .eq('id', order_id);
-
-      if (orderError) {
-        console.warn('Failed to update order status:', orderError);
-      }
+      if (orderError) console.warn('Failed to update order status:', orderError);
+    } else if (action === 'returned') {
+      const { error: orderError2 } = await supabase
+        .from('orders')
+        .update({ status: 'returned' })
+        .eq('id', order_id);
+      if (orderError2) console.warn('Failed to update order status:', orderError2);
     }
 
-    // Log sync action
     await this.logSyncAction('delivery_confirmation', order_id, action, user_id);
   }
 

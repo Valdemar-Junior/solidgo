@@ -108,9 +108,6 @@ export default function DeliveryMarking({ routeId }: DeliveryMarkingProps) {
           .update({
             status: 'delivered',
             delivered_at: confirmation.local_timestamp,
-            delivered_by: confirmation.user_id,
-            synced: true,
-            synced_at: new Date().toISOString(),
           })
           .eq('id', order.id);
         if (error) throw error;
@@ -120,11 +117,15 @@ export default function DeliveryMarking({ routeId }: DeliveryMarkingProps) {
             .from('route_orders')
             .select('order_id,status')
             .eq('route_id', routeId);
-          if (data && data.length > 0 && data.every((ro: any) => ro.status === 'delivered')) {
-            await supabase.from('routes').update({ status: 'completed' }).eq('id', routeId);
-            const orderIds = data.map((d: any) => d.order_id);
-            await supabase.from('orders').update({ status: 'delivered' }).in('id', orderIds);
-            toast.success('Rota concluída');
+          if (data && data.length > 0) {
+            const allDone = data.every((ro: any) => ro.status !== 'pending');
+            if (allDone) {
+              await supabase.from('routes').update({ status: 'completed' }).eq('id', routeId);
+            }
+            const deliveredIds = data.filter((d: any) => d.status === 'delivered').map((d: any) => d.order_id);
+            if (deliveredIds.length) {
+              await supabase.from('orders').update({ status: 'delivered' }).in('id', deliveredIds);
+            }
           }
         } catch {}
       } else {
@@ -159,16 +160,11 @@ export default function DeliveryMarking({ routeId }: DeliveryMarkingProps) {
       };
 
       if (isOnline) {
-        // Update directly in Supabase
         const { error } = await supabase
           .from('route_orders')
           .update({
             status: 'returned',
-            delivered_at: confirmation.local_timestamp,
-            delivered_by: confirmation.user_id,
-            return_reason: returnReason,
-            synced: true,
-            synced_at: new Date().toISOString(),
+            returned_at: confirmation.local_timestamp,
           })
           .eq('id', order.id);
 
@@ -180,11 +176,15 @@ export default function DeliveryMarking({ routeId }: DeliveryMarkingProps) {
             .from('route_orders')
             .select('order_id,status')
             .eq('route_id', routeId);
-          if (data && data.length > 0 && data.every((ro: any) => ro.status === 'delivered')) {
-            await supabase.from('routes').update({ status: 'completed' }).eq('id', routeId);
-            const orderIds = data.map((d: any) => d.order_id);
-            await supabase.from('orders').update({ status: 'delivered' }).in('id', orderIds);
-            toast.success('Rota concluída');
+          if (data && data.length > 0) {
+            const allDone = data.every((ro: any) => ro.status !== 'pending');
+            if (allDone) {
+              await supabase.from('routes').update({ status: 'completed' }).eq('id', routeId);
+            }
+            const returnedIds = data.filter((d: any) => d.status === 'returned').map((d: any) => d.order_id);
+            if (returnedIds.length) {
+              await supabase.from('orders').update({ status: 'returned' }).in('id', returnedIds);
+            }
           }
         } catch {}
       } else {
