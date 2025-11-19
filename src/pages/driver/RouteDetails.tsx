@@ -110,8 +110,9 @@ export default function DriverRouteDetails() {
     };
   };
 
-  const handleForceSync = () => {
-    backgroundSync.forceSync();
+  const handleForceSync = async () => {
+    await backgroundSync.forceSync();
+    await loadRouteDetails();
   };
 
   const getProgress = () => {

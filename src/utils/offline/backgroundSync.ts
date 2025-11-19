@@ -58,18 +58,19 @@ export class BackgroundSyncService {
     }
   }
 
-  private async syncPendingItems(): Promise<void> {
+  private async syncPendingItems(): Promise<number> {
     if (this.isSyncing || !NetworkStatus.isOnline()) {
-      return;
+      return 0;
     }
 
     this.isSyncing = true;
+    let syncedCount = 0;
 
     try {
       const pendingItems = await SyncQueue.getPendingItems();
       
       if (pendingItems.length === 0) {
-        return;
+        return 0;
       }
 
       console.log(`Syncing ${pendingItems.length} pending items...`);
@@ -78,6 +79,7 @@ export class BackgroundSyncService {
         try {
           await this.syncItem(item);
           await SyncQueue.updateItemStatus(item.id, 'completed');
+          syncedCount++;
         } catch (error) {
           console.error(`Failed to sync item ${item.id}:`, error);
           await SyncQueue.updateItemStatus(item.id, 'failed', item.attempts + 1);
@@ -89,8 +91,9 @@ export class BackgroundSyncService {
         }
       }
 
-      if (pendingItems.length > 0) {
-        toast.success(`${pendingItems.length} sincronizações concluídas`);
+      if (syncedCount > 0) {
+        await SyncQueue.removeCompletedItems();
+        toast.success(`${syncedCount} sincronizações concluídas`);
       }
 
     } catch (error) {
@@ -98,6 +101,7 @@ export class BackgroundSyncService {
     } finally {
       this.isSyncing = false;
     }
+    return syncedCount;
   }
 
   private async syncItem(item: any): Promise<void> {
@@ -190,14 +194,15 @@ export class BackgroundSyncService {
     }
   }
 
-  public async forceSync(): Promise<void> {
+  public async forceSync(): Promise<number> {
     if (!NetworkStatus.isOnline()) {
       toast.error('Sem conexão com a internet');
-      return;
+      return 0;
     }
 
     toast.info('Sincronizando dados...');
-    await this.syncPendingItems();
+    const count = await this.syncPendingItems();
+    return count;
   }
 
   public getSyncStatus(): { isSyncing: boolean; isOnline: boolean } {

@@ -14,6 +14,7 @@ export default function DeliveryMarking({ routeId }: DeliveryMarkingProps) {
   const [returnReasons, setReturnReasons] = useState<ReturnReason[]>([]);
   const [loading, setLoading] = useState(true);
   const [isOnline, setIsOnline] = useState(NetworkStatus.isOnline());
+  const [processingIds, setProcessingIds] = useState<Set<string>>(new Set());
   
   const [returnReason, setReturnReason] = useState<string>('');
   const [returnObservations, setReturnObservations] = useState<string>('');
@@ -22,15 +23,27 @@ export default function DeliveryMarking({ routeId }: DeliveryMarkingProps) {
     loadRouteOrders();
     loadReturnReasons();
 
-    // Monitor network status
-    NetworkStatus.addListener((online) => {
+    const listener = (online: boolean) => {
       setIsOnline(online);
-    });
+    };
+    NetworkStatus.addListener(listener);
 
     return () => {
-      NetworkStatus.removeListener(() => {});
+      NetworkStatus.removeListener(listener);
     };
   }, [routeId]);
+
+  useEffect(() => {
+    const run = async () => {
+      if (isOnline) {
+        await backgroundSync.forceSync();
+        await loadRouteOrders();
+      } else {
+        await loadRouteOrders();
+      }
+    };
+    run();
+  }, [isOnline]);
 
   const loadRouteOrders = async () => {
     try {
@@ -94,6 +107,8 @@ export default function DeliveryMarking({ routeId }: DeliveryMarkingProps) {
 
   const markAsDelivered = async (order: RouteOrderWithDetails) => {
     try {
+      if (processingIds.has(order.id)) return;
+      const next = new Set(processingIds); next.add(order.id); setProcessingIds(next);
       const confirmation = {
         order_id: order.order_id,
         route_id: routeId,
@@ -112,6 +127,7 @@ export default function DeliveryMarking({ routeId }: DeliveryMarkingProps) {
           .eq('id', order.id);
         if (error) throw error;
         toast.success('Pedido marcado como entregue!');
+        setRouteOrders(prev => prev.map(ro => ro.id === order.id ? { ...ro, status: 'delivered', delivered_at: confirmation.local_timestamp } : ro));
         try {
           const { data } = await supabase
             .from('route_orders')
@@ -138,6 +154,8 @@ export default function DeliveryMarking({ routeId }: DeliveryMarkingProps) {
     } catch (error) {
       console.error('Error marking as delivered:', error);
       toast.error('Erro ao marcar pedido como entregue');
+    } finally {
+      const next2 = new Set(processingIds); next2.delete(order.id); setProcessingIds(next2);
     }
   };
 
@@ -149,6 +167,8 @@ export default function DeliveryMarking({ routeId }: DeliveryMarkingProps) {
     }
 
     try {
+      if (processingIds.has(order.id)) return;
+      const next = new Set(processingIds); next.add(order.id); setProcessingIds(next);
       const confirmation = {
         order_id: order.order_id,
         route_id: routeId,
@@ -171,6 +191,7 @@ export default function DeliveryMarking({ routeId }: DeliveryMarkingProps) {
         if (error) throw error;
 
         toast.success('Pedido marcado como retornado!');
+        setRouteOrders(prev => prev.map(ro => ro.id === order.id ? { ...ro, status: 'returned', returned_at: confirmation.local_timestamp } : ro));
         try {
           const { data } = await supabase
             .from('route_orders')
@@ -216,6 +237,8 @@ export default function DeliveryMarking({ routeId }: DeliveryMarkingProps) {
     } catch (error) {
       console.error('Error marking as returned:', error);
       toast.error('Erro ao marcar pedido como retornado');
+    } finally {
+      const next2 = new Set(processingIds); next2.delete(order.id); setProcessingIds(next2);
     }
   };
 
@@ -342,7 +365,8 @@ export default function DeliveryMarking({ routeId }: DeliveryMarkingProps) {
                   <>
                     <button
                       onClick={() => markAsDelivered(routeOrder)}
-                      className="flex items-center px-3 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors text-sm"
+                      disabled={processingIds.has(routeOrder.id)}
+                      className="flex items-center px-3 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm"
                     >
                       <CheckCircle className="h-4 w-4 mr-1" />
                       Entregue
@@ -350,7 +374,7 @@ export default function DeliveryMarking({ routeId }: DeliveryMarkingProps) {
                     
                     <button
                       onClick={() => markAsReturned(routeOrder)}
-                      disabled={!returnReason}
+                      disabled={!returnReason || processingIds.has(routeOrder.id)}
                       className="flex items-center px-3 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm"
                     >
                       <XCircle className="h-4 w-4 mr-1" />
