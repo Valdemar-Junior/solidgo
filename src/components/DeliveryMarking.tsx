@@ -7,9 +7,10 @@ import { toast } from 'sonner';
 
 interface DeliveryMarkingProps {
   routeId: string;
+  onUpdated?: () => void;
 }
 
-export default function DeliveryMarking({ routeId }: DeliveryMarkingProps) {
+export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingProps) {
   const [routeOrders, setRouteOrders] = useState<RouteOrderWithDetails[]>([]);
   const [returnReasons, setReturnReasons] = useState<ReturnReason[]>([]);
   const [loading, setLoading] = useState(true);
@@ -144,6 +145,7 @@ export default function DeliveryMarking({ routeId }: DeliveryMarkingProps) {
             }
           }
         } catch {}
+        if (onUpdated) onUpdated();
       } else {
         await SyncQueue.addItem({ type: 'delivery_confirmation', data: confirmation });
         const updated = routeOrders.map(ro => ro.id === order.id ? { ...ro, status: 'delivered' as const } : ro);
@@ -208,6 +210,7 @@ export default function DeliveryMarking({ routeId }: DeliveryMarkingProps) {
             }
           }
         } catch {}
+        if (onUpdated) onUpdated();
       } else {
         // Queue for offline sync
         await SyncQueue.addItem({

@@ -3,6 +3,7 @@ import { useParams } from 'react-router-dom';
 import { supabase } from '../../supabase/client';
 import { backgroundSync } from '../../utils/offline/backgroundSync';
 import DeliveryMarking from '../../components/DeliveryMarking';
+import { OfflineStorage, NetworkStatus } from '../../utils/offline/storage';
 import type { RouteWithDetails, RouteOrder, Order } from '../../types/database';
 import { Truck, MapPin, Clock, Package, RefreshCw, LogOut } from 'lucide-react';
 import { useAuthStore } from '../../stores/authStore';
@@ -44,35 +45,39 @@ export default function DriverRouteDetails() {
     try {
       setLoading(true);
 
-      // Load route details
-      const { data: routeData, error: routeError } = await supabase
-        .from('routes')
-        .select(`
-          *,
-          driver: drivers!driver_id(*, user:users!user_id(*)),
-          vehicle: vehicles!vehicle_id(*)
-        `)
-        .eq('id', routeId)
-        .single();
+      if (NetworkStatus.isOnline()) {
+        const { data: routeData, error: routeError } = await supabase
+          .from('routes')
+          .select(`
+            *,
+            driver: drivers!driver_id(*, user:users!user_id(*)),
+            vehicle: vehicles!vehicle_id(*)
+          `)
+          .eq('id', routeId)
+          .single();
 
-      if (routeError) throw routeError;
-      if (routeData) {
-        setRoute(routeData as RouteWithDetails);
-      }
+        if (routeError) throw routeError;
+        if (routeData) {
+          setRoute(routeData as RouteWithDetails);
+        }
 
-      // Load route orders
-      const { data: ordersData, error: ordersError } = await supabase
-        .from('route_orders')
-        .select(`
-          *,
-          order:orders!order_id(*)
-        `)
-        .eq('route_id', routeId)
-        .order('sequence', { ascending: true });
+        const { data: ordersData, error: ordersError } = await supabase
+          .from('route_orders')
+          .select(`
+            *,
+            order:orders!order_id(*)
+          `)
+          .eq('route_id', routeId)
+          .order('sequence', { ascending: true });
 
-      if (ordersError) throw ordersError;
-      if (ordersData) {
-        setRouteOrders(ordersData as RouteOrder[]);
+        if (ordersError) throw ordersError;
+        if (ordersData) {
+          setRouteOrders(ordersData as RouteOrder[]);
+          await OfflineStorage.setItem(`route_orders_${routeId}`, ordersData);
+        }
+      } else {
+        const cached = await OfflineStorage.getItem(`route_orders_${routeId}`);
+        if (cached) setRouteOrders(cached);
       }
 
     } catch (error) {
@@ -244,7 +249,7 @@ export default function DriverRouteDetails() {
         </div>
 
         {/* Delivery Marking Component */}
-        <DeliveryMarking routeId={routeId} />
+        <DeliveryMarking routeId={routeId} onUpdated={loadRouteDetails} />
       </div>
     </div>
   );
