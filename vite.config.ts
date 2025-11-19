@@ -18,11 +18,11 @@ export default defineConfig({
     }),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'mask-icon.svg'],
+      includeAssets: ['favicon.svg', 'favicon.ico', 'apple-touch-icon.png', 'mask-icon.svg'],
       manifest: {
-        name: 'Delivery Route Manager',
-        short_name: 'DeliveryApp',
-        description: 'PWA para gerenciamento de rotas e entregas',
+        name: 'solidgo',
+        short_name: 'solidgo',
+        description: 'Gerenciamento de rotas e entregas',
         theme_color: '#ffffff',
         background_color: '#ffffff',
         display: 'standalone',
