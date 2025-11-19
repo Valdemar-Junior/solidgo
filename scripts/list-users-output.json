@@ -1,0 +1,11 @@
+{
+  "summary": {
+    "auth_users": [],
+    "public_users": [],
+    "notes": [
+      "Falha ao listar public.users: infinite recursion detected in policy for relation \"users\"",
+      "Para listar auth.users, defina SUPABASE_SERVICE_ROLE_KEY no .env"
+    ]
+  },
+  "conflicts": []
+}
