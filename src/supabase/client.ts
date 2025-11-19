@@ -1,7 +1,9 @@
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || '';
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
+const FALLBACK_URL = 'https://fjbqpmpvnfczbjzkgbjr.supabase.co';
+const FALLBACK_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZqYnFwbXB2bmZjemJqemtnYmpyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjMwNzAzODIsImV4cCI6MjA3ODY0NjM4Mn0.ylBHuMWJXeQPHH96d_R4wiDeuKggYifBV22ql8oUrHQ';
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || FALLBACK_URL;
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || FALLBACK_ANON;
 
 export const envOk = Boolean(supabaseUrl && supabaseAnonKey);
 
