@@ -1,5 +1,6 @@
 import { BrowserRouter as Router, Routes, Route, Navigate } from "react-router-dom";
 import { useEffect } from 'react';
+import { envOk } from './supabase/client';
 import { useAuthStore } from './stores/authStore';
 import Login from './pages/Login';
 import Register from './pages/Register';
@@ -17,6 +18,10 @@ import { Toaster } from 'sonner';
 
 function App() {
   const { checkAuth, isLoading } = useAuthStore();
+
+  if (!envOk) {
+    return <Setup />;
+  }
 
   useEffect(() => {
     checkAuth();
