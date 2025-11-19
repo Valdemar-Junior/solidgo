@@ -38,6 +38,10 @@ export interface Order {
   total: number;
   status: 'imported' | 'assigned' | 'delivered' | 'returned';
   observations?: string;
+  danfe_base64?: string;
+  danfe_gerada_em?: string;
+  xml_documento?: string;
+  raw_json?: any;
   created_at: string;
   updated_at: string;
 }

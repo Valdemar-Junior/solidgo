@@ -163,17 +163,10 @@ export default function DriverRouteDetails() {
               </div>
 
               <div className="flex items-center space-x-4">
-                {/* Network Status */}
-                <div className={`flex items-center px-3 py-1 rounded-full text-sm ${
-                  isOnline ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
-                }`}>
-                  <div className={`w-2 h-2 rounded-full mr-2 ${
-                    isOnline ? 'bg-green-500' : 'bg-red-500'
-                  }`}></div>
+                <div className={`flex items-center px-3 py-1 rounded-full text-sm ${isOnline ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
+                  <div className={`w-2 h-2 rounded-full mr-2 ${isOnline ? 'bg-green-500' : 'bg-red-500'}`}></div>
                   {isOnline ? 'Online' : 'Offline'}
                 </div>
-
-                {/* Sync Button */}
                 <button
                   onClick={handleForceSync}
                   className="flex items-center px-3 py-1 bg-blue-100 text-blue-800 rounded-full text-sm hover:bg-blue-200 transition-colors"
@@ -181,11 +174,16 @@ export default function DriverRouteDetails() {
                   <RefreshCw className="h-4 w-4 mr-1" />
                   Sincronizar
                 </button>
-
-                {/* Progress */}
                 <div className="text-sm text-gray-600">
                   Progresso: {getProgress()}%
                 </div>
+                <button
+                  onClick={async () => { await logout(); window.location.href = '/login'; }}
+                  className="flex items-center px-3 py-1 bg-gray-100 text-gray-700 rounded-full text-sm hover:bg-gray-200 border border-gray-300"
+                >
+                  <LogOut className="h-4 w-4 mr-1" />
+                  Sair
+                </button>
               </div>
             </div>
 
@@ -250,10 +248,3 @@ export default function DriverRouteDetails() {
     </div>
   );
 }
-                <button
-                  onClick={async () => { await logout(); window.location.href = '/login'; }}
-                  className="flex items-center px-3 py-1 bg-gray-100 text-gray-700 rounded-full text-sm hover:bg-gray-200 border border-gray-300"
-                >
-                  <LogOut className="h-4 w-4 mr-1" />
-                  Sair
-                </button>
