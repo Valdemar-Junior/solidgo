@@ -967,7 +967,7 @@ export default function RouteCreation() {
             <div className="p-6 space-y-4 overflow-auto max-h-[65vh]">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
                 <div><span className="font-medium">Nome:</span> {selectedRoute.name}</div>
-                <div><span className="font-medium">Status:</span> {selectedRoute.status}</div>
+                <div><span className="font-medium">Status:</span> {selectedRoute.status === 'pending' ? 'Em Separação' : selectedRoute.status === 'in_progress' ? 'Em Rota' : 'Concluída'}</div>
                 <div><span className="font-medium">Motorista:</span> {selectedRoute.driver?.user?.name || '—'}</div>
                 <div><span className="font-medium">Veículo:</span> {selectedRoute.vehicle ? `${selectedRoute.vehicle.model} • ${selectedRoute.vehicle.plate}` : '—'}</div>
                 <div><span className="font-medium">Criada em:</span> {new Date(selectedRoute.created_at).toLocaleString('pt-BR')}</div>
@@ -987,12 +987,15 @@ export default function RouteCreation() {
                         </tr>
                       </thead>
                       <tbody>
-                        {selectedRoute.route_orders.map((ro) => (
+                        {selectedRoute.route_orders.map((ro) => {
+                          const formatDT = (s?: string) => s ? new Date(s).toLocaleString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '';
+                          const statusPT = ro.status === 'delivered' ? `Entregue ${formatDT(ro.delivered_at)}` : ro.status === 'returned' ? `Retornado ${formatDT(ro.returned_at)}` : 'Pendente';
+                          return (
                           <tr key={ro.id} className="border-t">
                             <td className="px-2 py-1">{ro.sequence}</td>
                             <td className="px-2 py-1">{ro.order?.order_id_erp ?? '—'}</td>
                             <td className="px-2 py-1">{ro.order?.customer_name ?? '—'}</td>
-                            <td className="px-2 py-1">{ro.status}</td>
+                            <td className="px-2 py-1">{statusPT}</td>
                           <td className="px-2 py-1 text-right">
                               {selectedRoute?.status === 'pending' && (
                                 <button
@@ -1088,7 +1091,7 @@ export default function RouteCreation() {
                               )}
                           </td>
                           </tr>
-                        ))}
+                        )})}
                       </tbody>
                     </table>
                   </div>

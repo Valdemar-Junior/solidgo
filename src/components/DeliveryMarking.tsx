@@ -148,7 +148,7 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
         if (onUpdated) onUpdated();
       } else {
         await SyncQueue.addItem({ type: 'delivery_confirmation', data: confirmation });
-        const updated = routeOrders.map(ro => ro.id === order.id ? { ...ro, status: 'delivered' as const } : ro);
+        const updated = routeOrders.map(ro => ro.id === order.id ? { ...ro, status: 'delivered' as const, delivered_at: confirmation.local_timestamp } : ro);
         setRouteOrders(updated);
         await OfflineStorage.setItem(`route_orders_${routeId}`, updated);
         toast.success('Pedido marcado como entregue (offline)!');
@@ -222,7 +222,7 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
         const returnReasonObj = returnReasons.find(r => r.reason === returnReason);
         const updatedOrders = routeOrders.map(ro => 
           ro.id === order.id 
-            ? { ...ro, status: 'returned' as const, return_reason: returnReasonObj || null }
+            ? { ...ro, status: 'returned' as const, returned_at: confirmation.local_timestamp, return_reason: returnReasonObj || null }
             : ro
         );
         setRouteOrders(updatedOrders);
@@ -256,15 +256,11 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
     }
   };
 
-  const getStatusText = (status: string) => {
-    switch (status) {
-      case 'delivered':
-        return 'Entregue';
-      case 'returned':
-        return 'Retornado';
-      default:
-        return 'Pendente';
-    }
+  const getStatusTextWithTime = (ro: RouteOrderWithDetails) => {
+    const fmt = (s?: string) => s ? new Date(s).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '';
+    if (ro.status === 'delivered') return `Entregue ${fmt(ro.delivered_at)}`;
+    if (ro.status === 'returned') return `Retornado ${fmt(ro.returned_at)}`;
+    return 'Pendente';
   };
 
   if (loading) {
@@ -304,8 +300,8 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
                   <span className="font-semibold text-gray-900">
                     {order.customer_name}
                   </span>
-                  <span className="ml-2 px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(routeOrder.status)}">
-                    {getStatusText(routeOrder.status)}
+                  <span className={`ml-2 px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(routeOrder.status)}`}>
+                    {getStatusTextWithTime(routeOrder)}
                   </span>
                 </div>
 
