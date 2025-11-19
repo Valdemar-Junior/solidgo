@@ -351,68 +351,89 @@ export default function RouteCreation() {
             <p className="text-sm mt-1">Importe pedidos primeiro na tela de importação.</p>
           </div>
         ) : (
-          <div className="space-y-3 max-h-96 overflow-y-auto">
-            {orders.filter((order)=>{
-              const o:any = order;
-              const addr = o.address_json || {};
-              const city = String(addr.city || o.raw_json?.destinatario_cidade || '').toLowerCase();
-              const nb = String(addr.neighborhood || o.raw_json?.destinatario_bairro || '').toLowerCase();
-              const filialVenda = String(o.raw_json?.filial_venda || '').toLowerCase();
-              const seller = String(o.raw_json?.vendedor || o.raw_json?.vendedor_nome || '').toLowerCase();
-              const client = String(o.customer_name || '').toLowerCase();
-              const locais = Array.isArray(o.raw_json?.produtos_locais) ? o.raw_json.produtos_locais.map((p:any)=>String(p?.local_estocagem||'').toLowerCase()) : [];
-              const okCity = !filterCity || city.includes(filterCity.toLowerCase());
-              const okNb = !filterNeighborhood || nb.includes(filterNeighborhood.toLowerCase());
-              const okFilial = !filterFilialVenda || filialVenda.includes(filterFilialVenda.toLowerCase());
-              const okSeller = !filterSeller || seller.includes(filterSeller.toLowerCase());
-              const okClient = !filterClient || client.includes(filterClient.toLowerCase());
-              const okLocal = !filterLocalEstocagem || locais.some((l:string)=>l.includes(filterLocalEstocagem.toLowerCase()));
-              return okCity && okNb && okFilial && okLocal && okSeller && okClient;
-            }).map((order) => (
-              <div
-                key={order.id}
-                className={`border rounded-lg p-4 cursor-pointer transition-colors ${
-                  selectedOrders.has(order.id)
-                    ? 'border-blue-500 bg-blue-50'
-                    : 'border-gray-200 hover:border-gray-300'
-                }`}
-                onClick={() => toggleOrderSelection(order.id)}
-              >
-                <div className="flex items-start justify-between">
-                  <div className="flex-1">
-                    <div className="flex items-center">
-                      <input
-                        type="checkbox"
-                        checked={selectedOrders.has(order.id)}
-                        onChange={() => {}}
-                        className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
-                      />
-                      <span className="ml-2 font-medium text-gray-900">
-                        {order.customer_name}
-                      </span>
-                    </div>
-                    
-                    <div className="mt-2 text-sm text-gray-600">
-                      <p>Telefone: {order.phone}</p>
-                      <p>Endereço: {order.address_json.street}, {order.address_json.neighborhood}</p>
-                      <p>Valor: R$ {order.total.toFixed(2)}</p>
-                      {order.observations && (
-                        <p className="mt-1 text-gray-500">Obs: {order.observations}</p>
-                      )}
-                    </div>
-                  </div>
-                  
-                  <div className="ml-4 text-right">
-                    <div className="text-xs text-gray-500 mb-1">
-                      {order.order_id_erp}
-                    </div>
-                    <div className="text-xs text-gray-500">
-                      {order.items_json.length} item(s)
-                    </div>
-                  </div>
-                </div>
-              </div>
-            ))}
+          <div className="max-h-[480px] overflow-y-auto overflow-x-auto">
+            <table className="min-w-full text-sm">
+              <thead className="bg-gray-50 sticky top-0 z-10">
+                <tr>
+                  <th className="px-2 py-2 text-left w-8"></th>
+                  <th className="px-2 py-2 text-left">Data</th>
+                  <th className="px-2 py-2 text-left">Cliente</th>
+                  <th className="px-2 py-2 text-left">Telefone</th>
+                  <th className="px-2 py-2 text-left">Pedido</th>
+                  <th className="px-2 py-2 text-left">Situação</th>
+                  <th className="px-2 py-2 text-left">Observações Internas</th>
+                  <th className="px-2 py-2 text-left">Observações</th>
+                  <th className="px-2 py-2 text-left">Endereço de Entrega</th>
+                  <th className="px-2 py-2 text-left">Quantidade</th>
+                  <th className="px-2 py-2 text-left">Valor</th>
+                  <th className="px-2 py-2 text-left">Cidade</th>
+                  <th className="px-2 py-2 text-left">Bairro</th>
+                  <th className="px-2 py-2 text-left">Filial de Venda</th>
+                  <th className="px-2 py-2 text-left">Local de Estocagem</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-200">
+                {orders.filter((order)=>{
+                  const o:any = order;
+                  const addr = o.address_json || {};
+                  const city = String(addr.city || o.raw_json?.destinatario_cidade || '').toLowerCase();
+                  const nb = String(addr.neighborhood || o.raw_json?.destinatario_bairro || '').toLowerCase();
+                  const filialVenda = String(o.raw_json?.filial_venda || '').toLowerCase();
+                  const seller = String(o.raw_json?.vendedor || o.raw_json?.vendedor_nome || '').toLowerCase();
+                  const client = String(o.customer_name || '').toLowerCase();
+                  const locais = Array.isArray(o.raw_json?.produtos_locais) ? o.raw_json.produtos_locais.map((p:any)=>String(p?.local_estocagem||'').toLowerCase()) : [];
+                  const okCity = !filterCity || city.includes(filterCity.toLowerCase());
+                  const okNb = !filterNeighborhood || nb.includes(filterNeighborhood.toLowerCase());
+                  const okFilial = !filterFilialVenda || filialVenda.includes(filterFilialVenda.toLowerCase());
+                  const okSeller = !filterSeller || seller.includes(filterSeller.toLowerCase());
+                  const okClient = !filterClient || client.includes(filterClient.toLowerCase());
+                  const okLocal = !filterLocalEstocagem || locais.some((l:string)=>l.includes(filterLocalEstocagem.toLowerCase()));
+                  return okCity && okNb && okFilial && okLocal && okSeller && okClient;
+                }).map((order)=>{
+                  const o:any = order;
+                  const addr = o.address_json || {};
+                  const raw = o.raw_json || {};
+                  const data = new Date(o.created_at).toLocaleDateString('pt-BR');
+                  const pedido = String(raw.lancamento_venda ?? o.order_id_erp ?? '');
+                  const situacao = String(raw.situacao ?? 'Pendente');
+                  const obsInternas = String(raw.observacoes_internas ?? '');
+                  const endereco = [
+                    String(addr.street || raw.destinatario_endereco || ''),
+                    String(addr.neighborhood || raw.destinatario_bairro || ''),
+                    String(addr.city || raw.destinatario_cidade || ''),
+                    String(addr.state || ''),
+                    String(addr.zip || raw.destinatario_cep || '')
+                  ].filter(Boolean).join(', ').replace(', ,', ',');
+                  const quantidade = Array.isArray(o.items_json) ? o.items_json.reduce((sum:any,it:any)=>sum + Number(it.quantity||0),0) : 0;
+                  const valor = Number(o.total||0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                  const cidade = String(addr.city || raw.destinatario_cidade || '');
+                  const bairro = String(addr.neighborhood || raw.destinatario_bairro || '');
+                  const filialVendaText = String(raw.filial_venda || '');
+                  const locaisText = Array.isArray(raw.produtos_locais) ? raw.produtos_locais.map((p:any)=>String(p?.local_estocagem||'')).filter(Boolean).join(' • ') : '';
+                  return (
+                    <tr key={o.id} className={selectedOrders.has(o.id) ? 'bg-blue-50' : ''} onClick={()=>toggleOrderSelection(o.id)}>
+                      <td className="px-2 py-2">
+                        <input type="checkbox" className="h-4 w-4" checked={selectedOrders.has(o.id)} onChange={()=>toggleOrderSelection(o.id)} />
+                      </td>
+                      <td className="px-2 py-2">{data}</td>
+                      <td className="px-2 py-2">{o.customer_name}</td>
+                      <td className="px-2 py-2">{o.phone}</td>
+                      <td className="px-2 py-2">{pedido}</td>
+                      <td className="px-2 py-2">{situacao}</td>
+                      <td className="px-2 py-2 whitespace-pre-wrap">{obsInternas}</td>
+                      <td className="px-2 py-2 whitespace-pre-wrap">{o.observations || ''}</td>
+                      <td className="px-2 py-2">{endereco}</td>
+                      <td className="px-2 py-2 text-center">{quantidade}</td>
+                      <td className="px-2 py-2">R$ {valor}</td>
+                      <td className="px-2 py-2">{cidade}</td>
+                      <td className="px-2 py-2">{bairro}</td>
+                      <td className="px-2 py-2">{filialVendaText}</td>
+                      <td className="px-2 py-2">{locaisText}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
         )}
       </div>
