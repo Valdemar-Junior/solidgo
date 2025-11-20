@@ -69,6 +69,17 @@ export default function UsersTeams() {
     }
   }
 
+  const copyPwd = async () => {
+    try {
+      if (generatedPassword) {
+        await navigator.clipboard.writeText(generatedPassword)
+        toast.success('Senha copiada')
+      }
+    } catch {
+      toast.error('Falha ao copiar senha')
+    }
+  }
+
   const createHelper = async () => {
     if (!hName.trim()) { toast.error('Informe o nome do ajudante'); return }
     try {
@@ -136,7 +147,9 @@ export default function UsersTeams() {
         <div className="mt-4 flex items-center space-x-3">
           <button onClick={createUser} className="px-4 py-2 bg-blue-600 text-white rounded-md">Criar Usuário</button>
           {generatedPassword && (
-            <div className="text-sm text-gray-700">Senha inicial: <span className="font-semibold">{generatedPassword}</span> (guarde, só aparece agora)</div>
+            <div className="text-sm text-gray-700 flex items-center">Senha inicial: <span className="font-semibold ml-1">{generatedPassword}</span> <span className="ml-2">(guarde, só aparece agora)</span>
+              <button onClick={copyPwd} className="ml-3 px-2 py-1 bg-gray-100 rounded border hover:bg-gray-200">Copiar</button>
+            </div>
           )}
         </div>
         <div className="mt-6">
