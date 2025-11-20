@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import supabase from '../../supabase/client'
-import { createClient } from '@supabase/supabase-js'
+// no need to create another client; use existing and restore session if it changes
 import type { User } from '../../types/database'
 import { slugifyName, toLoginEmailFromName } from '../../lib/utils'
 import { toast } from 'sonner'
@@ -55,15 +55,18 @@ export default function UsersTeams() {
     try {
       const pwd = uPassword.trim() ? uPassword.trim() : genPassword()
       setGeneratedPassword(pwd)
-      // usar cliente temporário sem persistir sessão
-      const url = (import.meta as any).env?.VITE_SUPABASE_URL || 'https://fjbqpmpvnfczbjzkgbjr.supabase.co'
-      const anon = (import.meta as any).env?.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZqYnFwbXB2bmZjemJqemtnYmpyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjMwNzAzODIsImV4cCI6MjA3ODY0NjM4Mn0.ylBHuMWJXeQPHH96d_R4wiDeuKggYifBV22ql8oUrHQ'
-      const temp = createClient(url, anon, { auth: { persistSession: false } })
       const pseudoEmail = toLoginEmailFromName(uName)
-      const signRes = await temp.auth.signUp({ email: pseudoEmail, password: pwd })
+      const { data: prev } = await supabase.auth.getSession()
+      const signRes = await supabase.auth.signUp({ email: pseudoEmail, password: pwd })
       if (signRes.error) throw signRes.error
       const uid = signRes.data.user?.id
       if (!uid) throw new Error('Usuário auth não criado')
+      // Se a sessão foi alterada, restaurar a sessão anterior do admin
+      if (signRes.data.session && prev?.session?.access_token && prev?.session?.refresh_token) {
+        try {
+          await supabase.auth.setSession({ access_token: prev.session.access_token, refresh_token: prev.session.refresh_token })
+        } catch {}
+      }
 
       const { error: insErr } = await supabase.from('users').insert({
         id: uid,
