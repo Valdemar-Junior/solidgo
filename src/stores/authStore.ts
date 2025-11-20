@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { supabase } from '../supabase/client';
+import { toLoginEmailFromName } from '../lib/utils';
 import type { User } from '../types/database';
 
 interface AuthState {
@@ -23,12 +24,12 @@ export const useAuthStore = create<AuthState>()(
       error: null,
 
       login: async (identifier: string, password: string) => {
-        console.log('Starting login process for:', email);
+        console.log('Starting login process for:', identifier);
         set({ isLoading: true, error: null });
         
         try {
           console.log('Attempting Supabase auth signInWithPassword...');
-          const loginEmail = identifier.includes('@') ? identifier : require('../lib/utils').toLoginEmailFromName(identifier);
+          const loginEmail = identifier.includes('@') ? identifier : toLoginEmailFromName(identifier);
           const { data, error } = await supabase.auth.signInWithPassword({ email: loginEmail, password });
 
           console.log('Supabase auth result:', { data, error });
