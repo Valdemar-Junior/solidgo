@@ -1,15 +1,18 @@
 import { useEffect, useMemo, useState } from 'react'
 import { supabase } from '../../supabase/client'
+import { createClient } from '@supabase/supabase-js'
 import type { User } from '../../types/database'
+import { slugifyName, toLoginEmailFromName } from '../../lib/utils'
 import { toast } from 'sonner'
 
 export default function UsersTeams() {
   const [users, setUsers] = useState<User[]>([])
   const [helpers, setHelpers] = useState<any[]>([])
   const [teams, setTeams] = useState<any[]>([])
+  const [schemaReady, setSchemaReady] = useState(true)
 
   const [uName, setUName] = useState('')
-  const [uEmail, setUEmail] = useState('')
+  const [uPassword, setUPassword] = useState('')
   const [uRole, setURole] = useState<'admin' | 'driver'>('driver')
   const [generatedPassword, setGeneratedPassword] = useState<string | null>(null)
 
@@ -25,8 +28,14 @@ export default function UsersTeams() {
       const { data: usersData } = await supabase.from('users').select('*').order('name')
       if (usersData) setUsers(usersData as User[])
 
-      const { data: helpersData } = await supabase.from('helpers').select('*').order('name')
-      if (helpersData) setHelpers(helpersData)
+      try {
+        const { data: helpersData } = await supabase.from('helpers').select('*').order('name')
+        if (helpersData) setHelpers(helpersData)
+      } catch (err: any) {
+        const msg = String(err?.message || '').toLowerCase()
+        if (msg.includes("helpers") && msg.includes("schema")) setSchemaReady(false)
+        else throw err
+      }
 
       const { data: teamsData } = await supabase
         .from('teams')
@@ -42,26 +51,30 @@ export default function UsersTeams() {
   const genPassword = () => String(Math.floor(100000 + Math.random() * 900000))
 
   const createUser = async () => {
-    if (!uName.trim() || !uEmail.trim()) { toast.error('Informe nome e e-mail'); return }
+    if (!uName.trim()) { toast.error('Informe o nome'); return }
     try {
-      const pwd = genPassword()
+      const pwd = uPassword.trim() ? uPassword.trim() : genPassword()
       setGeneratedPassword(pwd)
-
-      const signRes = await supabase.auth.signUp({ email: uEmail.trim(), password: pwd })
+      // usar cliente temporário sem persistir sessão
+      const supabaseUrl = (import.meta as any).env.VITE_SUPABASE_URL
+      const supabaseAnon = (import.meta as any).env.VITE_SUPABASE_ANON_KEY
+      const temp = createClient(supabaseUrl, supabaseAnon, { auth: { persistSession: false } })
+      const pseudoEmail = toLoginEmailFromName(uName)
+      const signRes = await temp.auth.signUp({ email: pseudoEmail, password: pwd })
       if (signRes.error) throw signRes.error
       const uid = signRes.data.user?.id
       if (!uid) throw new Error('Usuário auth não criado')
 
       const { error: insErr } = await supabase.from('users').insert({
         id: uid,
-        email: uEmail.trim(),
+        email: pseudoEmail,
         name: uName.trim(),
         role: uRole,
         must_change_password: true,
       })
       if (insErr) throw insErr
       toast.success('Usuário criado. Senha inicial gerada.')
-      setUName(''); setUEmail(''); setURole('driver')
+      setUName(''); setUPassword(''); setURole('driver')
       await loadAll()
     } catch (e: any) {
       console.error(e)
@@ -124,7 +137,7 @@ export default function UsersTeams() {
   }
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-8 max-w-4xl mx-auto">
       <div className="bg-white rounded-lg shadow p-6">
         <h2 className="text-xl font-bold text-gray-900 mb-4">Cadastro de Usuários</h2>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -133,15 +146,15 @@ export default function UsersTeams() {
             <input value={uName} onChange={e=>setUName(e.target.value)} className="w-full px-3 py-2 border rounded-md" />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">E-mail</label>
-            <input type="email" value={uEmail} onChange={e=>setUEmail(e.target.value)} className="w-full px-3 py-2 border rounded-md" />
-          </div>
-          <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">Tipo de usuário</label>
             <select value={uRole} onChange={e=>setURole(e.target.value as any)} className="w-full px-3 py-2 border rounded-md">
               <option value="admin">Admin</option>
               <option value="driver">Motorista</option>
             </select>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Senha inicial (opcional)</label>
+            <input type="password" value={uPassword} onChange={e=>setUPassword(e.target.value)} className="w-full px-3 py-2 border rounded-md" placeholder="Deixe vazio para gerar" />
           </div>
         </div>
         <div className="mt-4 flex items-center space-x-3">
@@ -169,6 +182,11 @@ export default function UsersTeams() {
 
       <div className="bg-white rounded-lg shadow p-6">
         <h2 className="text-xl font-bold text-gray-900 mb-4">Cadastro de Ajudantes</h2>
+        {!schemaReady && (
+          <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded text-sm text-red-800">
+            Tabela "helpers" não encontrada. Execute a migração 018_helpers_teams.sql no painel SQL do Supabase e recarregue.
+          </div>
+        )}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">Nome do Ajudante</label>

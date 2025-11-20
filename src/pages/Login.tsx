@@ -7,17 +7,17 @@ export default function Login() {
   const navigate = useNavigate();
   const { login, isLoading, error, clearError } = useAuthStore();
   
-  const [email, setEmail] = useState('');
+  const [name, setName] = useState('');
   const [password, setPassword] = useState('');
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    console.log('Login form submitted with:', email);
+    console.log('Login form submitted with:', name);
     clearError();
     
     try {
       console.log('Calling login function...');
-      await login(email, password);
+      await login(name, password);
       console.log('Login successful, navigating to home...');
       // Redirect will be handled by the RoleBasedRedirect component
       navigate('/');
@@ -56,16 +56,14 @@ export default function Login() {
           )}
 
           <div>
-            <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-2">
-              Email
-            </label>
+            <label htmlFor="name" className="block text-sm font-medium text-gray-700 mb-2">Nome</label>
             <input
-              id="email"
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
+              id="name"
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
               className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition"
-              placeholder="seu@email.com"
+              placeholder="Seu nome"
               required
               disabled={isLoading}
             />
@@ -102,26 +100,10 @@ export default function Login() {
             )}
           </button>
 
-          <button
-            type="button"
-            onClick={goToRegister}
-            disabled={isLoading}
-            className="w-full bg-green-600 text-white py-3 px-4 rounded-lg font-medium hover:bg-green-700 focus:ring-2 focus:ring-green-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed transition"
-          >
-            Criar uma Conta
-          </button>
+          
         </form>
 
-        <div className="mt-6 text-center text-sm text-gray-500">
-          <div className="mt-4">
-            <button
-              onClick={() => navigate('/register')}
-              className="text-blue-600 hover:text-blue-800 inline-block"
-            >
-              Não tem conta? Cadastre-se
-            </button>
-          </div>
-        </div>
+        
       </div>
     </div>
   );

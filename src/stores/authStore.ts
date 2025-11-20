@@ -8,7 +8,7 @@ interface AuthState {
   isAuthenticated: boolean;
   isLoading: boolean;
   error: string | null;
-  login: (email: string, password: string) => Promise<void>;
+  login: (identifier: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   checkAuth: () => Promise<void>;
   clearError: () => void;
@@ -22,16 +22,14 @@ export const useAuthStore = create<AuthState>()(
       isLoading: false,
       error: null,
 
-  login: async (email: string, password: string) => {
+      login: async (identifier: string, password: string) => {
         console.log('Starting login process for:', email);
         set({ isLoading: true, error: null });
         
         try {
           console.log('Attempting Supabase auth signInWithPassword...');
-          const { data, error } = await supabase.auth.signInWithPassword({
-            email,
-            password,
-          });
+          const loginEmail = identifier.includes('@') ? identifier : require('../lib/utils').toLoginEmailFromName(identifier);
+          const { data, error } = await supabase.auth.signInWithPassword({ email: loginEmail, password });
 
           console.log('Supabase auth result:', { data, error });
 
