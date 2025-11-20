@@ -484,7 +484,26 @@ export default function RouteCreation() {
                     <div>Criada em: {new Date(route.created_at).toLocaleDateString('pt-BR')}</div>
                   </div>
                   <button
-                    onClick={() => { setSelectedRoute(route); selectedRouteIdRef.current = String(route.id); localStorage.setItem('rc_selectedRouteId', String(route.id)); showRouteModalRef.current = true; localStorage.setItem('rc_showRouteModal','1'); setShowRouteModal(true); }}
+                    onClick={async () => {
+                      try {
+                        selectedRouteIdRef.current = String(route.id);
+                        localStorage.setItem('rc_selectedRouteId', String(route.id));
+                        // fetch fresh route details to ensure delivered_at/returned_at
+                        const { data: freshRO } = await supabase
+                          .from('route_orders')
+                          .select(`*, order:orders!order_id(*)`)
+                          .eq('route_id', route.id)
+                          .order('sequence');
+                        const merged = { ...route } as any;
+                        merged.route_orders = (freshRO || []) as any;
+                        setSelectedRoute(merged as RouteWithDetails);
+                      } catch {
+                        setSelectedRoute(route);
+                      }
+                      showRouteModalRef.current = true;
+                      localStorage.setItem('rc_showRouteModal','1');
+                      setShowRouteModal(true);
+                    }}
                     className="w-full bg-blue-600 text-white py-2 px-4 rounded-lg font-medium hover:bg-blue-700 transition-colors flex items-center justify-center"
                   >
                     <Eye className="h-4 w-4 mr-2" /> Ver detalhes
@@ -995,7 +1014,7 @@ export default function RouteCreation() {
                       </thead>
                       <tbody>
                         {selectedRoute.route_orders.map((ro) => {
-                          const formatDT = (s?: string) => s ? new Date(s).toLocaleString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '';
+                          const formatDT = (s?: string) => s ? new Date(s).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
                           const statusPT = ro.status === 'delivered' ? `Entregue ${formatDT(ro.delivered_at)}` : ro.status === 'returned' ? `Retornado ${formatDT(ro.returned_at)}` : 'Pendente';
                           return (
                           <tr key={ro.id} className="border-t">
