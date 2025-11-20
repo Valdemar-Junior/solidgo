@@ -56,8 +56,9 @@ export default function UsersTeams() {
       const pwd = uPassword.trim() ? uPassword.trim() : genPassword()
       setGeneratedPassword(pwd)
       // usar cliente temporário sem persistir sessão
-      const cfg = (globalThis as any).__supabaseConfig || { url: '', anon: '' }
-      const temp = createClient(cfg.url, cfg.anon, { auth: { persistSession: false } })
+      const url = (import.meta as any).env?.VITE_SUPABASE_URL || 'https://fjbqpmpvnfczbjzkgbjr.supabase.co'
+      const anon = (import.meta as any).env?.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZqYnFwbXB2bmZjemJqemtnYmpyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjMwNzAzODIsImV4cCI6MjA3ODY0NjM4Mn0.ylBHuMWJXeQPHH96d_R4wiDeuKggYifBV22ql8oUrHQ'
+      const temp = createClient(url, anon, { auth: { persistSession: false } })
       const pseudoEmail = toLoginEmailFromName(uName)
       const signRes = await temp.auth.signUp({ email: pseudoEmail, password: pwd })
       if (signRes.error) throw signRes.error
