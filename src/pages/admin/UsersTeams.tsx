@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { supabase, supabasePublicUrl, supabaseAnonPublicKey } from '../../supabase/client'
+import { supabase, supabaseConfig } from '../../supabase/client'
 import { createClient } from '@supabase/supabase-js'
 import type { User } from '../../types/database'
 import { slugifyName, toLoginEmailFromName } from '../../lib/utils'
@@ -56,7 +56,7 @@ export default function UsersTeams() {
       const pwd = uPassword.trim() ? uPassword.trim() : genPassword()
       setGeneratedPassword(pwd)
       // usar cliente temporário sem persistir sessão
-      const temp = createClient(supabasePublicUrl, supabaseAnonPublicKey, { auth: { persistSession: false } })
+      const temp = createClient(supabaseConfig.url, supabaseConfig.anon, { auth: { persistSession: false } })
       const pseudoEmail = toLoginEmailFromName(uName)
       const signRes = await temp.auth.signUp({ email: pseudoEmail, password: pwd })
       if (signRes.error) throw signRes.error
