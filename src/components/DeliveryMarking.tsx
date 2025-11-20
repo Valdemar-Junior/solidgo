@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../supabase/client';
 import { OfflineStorage, SyncQueue, NetworkStatus } from '../utils/offline/storage';
+import { backgroundSync } from '../utils/offline/backgroundSync';
 import type { RouteOrderWithDetails, Order, ReturnReason } from '../types/database';
 import { Package, CheckCircle, XCircle, Clock, MapPin } from 'lucide-react';
 import { toast } from 'sonner';
