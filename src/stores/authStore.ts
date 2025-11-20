@@ -22,7 +22,7 @@ export const useAuthStore = create<AuthState>()(
       isLoading: false,
       error: null,
 
-      login: async (email: string, password: string) => {
+  login: async (email: string, password: string) => {
         console.log('Starting login process for:', email);
         set({ isLoading: true, error: null });
         
@@ -57,50 +57,7 @@ export const useAuthStore = create<AuthState>()(
             console.log('Profile fetch result:', { profile, profileError });
 
             if (!profile) {
-              console.log('Profile missing, attempting to create...');
-              const meta = (data.user as any).user_metadata || {};
-              const { error: insertError } = await supabase
-                .from('users')
-                .insert({
-                  id: data.user.id,
-                  email: data.user.email,
-                  name: meta.name || data.user.email,
-                  role: meta.role || 'admin',
-                  phone: meta.phone || null,
-                });
-
-              if (insertError) {
-                console.error('Profile create error:', insertError);
-                throw new Error('Perfil de usuário não encontrado');
-              }
-
-              const { data: newProfile } = await supabase
-                .from('users')
-                .select('*')
-                .eq('id', data.user.id)
-                .single();
-
-              if (!newProfile) {
-                throw new Error('Perfil de usuário não encontrado');
-              }
-
-              const user: User = {
-                id: newProfile.id,
-                email: newProfile.email,
-                name: newProfile.name,
-                role: newProfile.role,
-                phone: newProfile.phone,
-                created_at: newProfile.created_at,
-              };
-
-              console.log('Setting user in store:', user);
-              set({
-                user,
-                isAuthenticated: true,
-                isLoading: false,
-                error: null,
-              });
-              console.log('Login process completed successfully');
+              throw new Error('Perfil de usuário não encontrado');
             } else {
               const user: User = {
                 id: profile.id,
@@ -108,6 +65,7 @@ export const useAuthStore = create<AuthState>()(
                 name: profile.name,
                 role: profile.role,
                 phone: profile.phone,
+                must_change_password: profile.must_change_password,
                 created_at: profile.created_at,
               };
 
@@ -179,6 +137,7 @@ export const useAuthStore = create<AuthState>()(
                 name: profile.name,
                 role: profile.role,
                 phone: profile.phone,
+                must_change_password: profile.must_change_password,
                 created_at: profile.created_at,
               };
 
@@ -189,58 +148,7 @@ export const useAuthStore = create<AuthState>()(
               });
               console.log('User authenticated successfully:', user);
             } else {
-              console.log('No profile found, attempting to create...');
-              const meta = (session.user as any).user_metadata || {};
-              const { error: insertError } = await supabase
-                .from('users')
-                .insert({
-                  id: session.user.id,
-                  email: session.user.email,
-                  name: meta.name || session.user.email,
-                  role: meta.role || 'admin',
-                  phone: meta.phone || null,
-                });
-
-              if (insertError) {
-                console.error('Profile create error:', insertError);
-                set({
-                  user: null,
-                  isAuthenticated: false,
-                  isLoading: false,
-                });
-                return;
-              }
-
-              const { data: newProfile } = await supabase
-                .from('users')
-                .select('*')
-                .eq('id', session.user.id)
-                .single();
-
-              if (!newProfile) {
-                set({
-                  user: null,
-                  isAuthenticated: false,
-                  isLoading: false,
-                });
-                return;
-              }
-
-              const user: User = {
-                id: newProfile.id,
-                email: newProfile.email,
-                name: newProfile.name,
-                role: newProfile.role,
-                phone: newProfile.phone,
-                created_at: newProfile.created_at,
-              };
-
-              set({
-                user,
-                isAuthenticated: true,
-                isLoading: false,
-              });
-              console.log('User profile created and authenticated:', user);
+              set({ user: null, isAuthenticated: false, isLoading: false })
             }
           } else {
             console.log('No user session found');

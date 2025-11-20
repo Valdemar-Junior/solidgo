@@ -4,6 +4,7 @@ export interface User {
   name: string;
   role: 'admin' | 'driver';
   phone?: string;
+  must_change_password?: boolean;
   created_at: string;
 }
 

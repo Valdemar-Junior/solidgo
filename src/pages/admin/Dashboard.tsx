@@ -91,10 +91,10 @@ export default function AdminDashboard() {
       color: 'bg-green-500',
     },
     {
-      title: 'Motoristas',
-      description: 'Gerenciar motoristas',
+      title: 'Usuários e Equipes',
+      description: 'Cadastrar usuários, ajudantes e equipes',
       icon: Users,
-      href: '/admin/drivers',
+      href: '/admin/users-teams',
       color: 'bg-purple-500',
     },
     {

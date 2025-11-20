@@ -7,8 +7,10 @@ import Register from './pages/Register';
 import TestLogin from './pages/TestLogin';
 import CheckUsers from './pages/CheckUsers';
 import Setup from './pages/Setup';
+import FirstLogin from './pages/FirstLogin';
 import AdminDashboard from './pages/admin/Dashboard';
 import Settings from './pages/admin/Settings';
+import UsersTeams from './pages/admin/UsersTeams';
 import DriverDashboard from './pages/driver/Dashboard';
 import DriverRouteDetails from './pages/driver/RouteDetails';
 import OrdersImport from './pages/admin/OrdersImport';
@@ -47,6 +49,7 @@ function App() {
           <Route path="/test-login" element={<TestLogin />} />
           <Route path="/check-users" element={<CheckUsers />} />
           <Route path="/setup" element={<Setup />} />
+          <Route path="/first-login" element={<FirstLogin />} />
           
           {/* Rotas de teste removidas para fluxo profissional */}
           
@@ -80,6 +83,14 @@ function App() {
             element={
               <ProtectedRoute allowedRoles={['admin']}>
                 <Settings />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/users-teams"
+            element={
+              <ProtectedRoute allowedRoles={['admin']}>
+                <UsersTeams />
               </ProtectedRoute>
             }
           />
@@ -137,6 +148,9 @@ function RoleBasedRedirect() {
     return <Navigate to="/login" replace />;
   }
   
+  if (user.must_change_password) {
+    return <Navigate to="/first-login" replace />;
+  }
   console.log('User found, redirecting based on role:', user.role);
   return user.role === 'admin' 
     ? <Navigate to="/admin" replace /> 
