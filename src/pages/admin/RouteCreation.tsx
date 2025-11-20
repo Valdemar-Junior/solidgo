@@ -967,7 +967,14 @@ export default function RouteCreation() {
             <div className="p-6 space-y-4 overflow-auto max-h-[65vh]">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
                 <div><span className="font-medium">Nome:</span> {selectedRoute.name}</div>
-                <div><span className="font-medium">Status:</span> {selectedRoute.status === 'pending' ? 'Em Separação' : selectedRoute.status === 'in_progress' ? 'Em Rota' : 'Concluída'}</div>
+                <div>
+                  <span className="font-medium">Status:</span> {(() => {
+                    const allDone = (selectedRoute.route_orders || []).every((r:any)=> r.status !== 'pending');
+                    const s = selectedRoute.status;
+                    if (allDone) return 'Concluída';
+                    return s === 'in_progress' ? 'Em Rota' : 'Em Separação';
+                  })()}
+                </div>
                 <div><span className="font-medium">Motorista:</span> {selectedRoute.driver?.user?.name || '—'}</div>
                 <div><span className="font-medium">Veículo:</span> {selectedRoute.vehicle ? `${selectedRoute.vehicle.model} • ${selectedRoute.vehicle.plate}` : '—'}</div>
                 <div><span className="font-medium">Criada em:</span> {new Date(selectedRoute.created_at).toLocaleString('pt-BR')}</div>
