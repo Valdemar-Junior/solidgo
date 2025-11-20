@@ -180,6 +180,10 @@ export const useAuthStore = create<AuthState>()(
 
 // Subscribe to auth changes
 supabase.auth.onAuthStateChange(async (event, session) => {
+  const suppress = typeof window !== 'undefined' && localStorage.getItem('auth_lock') === '1';
+  if (suppress && (event === 'SIGNED_IN' || event === 'SIGNED_OUT' || event === 'TOKEN_REFRESHED')) {
+    return;
+  }
   if (event === 'SIGNED_OUT') {
     useAuthStore.getState().checkAuth();
   } else if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {

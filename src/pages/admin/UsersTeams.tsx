@@ -57,6 +57,7 @@ export default function UsersTeams() {
       setGeneratedPassword(pwd)
       const pseudoEmail = toLoginEmailFromName(uName)
       const { data: prev } = await supabase.auth.getSession()
+      localStorage.setItem('auth_lock','1')
       const signRes = await supabase.auth.signUp({ email: pseudoEmail, password: pwd })
       if (signRes.error) throw signRes.error
       const uid = signRes.data.user?.id
@@ -67,6 +68,7 @@ export default function UsersTeams() {
           await supabase.auth.setSession({ access_token: prev.session.access_token, refresh_token: prev.session.refresh_token })
         } catch {}
       }
+      localStorage.removeItem('auth_lock')
 
       // Inserção com fallback quando coluna must_change_password não existir
       let insErr = null as any
@@ -103,6 +105,7 @@ export default function UsersTeams() {
     } catch (e: any) {
       console.error(e)
       toast.error(String(e.message || 'Falha ao criar usuário'))
+      localStorage.removeItem('auth_lock')
     }
   }
 
