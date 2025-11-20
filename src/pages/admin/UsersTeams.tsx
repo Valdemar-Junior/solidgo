@@ -68,14 +68,35 @@ export default function UsersTeams() {
         } catch {}
       }
 
-      const { error: insErr } = await supabase.from('users').insert({
-        id: uid,
-        email: pseudoEmail,
-        name: uName.trim(),
-        role: uRole,
-        must_change_password: true,
-      })
-      if (insErr) throw insErr
+      // Inserção com fallback quando coluna must_change_password não existir
+      let insErr = null as any
+      try {
+        const { error } = await supabase.from('users').insert({
+          id: uid,
+          email: pseudoEmail,
+          name: uName.trim(),
+          role: uRole,
+          must_change_password: true,
+        })
+        insErr = error || null
+      } catch (e: any) {
+        insErr = e
+      }
+      if (insErr) {
+        const msg = String(insErr?.message || '').toLowerCase()
+        const missingMust = msg.includes('must_change_password') || msg.includes('schema')
+        if (missingMust) {
+          const { error: retryErr } = await supabase.from('users').insert({
+            id: uid,
+            email: pseudoEmail,
+            name: uName.trim(),
+            role: uRole,
+          })
+          if (retryErr) throw retryErr
+        } else {
+          throw insErr
+        }
+      }
       toast.success('Usuário criado. Senha inicial gerada.')
       setUName(''); setUPassword(''); setURole('driver')
       await loadAll()
@@ -175,7 +196,7 @@ export default function UsersTeams() {
               <thead><tr><th className="px-2 py-1 text-left">Nome</th><th className="px-2 py-1 text-left">E-mail</th><th className="px-2 py-1 text-left">Tipo</th><th className="px-2 py-1 text-left">Trocar senha no primeiro login</th></tr></thead>
               <tbody>
                 {users.map(u=> (
-                  <tr key={u.id} className="border-t"><td className="px-2 py-1">{u.name}</td><td className="px-2 py-1">{u.email}</td><td className="px-2 py-1">{u.role==='driver'?'Motorista':'Admin'}</td><td className="px-2 py-1">{u.must_change_password ? 'Sim' : 'Não'}</td></tr>
+                  <tr key={u.id} className="border-t"><td className="px-2 py-1">{u.name}</td><td className="px-2 py-1">{u.email}</td><td className="px-2 py-1">{u.role==='driver'?'Motorista':'Admin'}</td><td className="px-2 py-1">{u.must_change_password === undefined ? '—' : (u.must_change_password ? 'Sim' : 'Não')}</td></tr>
                 ))}
               </tbody>
             </table>
