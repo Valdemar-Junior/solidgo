@@ -61,34 +61,14 @@ export default function UsersTeams() {
       const uid = crypto.randomUUID()
 
       // Inserção com fallback quando coluna must_change_password não existir
-      let insErr = null as any
-      try {
-        const { error } = await supabase.from('users').insert({
-          id: uid,
-          email: pseudoEmail,
-          name: uName.trim(),
-          role: uRole,
-          must_change_password: true,
-        })
-        insErr = error || null
-      } catch (e: any) {
-        insErr = e
-      }
-      if (insErr) {
-        const msg = String(insErr?.message || '').toLowerCase()
-        const missingMust = msg.includes('must_change_password') || msg.includes('schema')
-        if (missingMust) {
-          const { error: retryErr } = await supabase.from('users').insert({
-            id: uid,
-            email: pseudoEmail,
-            name: uName.trim(),
-            role: uRole,
-          })
-          if (retryErr) throw retryErr
-        } else {
-          throw insErr
-        }
-      }
+      const { error: rpcErr } = await supabase.rpc('admin_create_user', {
+        p_id: uid,
+        p_email: pseudoEmail,
+        p_name: uName.trim(),
+        p_role: uRole,
+        p_must_change_password: true,
+      })
+      if (rpcErr) throw rpcErr
       toast.success('Usuário criado. Senha inicial gerada.')
       setUName(''); setUPassword(''); setURole('driver')
       await loadAll()
@@ -112,7 +92,7 @@ export default function UsersTeams() {
   const createHelper = async () => {
     if (!hName.trim()) { toast.error('Informe o nome do ajudante'); return }
     try {
-      const { error } = await supabase.from('helpers').insert({ name: hName.trim() })
+      const { data, error } = await supabase.rpc('admin_create_helper', { p_name: hName.trim() })
       if (error) throw error
       toast.success('Ajudante criado')
       setHName('')
