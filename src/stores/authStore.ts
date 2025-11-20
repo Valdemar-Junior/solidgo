@@ -30,7 +30,7 @@ export const useAuthStore = create<AuthState>()(
         try {
           console.log('Attempting Supabase auth signInWithPassword...');
           const loginEmail = identifier.includes('@') ? identifier : toLoginEmailFromName(identifier);
-          const { data, error } = await supabase.auth.signInWithPassword({ email: loginEmail, password });
+          let { data, error } = await supabase.auth.signInWithPassword({ email: loginEmail, password });
 
           console.log('Supabase auth result:', { data, error });
 
@@ -40,8 +40,17 @@ export const useAuthStore = create<AuthState>()(
           }
 
           if (error) {
-            console.error('Supabase auth error:', error);
-            throw error;
+            const msg = String(error.message || '').toLowerCase();
+            if (msg.includes('invalid') || msg.includes('credentials')) {
+              const signup = await supabase.auth.signUp({ email: loginEmail, password });
+              if (signup.error) throw signup.error;
+              // tentar login novamente
+              const retry = await supabase.auth.signInWithPassword({ email: loginEmail, password });
+              data = retry.data; error = retry.error as any;
+              if (retry.error) throw retry.error;
+            } else {
+              throw error;
+            }
           }
 
           if (data.user) {
