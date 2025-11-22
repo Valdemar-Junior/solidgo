@@ -107,6 +107,10 @@ export default function UsersTeams() {
     return users.filter(u => u.role === 'helper' || u.role === 'montador').map(u => ({ id: u.id, name: u.name }))
   }, [users])
 
+  const helperOptions = useMemo(() => {
+    return users.filter(u => u.role === 'helper' || u.role === 'montador').map(u => ({ id: u.id, name: u.name }))
+  }, [users])
+
   const createTeam = async () => {
     if (!teamDriverId || !teamHelperId) { toast.error('Selecione motorista e ajudante'); return }
     try {
@@ -146,6 +150,8 @@ export default function UsersTeams() {
             <select value={uRole} onChange={e=>setURole(e.target.value as any)} className="w-full px-3 py-2 border rounded-md">
               <option value="admin">Admin</option>
               <option value="driver">Motorista</option>
+              <option value="helper">Ajudante</option>
+              <option value="montador">Montador</option>
             </select>
           </div>
           <div>
