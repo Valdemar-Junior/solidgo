@@ -56,19 +56,25 @@ export default function UsersTeams() {
       const pwd = uPassword.trim() ? uPassword.trim() : genPassword()
       setGeneratedPassword(pwd)
       const pseudoEmail = toLoginEmailFromName(uName)
-      // Não cria usuário no Auth aqui para não trocar a sessão do admin.
-      // Apenas registra no nosso perfil com e-mail técnico e a senha gerada será usada pelo usuário no primeiro login.
-      const uid = crypto.randomUUID()
+      const { data: prev } = await supabase.auth.getSession()
+      const signRes = await supabase.auth.signUp({ email: pseudoEmail, password: pwd })
+      if (signRes.error) throw signRes.error
+      const uid = signRes.data.user?.id
+      if (!uid) throw new Error('Falha ao criar usuário de autenticação')
+      // restaura a sessão do admin
+      await supabase.auth.signOut()
+      if (prev?.session?.access_token && prev?.session?.refresh_token) {
+        await supabase.auth.setSession({ access_token: prev.session.access_token, refresh_token: prev.session.refresh_token })
+      }
 
       // Inserção com fallback quando coluna must_change_password não existir
-      const { error: rpcErr } = await supabase.rpc('admin_create_user', {
-        p_id: uid,
-        p_email: pseudoEmail,
-        p_name: uName.trim(),
-        p_role: uRole,
-        p_must_change_password: true,
+      const { error: insErr } = await supabase.from('users').insert({
+        id: uid,
+        email: pseudoEmail,
+        name: uName.trim(),
+        role: uRole,
       })
-      if (rpcErr) throw rpcErr
+      if (insErr) throw insErr
       toast.success('Usuário criado. Senha inicial gerada.')
       setUName(''); setUPassword(''); setURole('driver')
       await loadAll()
