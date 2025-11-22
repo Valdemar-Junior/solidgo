@@ -1,7 +1,6 @@
-import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { createClient } from '@supabase/supabase-js'
 
-export default async function handler(req: VercelRequest, res: VercelResponse) {
+export default async function handler(req: any, res: any) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' })
   const { userId, newPassword } = req.body || {}
   if (!userId || !newPassword) return res.status(400).json({ error: 'Missing userId or newPassword' })
