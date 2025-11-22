@@ -65,7 +65,30 @@ export const useAuthStore = create<AuthState>()(
             console.log('Profile fetch result:', { profile, profileError });
 
             if (!profile) {
-              throw new Error('Perfil de usuário não encontrado');
+              const fallbackName = identifier;
+              const roleDefault = 'driver';
+              const { error: insertErr } = await supabase.from('users').insert({
+                id: data.user.id,
+                email: data.user.email,
+                name: fallbackName,
+                role: roleDefault,
+              });
+              if (insertErr) throw new Error('Perfil de usuário não encontrado');
+              const { data: newProfile } = await supabase
+                .from('users')
+                .select('*')
+                .eq('id', data.user.id)
+                .single();
+              const user: User = {
+                id: newProfile!.id,
+                email: newProfile!.email,
+                name: newProfile!.name,
+                role: newProfile!.role,
+                phone: newProfile!.phone,
+                must_change_password: newProfile!.must_change_password,
+                created_at: newProfile!.created_at,
+              };
+              set({ user, isAuthenticated: true, isLoading: false, error: null });
             } else {
               const user: User = {
                 id: profile.id,
@@ -156,7 +179,38 @@ export const useAuthStore = create<AuthState>()(
               });
               console.log('User authenticated successfully:', user);
             } else {
-              set({ user: null, isAuthenticated: false, isLoading: false })
+              // criar perfil mínimo para o próprio usuário
+              const defaultName = (session.user.email || 'Usuário');
+              const { error: insertErr } = await supabase.from('users').insert({
+                id: session.user.id,
+                email: session.user.email,
+                name: defaultName,
+                role: 'driver',
+              });
+              if (!insertErr) {
+                const { data: created } = await supabase
+                  .from('users')
+                  .select('*')
+                  .eq('id', session.user.id)
+                  .single();
+                if (created) {
+                  set({
+                    user: {
+                      id: created.id,
+                      email: created.email,
+                      name: created.name,
+                      role: created.role,
+                      phone: created.phone,
+                      must_change_password: created.must_change_password,
+                      created_at: created.created_at,
+                    },
+                    isAuthenticated: true,
+                    isLoading: false,
+                  });
+                  return;
+                }
+              }
+              set({ user: null, isAuthenticated: false, isLoading: false });
             }
           } else {
             console.log('No user session found');
