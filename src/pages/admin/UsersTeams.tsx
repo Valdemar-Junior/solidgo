@@ -7,16 +7,12 @@ import { toast } from 'sonner'
 
 export default function UsersTeams() {
   const [users, setUsers] = useState<User[]>([])
-  const [helpers, setHelpers] = useState<any[]>([])
   const [teams, setTeams] = useState<any[]>([])
-  const [schemaReady, setSchemaReady] = useState(true)
 
   const [uName, setUName] = useState('')
   const [uPassword, setUPassword] = useState('')
-  const [uRole, setURole] = useState<'admin' | 'driver'>('driver')
+  const [uRole, setURole] = useState<'admin' | 'driver' | 'helper' | 'montador'>('driver')
   const [generatedPassword, setGeneratedPassword] = useState<string | null>(null)
-
-  const [hName, setHName] = useState('')
 
   const [teamDriverId, setTeamDriverId] = useState('')
   const [teamHelperId, setTeamHelperId] = useState('')
@@ -28,14 +24,7 @@ export default function UsersTeams() {
       const { data: usersData } = await supabase.from('users').select('*').order('name')
       if (usersData) setUsers(usersData as User[])
 
-      try {
-        const { data: helpersData } = await supabase.from('helpers').select('*').order('name')
-        if (helpersData) setHelpers(helpersData)
-      } catch (err: any) {
-        const msg = String(err?.message || '').toLowerCase()
-        if (msg.includes("helpers") && msg.includes("schema")) setSchemaReady(false)
-        else throw err
-      }
+      // helpers removidos: usamos perfis de usuários com roles 'helper' e 'montador'
 
       const { data: teamsData } = await supabase
         .from('teams')
@@ -108,22 +97,14 @@ export default function UsersTeams() {
     }
   }
 
-  const createHelper = async () => {
-    if (!hName.trim()) { toast.error('Informe o nome do ajudante'); return }
-    try {
-      const { data, error } = await supabase.rpc('admin_create_helper', { p_name: hName.trim() })
-      if (error) throw error
-      toast.success('Ajudante criado')
-      setHName('')
-      await loadAll()
-    } catch (e: any) {
-      console.error(e)
-      toast.error(String(e.message || 'Falha ao criar ajudante'))
-    }
-  }
+  // criação de ajudante/montador agora é via criação de usuário com role correspondente
 
   const driverOptions = useMemo(() => {
     return users.filter(u => u.role === 'driver').map(u => ({ id: u.id, name: u.name }))
+  }, [users])
+
+  const helperOptions = useMemo(() => {
+    return users.filter(u => u.role === 'helper' || u.role === 'montador').map(u => ({ id: u.id, name: u.name }))
   }, [users])
 
   const createTeam = async () => {
@@ -184,10 +165,10 @@ export default function UsersTeams() {
           <h3 className="text-sm font-semibold text-gray-900 mb-2">Usuários</h3>
           <div className="overflow-x-auto">
             <table className="min-w-full text-sm">
-              <thead><tr><th className="px-2 py-1 text-left">Nome</th><th className="px-2 py-1 text-left">E-mail</th><th className="px-2 py-1 text-left">Tipo</th><th className="px-2 py-1 text-left">Trocar senha no primeiro login</th></tr></thead>
+              <thead><tr><th className="px-2 py-1 text-left">Nome</th><th className="px-2 py-1 text-left">Tipo</th><th className="px-2 py-1 text-left">Trocar senha no primeiro login</th></tr></thead>
               <tbody>
                 {users.map(u=> (
-                  <tr key={u.id} className="border-t"><td className="px-2 py-1">{u.name}</td><td className="px-2 py-1">{u.email}</td><td className="px-2 py-1">{u.role==='driver'?'Motorista':'Admin'}</td><td className="px-2 py-1">{u.must_change_password === undefined ? '—' : (u.must_change_password ? 'Sim' : 'Não')}</td></tr>
+                  <tr key={u.id} className="border-t"><td className="px-2 py-1">{u.name}</td><td className="px-2 py-1">{u.role==='driver'?'Motorista':u.role==='admin'?'Admin':u.role==='helper'?'Ajudante':'Montador'}</td><td className="px-2 py-1">{u.must_change_password === undefined ? '—' : (u.must_change_password ? 'Sim' : 'Não')}</td></tr>
                 ))}
               </tbody>
             </table>
@@ -195,29 +176,7 @@ export default function UsersTeams() {
         </div>
       </div>
 
-      <div className="bg-white rounded-lg shadow p-6">
-        <h2 className="text-xl font-bold text-gray-900 mb-4">Cadastro de Ajudantes</h2>
-        {!schemaReady && (
-          <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded text-sm text-red-800">
-            Tabela "helpers" não encontrada. Execute a migração 018_helpers_teams.sql no painel SQL do Supabase e recarregue.
-          </div>
-        )}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">Nome do Ajudante</label>
-            <input value={hName} onChange={e=>setHName(e.target.value)} className="w-full px-3 py-2 border rounded-md" />
-          </div>
-        </div>
-        <div className="mt-4">
-          <button onClick={createHelper} className="px-4 py-2 bg-green-600 text-white rounded-md">Criar Ajudante</button>
-        </div>
-        <div className="mt-6">
-          <h3 className="text-sm font-semibold text-gray-900 mb-2">Ajudantes</h3>
-          <ul className="text-sm text-gray-800">
-            {helpers.map((h:any)=> (<li key={h.id} className="py-1 border-t">{h.name}</li>))}
-          </ul>
-        </div>
-      </div>
+      
 
       <div className="bg-white rounded-lg shadow p-6">
         <h2 className="text-xl font-bold text-gray-900 mb-4">Cadastro de Equipes</h2>
@@ -230,10 +189,10 @@ export default function UsersTeams() {
             </select>
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">Ajudante</label>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Ajudante/Montador</label>
             <select value={teamHelperId} onChange={e=>setTeamHelperId(e.target.value)} className="w-full px-3 py-2 border rounded-md">
               <option value="">Selecione</option>
-              {helpers.map((h:any)=> (<option key={h.id} value={h.id}>{h.name}</option>))}
+              {helperOptions.map((h:any)=> (<option key={h.id} value={h.id}>{h.name}</option>))}
             </select>
           </div>
         </div>
