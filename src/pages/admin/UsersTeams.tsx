@@ -27,8 +27,8 @@ export default function UsersTeams() {
       // helpers removidos: usamos perfis de usuários com roles 'helper' e 'montador'
 
       const { data: teamsData } = await supabase
-        .from('teams')
-        .select('*, driver:drivers!driver_id(id, user:users!user_id(name)), helper:helpers!helper_id(name)')
+        .from('teams_user')
+        .select('id,name,created_at, driver:users!driver_user_id(name), helper:users!helper_user_id(name)')
         .order('created_at', { ascending: false })
       if (teamsData) setTeams(teamsData)
     } catch (e) {
@@ -108,7 +108,23 @@ export default function UsersTeams() {
   }, [users])
 
   const createTeam = async () => {
-    toast.info('Em breve: equipes usarão perfis (motorista + ajudante/montador).')
+    if (!teamDriverId || !teamHelperId) { toast.error('Selecione motorista e ajudante/montador'); return }
+    try {
+      const drv = users.find(u => u.id === teamDriverId)
+      const hlp = users.find(u => u.id === teamHelperId)
+      const teamName = `${drv?.name || ''} x ${hlp?.name || ''}`.trim()
+      const { error } = await supabase.from('teams_user').insert({
+        driver_user_id: teamDriverId,
+        helper_user_id: teamHelperId,
+        name: teamName || 'Equipe',
+      })
+      if (error) throw error
+      toast.success('Equipe criada')
+      setTeamDriverId(''); setTeamHelperId('')
+      await loadAll()
+    } catch (e: any) {
+      toast.error(String(e.message || 'Falha ao criar equipe'))
+    }
   }
 
   return (
@@ -184,10 +200,10 @@ export default function UsersTeams() {
           <h3 className="text-sm font-semibold text-gray-900 mb-2">Equipes</h3>
           <div className="overflow-x-auto">
             <table className="min-w-full text-sm">
-              <thead><tr><th className="px-2 py-1 text-left">Nome</th><th className="px-2 py-1 text-left">Motorista</th><th className="px-2 py-1 text-left">Ajudante</th></tr></thead>
+              <thead><tr><th className="px-2 py-1 text-left">Nome</th><th className="px-2 py-1 text-left">Motorista</th><th className="px-2 py-1 text-left">Ajudante/Montador</th></tr></thead>
               <tbody>
                 {teams.map((t:any)=> (
-                  <tr key={t.id} className="border-t"><td className="px-2 py-1">{t.name}</td><td className="px-2 py-1">{t.driver?.user?.name}</td><td className="px-2 py-1">{t.helper?.name}</td></tr>
+                  <tr key={t.id} className="border-t"><td className="px-2 py-1">{t.name}</td><td className="px-2 py-1">{t.driver?.name}</td><td className="px-2 py-1">{t.helper?.name}</td></tr>
                 ))}
               </tbody>
             </table>
