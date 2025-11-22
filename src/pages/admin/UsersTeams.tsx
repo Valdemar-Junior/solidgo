@@ -57,23 +57,34 @@ export default function UsersTeams() {
       setGeneratedPassword(pwd)
       const pseudoEmail = toLoginEmailFromName(uName)
       const { data: prev } = await supabase.auth.getSession()
-      const signRes = await supabase.auth.signUp({ email: pseudoEmail, password: pwd })
-      if (signRes.error) throw signRes.error
-      const uid = signRes.data.user?.id
-      if (!uid) throw new Error('Falha ao criar usuário de autenticação')
-      // restaura a sessão do admin
-      await supabase.auth.signOut()
+      localStorage.setItem('auth_lock','1')
+      let uid = ''
+      let signRes = await supabase.auth.signUp({ email: pseudoEmail, password: pwd })
+      if (signRes.error) {
+        const msg = String(signRes.error.message || '').toLowerCase()
+        if (msg.includes('already registered') || msg.includes('user already exists')) {
+          const login = await supabase.auth.signInWithPassword({ email: pseudoEmail, password: pwd })
+          if (login.error) throw login.error
+          uid = login.data.user?.id || ''
+        } else {
+          throw signRes.error
+        }
+      } else {
+        uid = signRes.data.user?.id || ''
+      }
+      if (!uid) throw new Error('Falha ao obter id do usuário')
+      // restaura a sessão do admin sem deslogar
       if (prev?.session?.access_token && prev?.session?.refresh_token) {
         await supabase.auth.setSession({ access_token: prev.session.access_token, refresh_token: prev.session.refresh_token })
       }
 
       // Inserção com fallback quando coluna must_change_password não existir
-      const { error: insErr } = await supabase.from('users').insert({
+      const { error: insErr } = await supabase.from('users').upsert({
         id: uid,
         email: pseudoEmail,
         name: uName.trim(),
         role: uRole,
-      })
+      }, { onConflict: 'id' })
       if (insErr) throw insErr
       toast.success('Usuário criado. Senha inicial gerada.')
       setUName(''); setUPassword(''); setURole('driver')
@@ -81,6 +92,8 @@ export default function UsersTeams() {
     } catch (e: any) {
       console.error(e)
       toast.error(String(e.message || 'Falha ao criar usuário'))
+    } finally {
+      localStorage.removeItem('auth_lock')
     }
   }
 
