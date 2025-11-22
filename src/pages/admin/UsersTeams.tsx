@@ -107,33 +107,8 @@ export default function UsersTeams() {
     return users.filter(u => u.role === 'helper' || u.role === 'montador').map(u => ({ id: u.id, name: u.name }))
   }, [users])
 
-  const helperOptions = useMemo(() => {
-    return users.filter(u => u.role === 'helper' || u.role === 'montador').map(u => ({ id: u.id, name: u.name }))
-  }, [users])
-
   const createTeam = async () => {
-    if (!teamDriverId || !teamHelperId) { toast.error('Selecione motorista e ajudante'); return }
-    try {
-      // obter driver record a partir de users
-      const { data: driverRec } = await supabase.from('drivers').select('id,user_id').eq('user_id', teamDriverId).single()
-      let driverId = driverRec?.id
-      if (!driverId) {
-        const { data: newDrv, error: drvErr } = await supabase.from('drivers').insert({ user_id: teamDriverId, active: true }).select().single()
-        if (drvErr) throw drvErr
-        driverId = newDrv.id
-      }
-      const drvName = users.find(u => u.id === teamDriverId)?.name || ''
-      const helperName = helpers.find((h: any) => h.id === teamHelperId)?.name || ''
-      const teamName = `${drvName} x ${helperName}`
-      const { error } = await supabase.from('teams').insert({ driver_id: driverId, helper_id: teamHelperId, name: teamName })
-      if (error) throw error
-      toast.success('Equipe criada')
-      setTeamDriverId(''); setTeamHelperId('')
-      await loadAll()
-    } catch (e: any) {
-      console.error(e)
-      toast.error(String(e.message || 'Falha ao criar equipe'))
-    }
+    toast.info('Em breve: equipes usarão perfis (motorista + ajudante/montador).')
   }
 
   return (
