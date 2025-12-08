@@ -43,11 +43,17 @@ export const buildFullAddress = (a: any): string => {
 
 export const openNavigationByAddress = (address: string) => {
   const q = encodeURIComponent(address);
-  // Preferir Waze via deep link web, que geralmente abre o app no celular
+  // Tentar deep link do Waze primeiro
+  const wazeDeep = `waze://?q=${q}&navigate=yes`;
   const wazeUrl = `https://waze.com/ul?q=${q}&navigate=yes`;
   const googleUrl = `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent('Current Location')}&destination=${q}&travelmode=driving`;
   try {
-    window.open(wazeUrl, '_blank');
+    // Em mobile, o deep link abre o app diretamente
+    window.location.href = wazeDeep;
+    // Fallback em caso de ambiente que bloqueia deep link
+    setTimeout(() => {
+      try { window.open(wazeUrl, '_blank'); } catch { window.open(googleUrl, '_blank'); }
+    }, 250);
   } catch {
     window.open(googleUrl, '_blank');
   }
@@ -97,5 +103,11 @@ export const openNavigationSmartAddressJson = async (a: any) => {
       return;
     }
   } catch {}
+  openNavigationByAddress(addr);
+};
+
+export const openNavigationTextLikeUI = (a: any) => {
+  const addr = buildFullAddress(a);
+  if (!addr) return;
   openNavigationByAddress(addr);
 };
