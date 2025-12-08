@@ -4,14 +4,26 @@ export const formatCep = (cep?: string): string => {
   return digits;
 };
 
+const sanitizeComplement = (raw?: string): string => {
+  const s = String(raw || '').trim();
+  if (!s) return '';
+  const noisy = /(proximo|próximo|perto|vizinh|ao lado|em frente|atrás|posto|ubs|igreja|mercado|bar|praça|esquina)/i;
+  if (noisy.test(s)) return '';
+  const hasPhoneOrUrl = /(https?:\/\/|www\.|\b\d{9,}\b)/i;
+  if (hasPhoneOrUrl.test(s)) return '';
+  if (s.length > 40) return '';
+  const allowed = /(ap(t|to)?\.?|apartamento|bloco|torre|casa|lote|quadra|sala|conjunto|andar|fundos|frente|térreo|terreo|galpão|galpao|km|quiosque|box)/i;
+  return allowed.test(s) ? s : '';
+};
+
 export const buildFullAddress = (a: any): string => {
   const street = String(a?.street || '').trim();
   const number = a?.number ? `, ${String(a.number).trim()}` : '';
-  const complement = a?.complement ? ` - ${String(a.complement).trim()}` : '';
-  const neighborhood = a?.neighborhood ? ` - ${String(a.neighborhood).trim()}` : '';
+  const complement = a?.complement ? ` ${String(a.complement).trim()}` : '';
+  const neighborhood = a?.neighborhood ? `, ${String(a.neighborhood).trim()}` : '';
   const city = String(a?.city || '').trim();
   const state = a?.state ? ` - ${String(a.state).trim()}` : '';
-  const cep = a?.zip ? ` - CEP ${formatCep(a.zip)}` : '';
+  const cep = a?.zip ? `, ${formatCep(a.zip)}` : '';
   const base = `${street}${number}${complement}${neighborhood}`.trim();
   const locality = `${city}${state}${cep}`.trim();
   return [base, locality].filter(Boolean).join(', ');
@@ -30,8 +42,15 @@ export const openNavigationByAddress = (address: string) => {
 };
 
 export const openNavigationByAddressJson = (a: any) => {
-  const addr = buildFullAddress(a);
+  const street = String(a?.street || '').trim();
+  const number = a?.number ? `, ${String(a.number).trim()}` : '';
+  const complement = sanitizeComplement(a?.complement) ? ` ${sanitizeComplement(a?.complement)}` : '';
+  const neighborhood = a?.neighborhood ? `, ${String(a.neighborhood).trim()}` : '';
+  const city = String(a?.city || '').trim();
+  const state = a?.state ? ` - ${String(a.state).trim()}` : '';
+  const cep = a?.zip ? `, ${formatCep(a.zip)}` : '';
+  const parts = [`${street}${number}${complement}${neighborhood}`.trim(), `${city}${state}`.trim(), `${cep}`.trim(), 'Brasil'];
+  const addr = parts.filter(s => s && s !== ',').join(', ').replace(/\s+,/g, ',');
   if (!addr) return;
   openNavigationByAddress(addr);
 };
-
