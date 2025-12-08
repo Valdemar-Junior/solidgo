@@ -4,6 +4,6 @@
     { "source": "/(.*)", "destination": "/" }
   ],
   "functions": {
-    "api/**/*.ts": { "runtime": "nodejs18.x" }
+    "api/**/*.ts": { "runtime": "nodejs24.x" }
   }
 }
