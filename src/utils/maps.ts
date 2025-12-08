@@ -16,6 +16,18 @@ const sanitizeComplement = (raw?: string): string => {
   return allowed.test(s) ? s : '';
 };
 
+const splitStreetNumber = (raw?: string): { name: string; number: string } => {
+  const s = String(raw || '').trim();
+  if (!s) return { name: '', number: '' };
+  const m = s.match(/^(.*?)(?:\s+(\d{1,6})(?:[^\d]|$))$/);
+  if (m) {
+    const name = m[1].trim();
+    const number = m[2].trim();
+    return { name, number };
+  }
+  return { name: s, number: '' };
+};
+
 export const buildFullAddress = (a: any): string => {
   const street = String(a?.street || '').trim();
   const number = a?.number ? `, ${String(a.number).trim()}` : '';
@@ -59,8 +71,12 @@ export const openNavigationSmartAddressJson = async (a: any) => {
   const addr = buildFullAddress(a);
   if (!addr) return;
   try {
-    const q = encodeURIComponent(addr);
-    const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&addressdetails=1&countrycodes=br&q=${q}`;
+    const { name: streetName, number: guessedNumber } = splitStreetNumber(a?.street);
+    const streetParam = encodeURIComponent(`${streetName || a?.street || ''} ${guessedNumber || ''}`.trim());
+    const cityParam = encodeURIComponent(String(a?.city || ''));
+    const stateParam = encodeURIComponent(String(a?.state || ''));
+    const zipParam = encodeURIComponent(formatCep(a?.zip || ''));
+    const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&addressdetails=1&country=Brazil&street=${streetParam}&city=${cityParam}&state=${stateParam}&postalcode=${zipParam}`;
     const resp = await fetch(url, { headers: { 'Accept': 'application/json' } });
     const data: any[] = await resp.json();
     const first = Array.isArray(data) ? data[0] : null;
