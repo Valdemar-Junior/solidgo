@@ -120,22 +120,27 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
       zip: o.address_json.zip || raw.destinatario_cep || '',
       state: o.address_json.state || '',
     };
+    const addrText = buildFullAddress(enriched);
+    toast.info(`GPS: ${addrText}`);
     const hasLL = typeof enriched.lat !== 'undefined' && typeof enriched.lng !== 'undefined';
     if (hasLL && !isNaN(Number(enriched.lat)) && !isNaN(Number(enriched.lng))) {
       openWazeWithLL(Number(enriched.lat), Number(enriched.lng));
       return;
     }
     try {
-      const svc = await fetch('/api/geocode-order', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ orderId: routeOrder.order_id }) })
+      const svc = await fetch('/api/geocode-order', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ orderId: routeOrder.order_id, debug: true }) })
       if (svc.ok) {
         const js = await svc.json()
         if (js && js.ok && typeof js.lat === 'number' && typeof js.lng === 'number') {
+          toast.success(`Geo OK: ${js.lat},${js.lng}`)
           openWazeWithLL(js.lat, js.lng)
           return
         }
+        if (js && js.text) toast.warning('Geo falhou, abrindo por texto')
       }
       const coords = await geocodeAddress(enriched);
       if (coords) {
+        toast.success(`Geo client OK: ${coords.lat},${coords.lng}`)
         openWazeWithLL(coords.lat, coords.lng);
         try {
           await supabase.from('orders').update({ address_json: { ...enriched, lat: coords.lat, lng: coords.lng } }).eq('id', routeOrder.order_id);

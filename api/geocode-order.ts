@@ -2,7 +2,7 @@ import { createClient } from '@supabase/supabase-js'
 
 export default async function handler(req: any, res: any) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' })
-  const { orderId } = req.body || {}
+  const { orderId, debug } = req.body || {}
   if (!orderId) return res.status(400).json({ error: 'Missing orderId' })
 
   const url = (process.env.SUPABASE_URL || '').trim().replace(/\s+/g, '').replace(/\.+$/, '').replace(/\/+$/, '')
@@ -30,31 +30,49 @@ export default async function handler(req: any, res: any) {
       zip: addr.zip || raw.destinatario_cep || '',
     }
 
-    const q = encodeURIComponent([
+    const text = [
       `${enriched.street}${enriched.number ? ', ' + enriched.number : ''}`,
       enriched.neighborhood ? `- ${enriched.neighborhood}` : '',
       `${enriched.city} - ${enriched.state}`,
       enriched.zip ? `${enriched.zip}` : '',
       'Brasil',
-    ].filter(Boolean).join(', ').replace(', -', ' -'))
+    ].filter(Boolean).join(', ').replace(', -', ' -')
+    const q = encodeURIComponent(text)
 
     const ua = (process.env.NOMINATIM_USER_AGENT || 'SOLIDGO/1.0 (contact: support@example.com)').trim()
-    const resp = await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=1&addressdetails=1&countrycodes=br&q=${q}`, {
+    // Tentativa 1: consulta estruturada (street/city/state/postalcode)
+    const streetParam = encodeURIComponent(`${enriched.street}${enriched.number ? ' ' + enriched.number : ''}`.trim())
+    const cityParam = encodeURIComponent(String(enriched.city || ''))
+    const stateParam = encodeURIComponent(String(enriched.state || ''))
+    const zipParam = encodeURIComponent(String(enriched.zip || ''))
+    const urlStructured = `https://nominatim.openstreetmap.org/search?format=json&limit=1&addressdetails=1&country=Brazil&street=${streetParam}&city=${cityParam}&state=${stateParam}&postalcode=${zipParam}`
+    let resp = await fetch(urlStructured, {
       headers: { 'Accept': 'application/json', 'User-Agent': ua },
     })
-    const js: any = await resp.json()
-    const first = Array.isArray(js) ? js[0] : null
-    const lat = first ? Number(first.lat) : NaN
-    const lon = first ? Number(first.lon) : NaN
-    if (isNaN(lat) || isNaN(lon)) return res.status(200).json({ ok: false })
+    let js: any = await resp.json()
+    let first = Array.isArray(js) ? js[0] : null
+    let lat = first ? Number(first.lat) : NaN
+    let lon = first ? Number(first.lon) : NaN
+    // Tentativa 2: fallback por texto livre (q=)
+    let urlReq = urlStructured
+    if (isNaN(lat) || isNaN(lon)) {
+      urlReq = `https://nominatim.openstreetmap.org/search?format=json&limit=1&addressdetails=1&countrycodes=br&q=${q}`
+      resp = await fetch(urlReq, { headers: { 'Accept': 'application/json', 'User-Agent': ua } })
+      js = await resp.json()
+      first = Array.isArray(js) ? js[0] : null
+      lat = first ? Number(first.lat) : NaN
+      lon = first ? Number(first.lon) : NaN
+    }
+    if (debug) {
+      console.log('GEOCODE_ORDER', { orderId, text, urlStructured, urlReq, result: js })
+    }
+    if (isNaN(lat) || isNaN(lon)) return res.status(200).json({ ok: false, text, urlReq })
 
     const nextAddr = { ...addr, lat, lng: lon }
     const { error: upError } = await supa.from('orders').update({ address_json: nextAddr }).eq('id', orderId)
     if (upError) return res.status(500).json({ error: upError.message })
-
-    return res.status(200).json({ ok: true, lat, lng: lon })
+    return res.status(200).json({ ok: true, lat, lng: lon, text, urlReq })
   } catch (e: any) {
     return res.status(500).json({ error: String(e.message || 'Unknown error') })
   }
 }
-
