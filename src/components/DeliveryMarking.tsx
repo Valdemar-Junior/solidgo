@@ -69,6 +69,10 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
           // Cache offline
           await OfflineStorage.setItem(`route_orders_${routeId}`, data);
           try {
+            /* 
+            Removido auto-geocoding no load para evitar lentidão e redundância.
+            As coordenadas devem vir da importação ou serem buscadas sob demanda.
+            
             const missing = (data as any[]).filter(r => {
               const a = typeof r.order?.address_json === 'string' ? JSON.parse(r.order.address_json) : (r.order?.address_json || {})
               return !(typeof a.lat === 'number' && typeof a.lng === 'number')
@@ -83,6 +87,7 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
                 await loadRouteOrders();
               }
             }
+            */
           } catch {}
         }
       } else {
@@ -143,6 +148,10 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
       openWazeWithLL(Number(enriched.lat), Number(enriched.lng));
       return;
     }
+    
+    // Se não tiver lat/lng, avisa e tenta buscar (mas só se o usuário clicar, não automático no load)
+    toast.info('Buscando coordenadas...');
+    
     try {
       const svc = await fetch('/api/geocode-order', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ orderId: routeOrder.order_id, debug: true }) })
       if (svc.ok) {
