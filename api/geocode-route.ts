@@ -30,7 +30,7 @@ export default async function handler(req: any, res: any) {
       const o: any = r.order || {}
       const addr = typeof o.address_json === 'string' ? JSON.parse(o.address_json) : (o.address_json || {})
       const raw = o.raw_json || {}
-      const enriched = {
+      const enriched: any = {
         street: addr.street || raw.destinatario_endereco || '',
         number: addr.number || '',
         neighborhood: addr.neighborhood || raw.destinatario_bairro || '',
@@ -38,10 +38,23 @@ export default async function handler(req: any, res: any) {
         state: addr.state || '',
         zip: addr.zip || raw.destinatario_cep || '',
       }
+
+      // Enriquecer UF/cidade via ViaCEP se faltando
+      try {
+        const cepDigits = String(enriched.zip || '').replace(/\D/g, '').slice(0, 8)
+        if ((!enriched.state || !enriched.city) && cepDigits.length === 8) {
+          const via = await fetch(`https://viacep.com.br/ws/${cepDigits}/json/`, { headers: { 'Accept': 'application/json' } })
+          const vj: any = await via.json()
+          if (!vj?.erro) {
+            enriched.state = enriched.state || String(vj.uf || '')
+            enriched.city = enriched.city || String(vj.localidade || '')
+          }
+        }
+      } catch {}
       const text = [
         `${enriched.street}${enriched.number ? ', ' + enriched.number : ''}`,
         enriched.neighborhood ? `- ${enriched.neighborhood}` : '',
-        `${enriched.city} - ${enriched.state}`,
+        `${enriched.city}${enriched.state ? ' - ' + enriched.state : ''}`,
         enriched.zip ? `${enriched.zip}` : '',
         'Brasil',
       ].filter(Boolean).join(', ').replace(', -', ' -')
