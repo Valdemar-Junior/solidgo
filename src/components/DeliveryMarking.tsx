@@ -111,7 +111,16 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
   const openOrderInMaps = async (routeOrder: RouteOrderWithDetails) => {
     const o = routeOrder.order as any;
     if (!o || !o.address_json) return;
-    openNavigationTextLikeUI(o.address_json);
+    const raw = o.raw_json || {};
+    const enriched = {
+      ...o.address_json,
+      street: o.address_json.street || raw.destinatario_endereco || '',
+      neighborhood: o.address_json.neighborhood || raw.destinatario_bairro || '',
+      city: o.address_json.city || raw.destinatario_cidade || '',
+      zip: o.address_json.zip || raw.destinatario_cep || '',
+      state: o.address_json.state || '',
+    };
+    openNavigationTextLikeUI(enriched);
   };
 
   const markAsDelivered = async (order: RouteOrderWithDetails) => {

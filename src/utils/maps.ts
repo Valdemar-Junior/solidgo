@@ -41,6 +41,17 @@ export const buildFullAddress = (a: any): string => {
   return [base, locality].filter(Boolean).join(', ');
 };
 
+export const buildStrictAddress = (a: any): string => {
+  const street = String(a?.street || '').trim();
+  const number = a?.number ? `, ${String(a.number).trim()}` : '';
+  const city = String(a?.city || '').trim();
+  const state = a?.state ? ` - ${String(a.state).trim()}` : '';
+  const cep = a?.zip ? `, ${formatCep(a.zip)}` : '';
+  const base = `${street}${number}`.trim();
+  const locality = `${city}${state}${cep}`.trim();
+  return [base, locality].filter(Boolean).join(', ');
+};
+
 export const openNavigationByAddress = (address: string) => {
   const q = encodeURIComponent(address);
   // Tentar deep link do Waze primeiro
@@ -107,7 +118,7 @@ export const openNavigationSmartAddressJson = async (a: any) => {
 };
 
 export const openNavigationTextLikeUI = (a: any) => {
-  const addr = buildFullAddress(a);
+  const addr = buildStrictAddress(a);
   if (!addr) return;
   openNavigationByAddress(addr);
 };
