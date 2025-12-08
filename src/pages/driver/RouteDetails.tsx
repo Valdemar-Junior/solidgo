@@ -8,7 +8,7 @@ import type { RouteWithDetails, RouteOrder, Order } from '../../types/database';
 import { Truck, MapPin, Clock, Package, RefreshCw, LogOut } from 'lucide-react';
 import { useAuthStore } from '../../stores/authStore';
 import { toast } from 'sonner';
-import { buildFullAddress, openNavigationByAddress } from '../../utils/maps';
+import { buildFullAddress } from '../../utils/maps';
 
 export default function DriverRouteDetails() {
   const { user, logout } = useAuthStore();

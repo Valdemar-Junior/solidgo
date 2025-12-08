@@ -96,7 +96,11 @@ export const openNavigationByAddressJson = (a: any) => {
   const parts = [`${street}${number}${complement}${neighborhood}`.trim(), `${city}${state}`.trim(), `${cep}`.trim(), 'Brasil'];
   const addr = parts.filter(s => s && s !== ',').join(', ').replace(/\s+,/g, ',');
   if (!addr) return;
-  openNavigationByAddress(addr);
+  try {
+    openWazeWithText(addr);
+  } catch {
+    openGoogleWithText(addr);
+  }
 };
 
 export const openNavigationSmartAddressJson = async (a: any) => {
