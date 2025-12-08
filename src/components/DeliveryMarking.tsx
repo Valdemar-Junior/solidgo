@@ -4,7 +4,7 @@ import { OfflineStorage, SyncQueue, NetworkStatus } from '../utils/offline/stora
 import { backgroundSync } from '../utils/offline/backgroundSync';
 import type { RouteOrderWithDetails, Order, ReturnReason } from '../types/database';
 import { Package, CheckCircle, XCircle, Clock, MapPin } from 'lucide-react';
-import { buildFullAddress, openNavigationByAddressJson } from '../utils/maps';
+import { buildFullAddress, openNavigationSmartAddressJson } from '../utils/maps';
 import { toast } from 'sonner';
 
 interface DeliveryMarkingProps {
@@ -108,10 +108,10 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
     }
   };
 
-  const openOrderInMaps = (routeOrder: RouteOrderWithDetails) => {
+  const openOrderInMaps = async (routeOrder: RouteOrderWithDetails) => {
     const o = routeOrder.order as any;
     if (!o || !o.address_json) return;
-    openNavigationByAddressJson(o.address_json);
+    await openNavigationSmartAddressJson(o.address_json);
   };
 
   const markAsDelivered = async (order: RouteOrderWithDetails) => {

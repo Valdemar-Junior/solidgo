@@ -54,3 +54,23 @@ export const openNavigationByAddressJson = (a: any) => {
   if (!addr) return;
   openNavigationByAddress(addr);
 };
+
+export const openNavigationSmartAddressJson = async (a: any) => {
+  const addr = buildFullAddress(a);
+  if (!addr) return;
+  try {
+    const q = encodeURIComponent(addr);
+    const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&addressdetails=1&countrycodes=br&q=${q}`;
+    const resp = await fetch(url, { headers: { 'Accept': 'application/json' } });
+    const data: any[] = await resp.json();
+    const first = Array.isArray(data) ? data[0] : null;
+    const lat = first ? Number(first.lat) : NaN;
+    const lon = first ? Number(first.lon) : NaN;
+    if (!isNaN(lat) && !isNaN(lon)) {
+      const wazeUrl = `https://waze.com/ul?ll=${lat},${lon}&navigate=yes`;
+      window.open(wazeUrl, '_blank');
+      return;
+    }
+  } catch {}
+  openNavigationByAddress(addr);
+};
