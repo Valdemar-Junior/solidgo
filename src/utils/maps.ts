@@ -59,30 +59,19 @@ export const buildStrictAddress = (a: any): string => {
   const num = String(a?.number || split.number || '').trim();
   const street = split.name;
   const number = num ? `, ${num}` : '';
+  const neighborhood = a?.neighborhood ? ` - ${String(a.neighborhood).trim()}` : '';
   const city = String(a?.city || '').trim();
   const state = a?.state ? ` - ${String(a.state).trim()}` : '';
   const cep = a?.zip ? `, ${formatCep(a.zip)}` : '';
-  const base = `${street}${number}`.trim();
+  const base = `${street}${number}${neighborhood}`.trim();
   const locality = `${city}${state}${cep}`.trim();
   return [base, locality, 'Brasil'].filter(Boolean).join(', ');
 };
 
 export const openNavigationByAddress = (address: string) => {
   const q = encodeURIComponent(address);
-  // Tentar deep link do Waze primeiro
-  const wazeDeep = `waze://?q=${q}&navigate=yes`;
-  const wazeUrl = `https://waze.com/ul?q=${q}&navigate=yes`;
   const googleUrl = `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent('Current Location')}&destination=${q}&travelmode=driving`;
-  try {
-    // Em mobile, o deep link abre o app diretamente
-    window.location.href = wazeDeep;
-    // Fallback em caso de ambiente que bloqueia deep link
-    setTimeout(() => {
-      try { window.open(wazeUrl, '_blank'); } catch { window.open(googleUrl, '_blank'); }
-    }, 250);
-  } catch {
-    window.open(googleUrl, '_blank');
-  }
+  window.open(googleUrl, '_blank');
 };
 
 export const openNavigationByAddressJson = (a: any) => {
