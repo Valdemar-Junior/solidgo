@@ -126,6 +126,14 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
       return;
     }
     try {
+      const svc = await fetch('/api/geocode-order', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ orderId: routeOrder.order_id }) })
+      if (svc.ok) {
+        const js = await svc.json()
+        if (js && js.ok && typeof js.lat === 'number' && typeof js.lng === 'number') {
+          openWazeWithLL(js.lat, js.lng)
+          return
+        }
+      }
       const coords = await geocodeAddress(enriched);
       if (coords) {
         openWazeWithLL(coords.lat, coords.lng);
