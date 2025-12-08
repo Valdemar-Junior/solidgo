@@ -4,7 +4,7 @@ import { OfflineStorage, SyncQueue, NetworkStatus } from '../utils/offline/stora
 import { backgroundSync } from '../utils/offline/backgroundSync';
 import type { RouteOrderWithDetails, Order, ReturnReason } from '../types/database';
 import { Package, CheckCircle, XCircle, Clock, MapPin } from 'lucide-react';
-import { buildFullAddress, openNavigationTextLikeUI } from '../utils/maps';
+import { buildFullAddress, openNavigationTextLikeUI, geocodeAddress, openWazeWithLL } from '../utils/maps';
 import { toast } from 'sonner';
 
 interface DeliveryMarkingProps {
@@ -120,6 +120,21 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
       zip: o.address_json.zip || raw.destinatario_cep || '',
       state: o.address_json.state || '',
     };
+    const hasLL = typeof enriched.lat !== 'undefined' && typeof enriched.lng !== 'undefined';
+    if (hasLL && !isNaN(Number(enriched.lat)) && !isNaN(Number(enriched.lng))) {
+      openWazeWithLL(Number(enriched.lat), Number(enriched.lng));
+      return;
+    }
+    try {
+      const coords = await geocodeAddress(enriched);
+      if (coords) {
+        openWazeWithLL(coords.lat, coords.lng);
+        try {
+          await supabase.from('orders').update({ address_json: { ...enriched, lat: coords.lat, lng: coords.lng } }).eq('id', routeOrder.order_id);
+        } catch {}
+        return;
+      }
+    } catch {}
     openNavigationTextLikeUI(enriched);
   };
 

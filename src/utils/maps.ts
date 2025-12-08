@@ -68,10 +68,21 @@ export const buildStrictAddress = (a: any): string => {
   return [base, locality, 'Brasil'].filter(Boolean).join(', ');
 };
 
-export const openNavigationByAddress = (address: string) => {
+export const openWazeWithLL = (lat: number, lng: number) => {
+  const url = `https://waze.com/ul?ll=${lat},${lng}&navigate=yes`;
+  window.open(url, '_blank');
+};
+
+export const openWazeWithText = (address: string) => {
   const q = encodeURIComponent(address);
-  const googleUrl = `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent('Current Location')}&destination=${q}&travelmode=driving`;
-  window.open(googleUrl, '_blank');
+  const url = `https://waze.com/ul?q=${q}&navigate=yes`;
+  window.open(url, '_blank');
+};
+
+export const openGoogleWithText = (address: string) => {
+  const q = encodeURIComponent(address);
+  const url = `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent('Current Location')}&destination=${q}&travelmode=driving`;
+  window.open(url, '_blank');
 };
 
 export const openNavigationByAddressJson = (a: any) => {
@@ -93,8 +104,7 @@ export const openNavigationSmartAddressJson = async (a: any) => {
     const lat = Number(a.lat);
     const lon = Number(a.lng);
     if (!isNaN(lat) && !isNaN(lon)) {
-      const wazeUrl = `https://waze.com/ul?ll=${lat},${lon}&navigate=yes`;
-      window.open(wazeUrl, '_blank');
+      openWazeWithLL(lat, lon);
       return;
     }
   }
@@ -113,16 +123,36 @@ export const openNavigationSmartAddressJson = async (a: any) => {
     const lat = first ? Number(first.lat) : NaN;
     const lon = first ? Number(first.lon) : NaN;
     if (!isNaN(lat) && !isNaN(lon)) {
-      const wazeUrl = `https://waze.com/ul?ll=${lat},${lon}&navigate=yes`;
-      window.open(wazeUrl, '_blank');
+      openWazeWithLL(lat, lon);
       return;
     }
   } catch {}
-  openNavigationByAddress(addr);
+  openWazeWithText(addr);
 };
 
 export const openNavigationTextLikeUI = (a: any) => {
   const addr = buildStrictAddress(a);
   if (!addr) return;
-  openNavigationByAddress(addr);
+  // Tenta Waze (q=) e deixa o usuário escolher
+  try {
+    openWazeWithText(addr);
+  } catch {
+    openGoogleWithText(addr);
+  }
+};
+
+export const geocodeAddress = async (a: any): Promise<{ lat: number; lng: number } | null> => {
+  const addr = buildFullAddress(a);
+  if (!addr) return null;
+  try {
+    const q = encodeURIComponent(addr);
+    const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&addressdetails=1&countrycodes=br&q=${q}`;
+    const resp = await fetch(url, { headers: { 'Accept': 'application/json' } });
+    const data: any[] = await resp.json();
+    const first = Array.isArray(data) ? data[0] : null;
+    const lat = first ? Number(first.lat) : NaN;
+    const lon = first ? Number(first.lon) : NaN;
+    if (!isNaN(lat) && !isNaN(lon)) return { lat, lng: lon };
+  } catch {}
+  return null;
 };
