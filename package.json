@@ -9,7 +9,7 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "check": "tsc -b --noEmit",
-    "prepare": "husky install"
+    "prepare": "node scripts/husky-prepare.cjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.81.1",
