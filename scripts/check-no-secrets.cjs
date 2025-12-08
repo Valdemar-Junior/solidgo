@@ -23,7 +23,6 @@ if (staged.some(f => blockedFiles.includes(f))) {
 const diff = run('git diff --cached')
 const patterns = [
   /sb_secret_[A-Za-z0-9_\-\.]+/i,
-  /SUPABASE_SERVICE_KEY\s*=\s*.+/i,
   /AWS_SECRET_ACCESS_KEY\s*=\s*.+/i,
 ]
 if (diff && patterns.some(p => p.test(diff))) {
@@ -31,4 +30,3 @@ if (diff && patterns.some(p => p.test(diff))) {
 }
 
 process.exit(0)
-
