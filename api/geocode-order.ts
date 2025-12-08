@@ -67,22 +67,28 @@ export default async function handler(req: any, res: any) {
 
     // Limpeza basica
     const cleanStreet = (enriched.street || '').replace(/[^\w\s\.,-]/g, ' ').trim()
-    const streetHasNumber = /\d+/.test(cleanStreet)
+    // Tenta identificar se o numero está no final da rua e separa
+    let streetForStruct = cleanStreet
+    let numberForStruct = enriched.number
+    if (!numberForStruct) {
+      // Tenta extrair numero do final da string da rua (Ex: "Rua X, 123" ou "Rua X 123")
+      const match = cleanStreet.match(/^(.*?)[,\s]+(\d+[a-zA-Z]?)$/)
+      if (match) {
+        streetForStruct = match[1].trim()
+        // Se quiser usar o numero extraido em alguma busca especifica, podemos.
+        // Mas o Nominatim structured search geralmente prefere o nome da rua limpo.
+      }
+    }
+
     const streetParam = encodeURIComponent(cleanStreet)
+    const streetCleanParam = encodeURIComponent(streetForStruct)
     const cityParam = encodeURIComponent(String(enriched.city || ''))
     const stateParam = encodeURIComponent(String(enriched.state || ''))
     const zipParam = encodeURIComponent(String(enriched.zip || ''))
 
-    // 1. Structured Search (completo)
-    if (!result) {
-      // Se a rua já tem numero, nominatim as vezes prefere que passe junto no street, as vezes não.
-      // Vamos tentar passar como está.
-      const q = `street=${streetParam}&city=${cityParam}&state=${stateParam}&postalcode=${zipParam}`
-      result = await fetchNominatim(q)
-      if (result) usedMethod = 'structured_full'
-    }
-
-    // 2. Freeform Search (q=)
+    // Estrategia Revisada: Priorizar Freeform com CEP (geralmente mais robusto para "Rua, Numero")
+    
+    // 1. Freeform Search (com CEP) - Lida bem com "Rua X, 123 - Cidade, UF, CEP"
     if (!result) {
       const text = [
         `${enriched.street}${enriched.number ? ', ' + enriched.number : ''}`,
@@ -95,11 +101,19 @@ export default async function handler(req: any, res: any) {
       if (result) usedMethod = 'freeform_full'
     }
 
-    // 3. Structured Search SEM CEP (Muitas vezes o CEP no OSM está desatualizado ou ausente)
-    if (!result && enriched.street && enriched.city) {
-      const q = `street=${streetParam}&city=${cityParam}&state=${stateParam}`
+    // 2. Structured Search (completo, usando street limpa sem numero)
+    if (!result) {
+      // Nominatim as vezes falha se street tem numero. Tentar street limpa.
+      const q = `street=${streetCleanParam}&city=${cityParam}&state=${stateParam}&postalcode=${zipParam}`
       result = await fetchNominatim(q)
-      if (result) usedMethod = 'structured_no_zip'
+      if (result) usedMethod = 'structured_clean_street_zip'
+    }
+
+    // 3. Structured Search (completo, usando street original)
+    if (!result && streetParam !== streetCleanParam) {
+      const q = `street=${streetParam}&city=${cityParam}&state=${stateParam}&postalcode=${zipParam}`
+      result = await fetchNominatim(q)
+      if (result) usedMethod = 'structured_raw_street_zip'
     }
 
     // 4. Freeform Search SEM CEP
@@ -114,11 +128,16 @@ export default async function handler(req: any, res: any) {
       if (result) usedMethod = 'freeform_no_zip'
     }
 
-    // 5. Tentar apenas Rua e Cidade (sem numero, sem bairro) - Fallback "centro da rua"
+    // 5. Structured Search SEM CEP (street limpa)
     if (!result && enriched.street && enriched.city) {
-        // Tenta limpar o numero da rua se estiver nela
-        const streetOnly = cleanStreet.replace(/,?\s*\d+.*$/, '')
-        const q = `street=${encodeURIComponent(streetOnly)}&city=${cityParam}&state=${stateParam}`
+      const q = `street=${streetCleanParam}&city=${cityParam}&state=${stateParam}`
+      result = await fetchNominatim(q)
+      if (result) usedMethod = 'structured_clean_street_no_zip'
+    }
+
+    // 6. Fallback extremo: Apenas Rua e Cidade
+    if (!result && enriched.street && enriched.city) {
+        const q = `street=${streetCleanParam}&city=${cityParam}&state=${stateParam}`
         result = await fetchNominatim(q)
         if (result) usedMethod = 'street_city_fallback'
     }

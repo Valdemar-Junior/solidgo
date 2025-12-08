@@ -142,7 +142,9 @@ export default function OrdersImport() {
             city: String(o.destinatario_cidade ?? ''),
             state: '',
             zip: pickZip(o),
-            complement: String(o.destinatario_complemento ?? '')
+            complement: String(o.destinatario_complemento ?? ''),
+            lat: o.lat ?? o.latitude ?? null,
+            lng: o.lng ?? o.longitude ?? o.long ?? null
           },
           items_json: produtos.map((p: any) => ({
             sku: String(p.codigo_produto ?? ''),
@@ -208,77 +210,100 @@ export default function OrdersImport() {
       let inseridos = 0;
       let errosInsercao = 0;
       
+      const savedOrderIds: string[] = [];
+      const savedOrdersInfo: any[] = [];
+
+      // FASE 1: SALVAR PEDIDOS (Rápido)
       for (const pedido of paraInserir) {
         try {
           const { data: inserted, error: insertError } = await supabase
             .from('orders')
             .insert(pedido)
-            .select('id')
+            .select('id, order_id_erp, address_json')
             .single();
           
           if (!insertError) {
             inseridos++;
-            try {
-              const orderId = inserted?.id;
-              if (orderId) {
-                // Delay para respeitar rate limit do Nominatim (aprox 1s)
-                await new Promise(r => setTimeout(r, 1200));
-                
-                const gRes = await fetch('/api/geocode-order', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ orderId, debug: true })
-                });
-                
-                if (gRes.ok) {
-                  const gJson = await gRes.json();
-                  if (gJson.ok) {
-                    console.log(`Geocode OK [${pedido.order_id_erp}]:`, gJson.method, gJson.lat, gJson.lng);
-                  } else {
-                    console.warn(`Geocode falhou [${pedido.order_id_erp}]:`, gJson);
-                  }
-                } else {
-                  console.error(`Erro API Geocode [${pedido.order_id_erp}]:`, gRes.status);
-                }
-              }
-            } catch (e) {
-              console.error('Erro ao chamar geocode-order:', e);
+            if (inserted?.id) {
+              savedOrderIds.push(inserted.id);
+              savedOrdersInfo.push(inserted);
             }
           } else {
             errosInsercao++;
             console.warn('Erro ao inserir pedido:', pedido.order_id_erp, insertError);
-            console.warn('Detalhes do erro:', insertError.message, insertError.details);
           }
         } catch (e: any) {
           errosInsercao++;
           console.error('Erro crítico ao inserir pedido:', pedido.order_id_erp, e);
-          console.error('Stack do erro:', e.stack);
         }
       }
-      // Nenhuma persistência de XML extra necessária: cada pedido tem um único XML
 
       // Mensagem de sucesso com formato claro e direto
       const totalPedidos = toDb.length;
       const pedidosImportados = inseridos;
       const pedidosIgnorados = duplicados;
-      
       const erros = errosInsercao;
-      toast.success(`Processamento concluído: ${totalPedidos} pedidos analisados | ${pedidosImportados} novos pedidos importados | ${pedidosIgnorados} pedidos ignorados (já existentes) | ${erros} erros`, {
-        duration: 5000, // 5 segundos
-        style: {
-          background: '#10B981', // verde sucesso
-          color: 'white',
-        },
-        className: 'toast-success-animation'
+      
+      toast.success(`Importação finalizada: ${pedidosImportados} pedidos salvos! Iniciando busca de coordenadas em segundo plano...`, {
+        duration: 5000,
+        style: { background: '#10B981', color: 'white' }
       });
 
       await fetchImportedOrders();
       setLastImport(new Date());
+      setLoading(false); // Libera a UI
+
+      // FASE 2: GEOCODIFICAR (Lento - Background)
+      if (savedOrdersInfo.length > 0) {
+        let geoCount = 0;
+        const totalGeo = savedOrdersInfo.length;
+        
+        // Notificação de progresso inicial
+        const toastId = toast.loading(`Buscando GPS: 0/${totalGeo} concluídos`, { duration: Infinity });
+
+        for (const order of savedOrdersInfo) {
+           try {
+              // Se já tem coordenadas, não precisa buscar
+              const addr = order.address_json || {};
+              const hasLat = addr.lat && !isNaN(Number(addr.lat));
+              const hasLng = addr.lng && !isNaN(Number(addr.lng));
+              
+              if (hasLat && hasLng) {
+                  // Já tem
+              } else {
+                // Delay para respeitar rate limit do Nominatim (aprox 1.2s)
+                await new Promise(r => setTimeout(r, 1200));
+                
+                const gRes = await fetch('/api/geocode-order', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ orderId: order.id, debug: true })
+                });
+                
+                if (gRes.ok) {
+                  const gJson = await gRes.json();
+                  if (gJson.ok) console.log(`Geocode OK [${order.order_id_erp}]`);
+                  else console.warn(`Geocode falhou [${order.order_id_erp}]:`, gJson);
+                }
+              }
+              
+              geoCount++;
+              // Atualiza o toast a cada 5 pedidos ou no final
+              if (geoCount % 5 === 0 || geoCount === totalGeo) {
+                toast.message(`Buscando GPS: ${geoCount}/${totalGeo} concluídos`, { id: toastId });
+              }
+           } catch (e) {
+             console.error('Erro geocode background:', e);
+           }
+        }
+        
+        toast.success('Busca de coordenadas finalizada!', { id: toastId, duration: 3000 });
+        await fetchImportedOrders(); // Atualiza a lista com as coords
+      }
       
     } catch (error) {
       console.error('Error importing orders:', error);
       toast.error('Erro ao importar pedidos. Tente novamente.');
-    } finally {
       setLoading(false);
     }
   };
