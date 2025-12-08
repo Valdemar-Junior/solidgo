@@ -262,6 +262,29 @@ export default function UsersTeams() {
                         }}
                         className="px-2 py-1 bg-orange-600 text-white rounded-md"
                       >Resetar senha</button>
+                      <button
+                        onClick={async ()=>{
+                          const ok = window.confirm(`Remover usuário "${u.name}"? Esta ação não pode ser desfeita.`)
+                          if (!ok) return
+                          try {
+                            const resp = await fetch(`/api/delete-user`, {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({ userId: u.id })
+                            })
+                            if (!resp.ok) {
+                              let msg = 'Falha ao remover usuário'
+                              try { const j = await resp.json(); if (j?.error) msg = j.error } catch {}
+                              throw new Error(msg + ' — verifique configuração do servidor (SUPABASE_URL/SUPABASE_SERVICE_KEY)')
+                            }
+                            toast.success('Usuário removido')
+                            await loadAll()
+                          } catch (e:any) {
+                            toast.error(String(e.message||'Erro ao remover usuário'))
+                          }
+                        }}
+                        className="ml-2 px-2 py-1 bg-red-600 text-white rounded-md"
+                      >Remover</button>
                     </td>
                   </tr>
                 ))}
