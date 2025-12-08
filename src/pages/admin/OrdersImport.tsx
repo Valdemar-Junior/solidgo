@@ -210,12 +210,24 @@ export default function OrdersImport() {
       
       for (const pedido of paraInserir) {
         try {
-          const { error: insertError } = await supabase
+          const { data: inserted, error: insertError } = await supabase
             .from('orders')
-            .insert(pedido);
+            .insert(pedido)
+            .select('id')
+            .single();
           
           if (!insertError) {
             inseridos++;
+            try {
+              const orderId = inserted?.id;
+              if (orderId) {
+                await fetch('/api/geocode-order', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ orderId })
+                });
+              }
+            } catch {}
           } else {
             errosInsercao++;
             console.warn('Erro ao inserir pedido:', pedido.order_id_erp, insertError);
