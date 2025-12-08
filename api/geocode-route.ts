@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
+export const config = { runtime: 'nodejs18.x' }
 
 export default async function handler(req: any, res: any) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' })
@@ -27,7 +28,7 @@ export default async function handler(req: any, res: any) {
     }).slice(0, Number(limit) || 10)
 
     for (const r of toProcess) {
-      const o = r.order || {}
+      const o: any = r.order || {}
       const addr = typeof o.address_json === 'string' ? JSON.parse(o.address_json) : (o.address_json || {})
       const raw = o.raw_json || {}
       const enriched = {
@@ -81,4 +82,3 @@ export default async function handler(req: any, res: any) {
     return res.status(500).json({ error: String(e.message || 'Unknown error') })
   }
 }
-
