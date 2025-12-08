@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuthStore } from '../stores/authStore';
 import { Loader2, Truck } from 'lucide-react';
 
 export default function Login() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { login, isLoading, error, clearError, user, isAuthenticated } = useAuthStore();
   
   const [name, setName] = useState('');
@@ -12,8 +13,16 @@ export default function Login() {
 
   // Monitorar quando o login for bem sucedido e redirecionar automaticamente
   useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const stay = params.has('stay') || params.has('forceLogin');
+    if (stay) return; // não redirecionar automaticamente quando forçado a mostrar login
+
     if (isAuthenticated && user) {
       console.log('User authenticated, redirecting...', user);
+      if (user.must_change_password) {
+        navigate('/first-login');
+        return;
+      }
       const path = user.role === 'admin' ? '/admin'
         : user.role === 'driver' ? '/driver'
         : user.role === 'conferente' ? '/conferente'
@@ -23,7 +32,7 @@ export default function Login() {
       // força refresh de rota quando mudamos de usuário para evitar estados antigos
       setTimeout(()=>{ try { window.location.replace(path); } catch {} }, 100);
     }
-  }, [isAuthenticated, user, navigate]);
+  }, [isAuthenticated, user, navigate, location.search]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();

@@ -4,6 +4,7 @@ import { OfflineStorage, SyncQueue, NetworkStatus } from '../utils/offline/stora
 import { backgroundSync } from '../utils/offline/backgroundSync';
 import type { RouteOrderWithDetails, Order, ReturnReason } from '../types/database';
 import { Package, CheckCircle, XCircle, Clock, MapPin } from 'lucide-react';
+import { buildFullAddress, openNavigationByAddressJson } from '../utils/maps';
 import { toast } from 'sonner';
 
 interface DeliveryMarkingProps {
@@ -110,11 +111,7 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
   const openOrderInMaps = (routeOrder: RouteOrderWithDetails) => {
     const o = routeOrder.order as any;
     if (!o || !o.address_json) return;
-    const a = o.address_json || {};
-    const n = a.number ? `, ${a.number}` : '';
-    const destino = `${a.street || ''}${n} - ${a.neighborhood || ''} - ${a.city || ''}`.trim();
-    const url = `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent('Current Location')}&destination=${encodeURIComponent(destino)}&travelmode=driving`;
-    window.open(url, '_blank');
+    openNavigationByAddressJson(o.address_json);
   };
 
   const markAsDelivered = async (order: RouteOrderWithDetails) => {
@@ -384,7 +381,7 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
                 <div className="text-sm text-gray-600 space-y-1">
                   <div className="flex items-center">
                     <MapPin className="h-4 w-4 mr-1" />
-                    {order.address_json.street}, {order.address_json.neighborhood}
+                    {buildFullAddress(order.address_json)}
                   </div>
                   <div>
                     Telefone: {order.phone}

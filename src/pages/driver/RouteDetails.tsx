@@ -8,6 +8,7 @@ import type { RouteWithDetails, RouteOrder, Order } from '../../types/database';
 import { Truck, MapPin, Clock, Package, RefreshCw, LogOut } from 'lucide-react';
 import { useAuthStore } from '../../stores/authStore';
 import { toast } from 'sonner';
+import { buildFullAddress, openNavigationByAddress } from '../../utils/maps';
 
 export default function DriverRouteDetails() {
   const { user, logout } = useAuthStore();
@@ -120,16 +121,13 @@ export default function DriverRouteDetails() {
   };
 
   const openMapsForRoute = () => {
-    const toAddr = (o: any) => {
-      const a = o?.address_json || {};
-      const n = a.number ? `, ${a.number}` : '';
-      return `${a.street || ''}${n} - ${a.neighborhood || ''} - ${a.city || ''}`.trim();
-    };
+    const toAddr = (o: any) => buildFullAddress(o?.address_json || {});
     const stops = routeOrders.map((ro: any) => ro.order).filter(Boolean);
     if (stops.length === 0) return;
-    const waypoints = stops.slice(0, Math.max(0, stops.length - 1)).map(toAddr);
+    const waypoints = stops.slice(0, Math.max(0, stops.length - 1)).map(toAddr).filter(Boolean);
     const destination = toAddr(stops[stops.length - 1]);
-    const url = `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent('Current Location')}&destination=${encodeURIComponent(destination)}&travelmode=driving${waypoints.length ? `&waypoints=${encodeURIComponent(waypoints.join('|'))}` : ''}`;
+    const base = `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent('Current Location')}&destination=${encodeURIComponent(destination)}&travelmode=driving`;
+    const url = waypoints.length ? `${base}&waypoints=${encodeURIComponent(waypoints.join('|'))}` : base;
     window.open(url, '_blank');
   };
 
