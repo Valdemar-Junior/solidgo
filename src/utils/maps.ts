@@ -28,6 +28,18 @@ const splitStreetNumber = (raw?: string): { name: string; number: string } => {
   return { name: s, number: '' };
 };
 
+const normalizeStreet = (street?: string, neighborhood?: string): string => {
+  let s = String(street || '').trim();
+  const nb = String(neighborhood || '').trim();
+  if (nb) {
+    const re = new RegExp(nb.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+    s = s.replace(re, '').replace(/\s{2,}/g, ' ').trim();
+  }
+  // Remover conectores comuns de bairro/POI que entram na rua
+  s = s.replace(/\b(condominio|residencial|loteamento|conjunto|bairro|ubs|posto|pronto\s*socorro|igreja|mercado|praça)\b/gi, '').replace(/\s{2,}/g, ' ').trim();
+  return s;
+};
+
 export const buildFullAddress = (a: any): string => {
   const street = String(a?.street || '').trim();
   const number = a?.number ? `, ${String(a.number).trim()}` : '';
@@ -42,14 +54,17 @@ export const buildFullAddress = (a: any): string => {
 };
 
 export const buildStrictAddress = (a: any): string => {
-  const street = String(a?.street || '').trim();
-  const number = a?.number ? `, ${String(a.number).trim()}` : '';
+  const rawStreet = normalizeStreet(a?.street, a?.neighborhood);
+  const split = splitStreetNumber(rawStreet);
+  const num = String(a?.number || split.number || '').trim();
+  const street = split.name;
+  const number = num ? `, ${num}` : '';
   const city = String(a?.city || '').trim();
   const state = a?.state ? ` - ${String(a.state).trim()}` : '';
   const cep = a?.zip ? `, ${formatCep(a.zip)}` : '';
   const base = `${street}${number}`.trim();
   const locality = `${city}${state}${cep}`.trim();
-  return [base, locality].filter(Boolean).join(', ');
+  return [base, locality, 'Brasil'].filter(Boolean).join(', ');
 };
 
 export const openNavigationByAddress = (address: string) => {
