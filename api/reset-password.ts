@@ -27,8 +27,11 @@ export default async function handler(req: any, res: any) {
   const { userId, newPassword } = req.body || {}
   if (!userId || !newPassword) return res.status(400).json({ error: 'Missing userId or newPassword' })
 
-  const url = process.env.SUPABASE_URL || ''
-  const serviceKey = process.env.SUPABASE_SERVICE_KEY || ''
+  let url = process.env.SUPABASE_URL || ''
+  let serviceKey = process.env.SUPABASE_SERVICE_KEY || ''
+  // Sanitize environment values to avoid invalid header/URL issues
+  url = url.trim().replace(/\s+/g, '').replace(/\.+$/, '').replace(/\/+$/, '')
+  serviceKey = serviceKey.trim().replace(/\s+/g, '')
   if (!url || !serviceKey) return res.status(500).json({ error: 'Server not configured' })
 
   const admin = createClient(url, serviceKey)
