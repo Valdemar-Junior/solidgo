@@ -68,6 +68,15 @@ export const openNavigationByAddressJson = (a: any) => {
 };
 
 export const openNavigationSmartAddressJson = async (a: any) => {
+  if (a && typeof a.lat !== 'undefined' && typeof a.lng !== 'undefined') {
+    const lat = Number(a.lat);
+    const lon = Number(a.lng);
+    if (!isNaN(lat) && !isNaN(lon)) {
+      const wazeUrl = `https://waze.com/ul?ll=${lat},${lon}&navigate=yes`;
+      window.open(wazeUrl, '_blank');
+      return;
+    }
+  }
   const addr = buildFullAddress(a);
   if (!addr) return;
   try {

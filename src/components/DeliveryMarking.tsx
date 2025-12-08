@@ -114,6 +114,35 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
     await openNavigationSmartAddressJson(o.address_json);
   };
 
+  const savePreciseLocation = async (routeOrder: RouteOrderWithDetails) => {
+    try {
+      await new Promise<void>((resolve, reject) => {
+        navigator.geolocation.getCurrentPosition(
+          async (pos) => {
+            const lat = pos.coords.latitude;
+            const lng = pos.coords.longitude;
+            const order = routeOrder.order as any;
+            const addr = typeof order.address_json === 'string' ? JSON.parse(order.address_json) : (order.address_json || {});
+            const nextAddr = { ...addr, lat, lng };
+            const { error } = await supabase.from('orders').update({ address_json: nextAddr }).eq('id', routeOrder.order_id);
+            if (!error) {
+              setRouteOrders(prev => prev.map(ro => ro.id === routeOrder.id ? { ...ro, order: { ...ro.order, address_json: nextAddr } as any } : ro));
+              toast.success('Localização precisa salva');
+            } else {
+              toast.error('Erro ao salvar localização');
+            }
+            resolve();
+          },
+          (err) => {
+            toast.error('Não foi possível obter a localização do dispositivo');
+            reject(err);
+          },
+          { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+        );
+      });
+    } catch {}
+  };
+
   const markAsDelivered = async (order: RouteOrderWithDetails) => {
     try {
       if (processingIds.has(order.id)) return;
@@ -461,6 +490,12 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
                 >
                   <MapPin className="h-4 w-4 mr-1" />
                   Abrir no GPS
+                </button>
+                <button
+                  onClick={() => savePreciseLocation(routeOrder)}
+                  className="flex items-center px-3 py-2 bg-gray-100 text-gray-700 rounded-md hover:bg-gray-200 transition-colors text-sm border border-gray-300"
+                >
+                  Salvar ponto preciso
                 </button>
                 {routeOrder.status === 'pending' && (
                   <>
