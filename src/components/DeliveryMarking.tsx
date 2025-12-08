@@ -4,7 +4,7 @@ import { OfflineStorage, SyncQueue, NetworkStatus } from '../utils/offline/stora
 import { backgroundSync } from '../utils/offline/backgroundSync';
 import type { RouteOrderWithDetails, Order, ReturnReason } from '../types/database';
 import { Package, CheckCircle, XCircle, Clock, MapPin } from 'lucide-react';
-import { buildFullAddress, openNavigationTextLikeUI, geocodeAddress, openWazeWithLL } from '../utils/maps';
+import { buildFullAddress, geocodeAddress, openWazeWithLL } from '../utils/maps';
 import { toast } from 'sonner';
 
 interface DeliveryMarkingProps {
@@ -152,7 +152,7 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
           openWazeWithLL(js.lat, js.lng)
           return
         }
-        if (js && js.text) toast.warning('Geo falhou, abrindo por texto')
+        if (js && js.text) toast.warning('Endereço sem coordenadas, tentando cliente')
       }
       const coords = await geocodeAddress(enriched);
       if (coords) {
@@ -164,7 +164,7 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
         return;
       }
     } catch {}
-    openNavigationTextLikeUI(enriched);
+    toast.error('Não foi possível obter coordenadas para este endereço. Ajuste o endereço no admin e tente novamente.');
   };
 
   const markAsDelivered = async (order: RouteOrderWithDetails) => {

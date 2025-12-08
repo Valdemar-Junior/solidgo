@@ -39,52 +39,108 @@ export default async function handler(req: any, res: any) {
         if (!vj?.erro) {
           enriched.state = enriched.state || String(vj.uf || '')
           enriched.city = enriched.city || String(vj.localidade || '')
+          // Se não tiver rua, tenta pegar do viacep
+          if (!enriched.street && vj.logradouro) enriched.street = vj.logradouro
+          if (!enriched.neighborhood && vj.bairro) enriched.neighborhood = vj.bairro
         }
       }
     } catch {}
 
-    const text = [
-      `${enriched.street}${enriched.number ? ', ' + enriched.number : ''}`,
-      enriched.neighborhood ? `- ${enriched.neighborhood}` : '',
-      `${enriched.city}${enriched.state ? ' - ' + enriched.state : ''}`,
-      enriched.zip ? `${enriched.zip}` : '',
-      'Brasil',
-    ].filter(Boolean).join(', ').replace(', -', ' -')
-    const q = encodeURIComponent(text)
-
     const ua = (process.env.NOMINATIM_USER_AGENT || 'SOLIDGO/1.0 (contact: support@example.com)').trim()
-    // Tentativa 1: consulta estruturada (street/city/state/postalcode)
-    const streetParam = encodeURIComponent(`${enriched.street}${enriched.number ? ' ' + enriched.number : ''}`.trim())
+    
+    // Helper para buscar
+    const fetchNominatim = async (params: string) => {
+      try {
+        const u = `https://nominatim.openstreetmap.org/search?format=json&limit=1&addressdetails=1&countrycodes=br&${params}`
+        const r = await fetch(u, { headers: { 'Accept': 'application/json', 'User-Agent': ua } })
+        if (!r.ok) return null
+        const j = await r.json()
+        if (Array.isArray(j) && j.length > 0) return j[0]
+        return null
+      } catch { return null }
+    }
+
+    let lat = NaN
+    let lon = NaN
+    let result: any = null
+    let usedMethod = ''
+
+    // Limpeza basica
+    const cleanStreet = (enriched.street || '').replace(/[^\w\s\.,-]/g, ' ').trim()
+    const streetHasNumber = /\d+/.test(cleanStreet)
+    const streetParam = encodeURIComponent(cleanStreet)
     const cityParam = encodeURIComponent(String(enriched.city || ''))
     const stateParam = encodeURIComponent(String(enriched.state || ''))
     const zipParam = encodeURIComponent(String(enriched.zip || ''))
-    const urlStructured = `https://nominatim.openstreetmap.org/search?format=json&limit=1&addressdetails=1&country=Brazil&street=${streetParam}&city=${cityParam}&state=${stateParam}&postalcode=${zipParam}`
-    let resp = await fetch(urlStructured, {
-      headers: { 'Accept': 'application/json', 'User-Agent': ua },
-    })
-    let js: any = await resp.json()
-    let first = Array.isArray(js) ? js[0] : null
-    let lat = first ? Number(first.lat) : NaN
-    let lon = first ? Number(first.lon) : NaN
-    // Tentativa 2: fallback por texto livre (q=)
-    let urlReq = urlStructured
-    if (isNaN(lat) || isNaN(lon)) {
-      urlReq = `https://nominatim.openstreetmap.org/search?format=json&limit=1&addressdetails=1&countrycodes=br&q=${q}`
-      resp = await fetch(urlReq, { headers: { 'Accept': 'application/json', 'User-Agent': ua } })
-      js = await resp.json()
-      first = Array.isArray(js) ? js[0] : null
-      lat = first ? Number(first.lat) : NaN
-      lon = first ? Number(first.lon) : NaN
+
+    // 1. Structured Search (completo)
+    if (!result) {
+      // Se a rua já tem numero, nominatim as vezes prefere que passe junto no street, as vezes não.
+      // Vamos tentar passar como está.
+      const q = `street=${streetParam}&city=${cityParam}&state=${stateParam}&postalcode=${zipParam}`
+      result = await fetchNominatim(q)
+      if (result) usedMethod = 'structured_full'
     }
+
+    // 2. Freeform Search (q=)
+    if (!result) {
+      const text = [
+        `${enriched.street}${enriched.number ? ', ' + enriched.number : ''}`,
+        enriched.neighborhood ? `- ${enriched.neighborhood}` : '',
+        `${enriched.city}${enriched.state ? ' - ' + enriched.state : ''}`,
+        enriched.zip ? `${enriched.zip}` : '',
+        'Brasil',
+      ].filter(Boolean).join(', ').replace(', -', ' -')
+      result = await fetchNominatim(`q=${encodeURIComponent(text)}`)
+      if (result) usedMethod = 'freeform_full'
+    }
+
+    // 3. Structured Search SEM CEP (Muitas vezes o CEP no OSM está desatualizado ou ausente)
+    if (!result && enriched.street && enriched.city) {
+      const q = `street=${streetParam}&city=${cityParam}&state=${stateParam}`
+      result = await fetchNominatim(q)
+      if (result) usedMethod = 'structured_no_zip'
+    }
+
+    // 4. Freeform Search SEM CEP
+    if (!result) {
+      const text = [
+        `${enriched.street}${enriched.number ? ', ' + enriched.number : ''}`,
+        enriched.neighborhood ? `- ${enriched.neighborhood}` : '',
+        `${enriched.city}${enriched.state ? ' - ' + enriched.state : ''}`,
+        'Brasil',
+      ].filter(Boolean).join(', ').replace(', -', ' -')
+      result = await fetchNominatim(`q=${encodeURIComponent(text)}`)
+      if (result) usedMethod = 'freeform_no_zip'
+    }
+
+    // 5. Tentar apenas Rua e Cidade (sem numero, sem bairro) - Fallback "centro da rua"
+    if (!result && enriched.street && enriched.city) {
+        // Tenta limpar o numero da rua se estiver nela
+        const streetOnly = cleanStreet.replace(/,?\s*\d+.*$/, '')
+        const q = `street=${encodeURIComponent(streetOnly)}&city=${cityParam}&state=${stateParam}`
+        result = await fetchNominatim(q)
+        if (result) usedMethod = 'street_city_fallback'
+    }
+
+    if (result) {
+      lat = Number(result.lat)
+      lon = Number(result.lon)
+    }
+
     if (debug) {
-      console.log('GEOCODE_ORDER', { orderId, text, urlStructured, urlReq, result: js })
+      console.log('GEOCODE_ORDER', { orderId, usedMethod, result })
     }
-    if (isNaN(lat) || isNaN(lon)) return res.status(200).json({ ok: false, text, urlReq })
+
+    if (isNaN(lat) || isNaN(lon)) {
+        return res.status(200).json({ ok: false, message: 'Geocoding failed for all strategies' })
+    }
 
     const nextAddr = { ...addr, lat, lng: lon }
     const { error: upError } = await supa.from('orders').update({ address_json: nextAddr }).eq('id', orderId)
     if (upError) return res.status(500).json({ error: upError.message })
-    return res.status(200).json({ ok: true, lat, lng: lon, text, urlReq })
+    
+    return res.status(200).json({ ok: true, lat, lng: lon, method: usedMethod })
   } catch (e: any) {
     return res.status(500).json({ error: String(e.message || 'Unknown error') })
   }

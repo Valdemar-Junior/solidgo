@@ -221,13 +221,29 @@ export default function OrdersImport() {
             try {
               const orderId = inserted?.id;
               if (orderId) {
-                await fetch('/api/geocode-order', {
+                // Delay para respeitar rate limit do Nominatim (aprox 1s)
+                await new Promise(r => setTimeout(r, 1200));
+                
+                const gRes = await fetch('/api/geocode-order', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ orderId })
+                  body: JSON.stringify({ orderId, debug: true })
                 });
+                
+                if (gRes.ok) {
+                  const gJson = await gRes.json();
+                  if (gJson.ok) {
+                    console.log(`Geocode OK [${pedido.order_id_erp}]:`, gJson.method, gJson.lat, gJson.lng);
+                  } else {
+                    console.warn(`Geocode falhou [${pedido.order_id_erp}]:`, gJson);
+                  }
+                } else {
+                  console.error(`Erro API Geocode [${pedido.order_id_erp}]:`, gRes.status);
+                }
               }
-            } catch {}
+            } catch (e) {
+              console.error('Erro ao chamar geocode-order:', e);
+            }
           } else {
             errosInsercao++;
             console.warn('Erro ao inserir pedido:', pedido.order_id_erp, insertError);
