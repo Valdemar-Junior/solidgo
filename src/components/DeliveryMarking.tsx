@@ -68,6 +68,22 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
           setRouteOrders(data as RouteOrderWithDetails[]);
           // Cache offline
           await OfflineStorage.setItem(`route_orders_${routeId}`, data);
+          try {
+            const missing = (data as any[]).filter(r => {
+              const a = typeof r.order?.address_json === 'string' ? JSON.parse(r.order.address_json) : (r.order?.address_json || {})
+              return !(typeof a.lat === 'number' && typeof a.lng === 'number')
+            }).length
+            if (missing > 0) {
+              toast.info('Ajustando coordenadas da rota...')
+              const svc = await fetch('/api/geocode-route', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ routeId, debug: true, limit: 15 }) })
+              if (svc.ok) {
+                const js = await svc.json();
+                if (js?.ok) toast.success(`Coordenadas atualizadas: ${js.updated}/${js.processed}`)
+                await backgroundSync.forceSync();
+                await loadRouteOrders();
+              }
+            }
+          } catch {}
         }
       } else {
         // Load from offline storage
