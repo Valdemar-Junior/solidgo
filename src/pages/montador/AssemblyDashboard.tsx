@@ -4,6 +4,7 @@ import { Package, MapPin, User as UserIcon, Calendar, Camera, CheckCircle, Clock
 import { toast } from 'sonner';
 import { supabase } from '../../supabase/client';
 import { AssemblyProductWithDetails } from '../../types/database';
+import { useAuthStore } from '../../stores/authStore';
 
 export default function AssemblyDashboard() {
   const [assemblyProducts, setAssemblyProducts] = useState<AssemblyProductWithDetails[]>([]);
@@ -16,6 +17,7 @@ export default function AssemblyDashboard() {
   const [photos, setPhotos] = useState<File[]>([]);
   const [photoPreviews, setPhotoPreviews] = useState<string[]>([]);
   const navigate = useNavigate();
+  const { user } = useAuthStore();
 
   const fetchAssemblyProducts = async () => {
     try {
@@ -270,7 +272,7 @@ export default function AssemblyDashboard() {
             <button onClick={logout} className="px-3 py-2 bg-gray-100 text-gray-800 rounded border hover:bg-gray-200">Sair</button>
           </div>
         </div>
-        <p className="text-gray-600 mt-1">Bem-vindo, {useAuthStore.getState().user?.name || useAuthStore.getState().user?.email}</p>
+        <p className="text-gray-600 mt-1">Bem-vindo, {user?.name || user?.email}</p>
       </div>
 
       {/* Estatísticas */}
