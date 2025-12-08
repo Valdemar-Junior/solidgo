@@ -6,6 +6,10 @@ const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || FALLBACK_URL;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || FALLBACK_ANON;
 
 export const envOk = Boolean(supabaseUrl && supabaseAnonKey);
+export const supabasePublicUrl = supabaseUrl;
+export const supabaseAnonPublicKey = supabaseAnonKey;
+export const supabaseConfig = { url: supabaseUrl, anon: supabaseAnonKey };
+;(globalThis as any).__supabaseConfig = supabaseConfig;
 
 const createDummyClient = () => {
   const dummy = {

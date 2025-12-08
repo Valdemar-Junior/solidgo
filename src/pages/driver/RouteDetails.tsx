@@ -10,7 +10,7 @@ import { useAuthStore } from '../../stores/authStore';
 import { toast } from 'sonner';
 
 export default function DriverRouteDetails() {
-  const { logout } = useAuthStore();
+  const { user, logout } = useAuthStore();
   const { routeId } = useParams<{ routeId: string }>();
   const [route, setRoute] = useState<RouteWithDetails | null>(null);
   const [routeOrders, setRouteOrders] = useState<RouteOrder[]>([]);
@@ -48,11 +48,7 @@ export default function DriverRouteDetails() {
       if (NetworkStatus.isOnline()) {
         const { data: routeData, error: routeError } = await supabase
           .from('routes')
-          .select(`
-            *,
-            driver: drivers!driver_id(*, user:users!user_id(*)),
-            vehicle: vehicles!vehicle_id(*)
-          `)
+          .select('*, driver:drivers!driver_id(id, active), vehicle:vehicles!vehicle_id(*)')
           .eq('id', routeId)
           .single();
 
@@ -63,10 +59,7 @@ export default function DriverRouteDetails() {
 
         const { data: ordersData, error: ordersError } = await supabase
           .from('route_orders')
-          .select(`
-            *,
-            order:orders!order_id(*)
-          `)
+          .select('*, order:orders!order_id(*)')
           .eq('route_id', routeId)
           .order('sequence', { ascending: true });
 
@@ -126,6 +119,20 @@ export default function DriverRouteDetails() {
     return Math.round((completed / routeOrders.length) * 100);
   };
 
+  const openMapsForRoute = () => {
+    const toAddr = (o: any) => {
+      const a = o?.address_json || {};
+      const n = a.number ? `, ${a.number}` : '';
+      return `${a.street || ''}${n} - ${a.neighborhood || ''} - ${a.city || ''}`.trim();
+    };
+    const stops = routeOrders.map((ro: any) => ro.order).filter(Boolean);
+    if (stops.length === 0) return;
+    const waypoints = stops.slice(0, Math.max(0, stops.length - 1)).map(toAddr);
+    const destination = toAddr(stops[stops.length - 1]);
+    const url = `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent('Current Location')}&destination=${encodeURIComponent(destination)}&travelmode=driving${waypoints.length ? `&waypoints=${encodeURIComponent(waypoints.join('|'))}` : ''}`;
+    window.open(url, '_blank');
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
@@ -163,7 +170,7 @@ export default function DriverRouteDetails() {
                     {route.name}
                   </h1>
                   <p className="text-gray-600">
-                    Motorista: {route.driver?.user?.name} • Veículo: {route.vehicle?.model} - {route.vehicle?.plate}
+                    Motorista: {user?.name || user?.email} • Veículo: {route.vehicle?.model} - {route.vehicle?.plate}
                   </p>
                 </div>
               </div>
@@ -219,6 +226,11 @@ export default function DriverRouteDetails() {
             <MapPin className="h-5 w-5 mr-2" />
             Resumo da Rota
           </h2>
+          <div className="flex justify-end mb-4">
+            <button onClick={openMapsForRoute} className="inline-flex items-center px-3 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 text-sm font-medium">
+              Abrir rota no GPS
+            </button>
+          </div>
           
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div className="text-center">

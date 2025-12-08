@@ -2,7 +2,7 @@ export interface User {
   id: string;
   email: string;
   name: string;
-  role: 'admin' | 'driver' | 'helper' | 'montador';
+  role: 'admin' | 'driver' | 'helper' | 'montador' | 'conferente';
   phone?: string;
   must_change_password?: boolean;
   created_at: string;
@@ -34,17 +34,32 @@ export interface Order {
   order_id_erp: string;
   customer_name: string;
   phone: string;
+  customer_cpf?: string;
   address_json: Address;
-  items_json: OrderItem[];
-  total: number;
-  status: 'imported' | 'assigned' | 'delivered' | 'returned';
-  observations?: string;
+   items_json: OrderItem[];
+   status: 'pending' | 'imported' | 'assigned' | 'delivered' | 'returned';
   danfe_base64?: string;
   danfe_gerada_em?: string;
   xml_documento?: string;
   raw_json?: any;
   created_at: string;
   updated_at: string;
+  
+  // Novos campos do JSON reformulado (sem campos XML - usamos xml_documento existente)
+  numero_lancamento?: number;
+  observacoes_publicas?: string;
+  observacoes_internas?: string;
+  quantidade_volumes?: number;
+  etiquetas?: string[];
+  tem_frete_full?: string;
+  filial_venda?: string;
+  
+  // Campos adicionais para montagem
+  destinatario_cidade?: string;
+  destinatario_bairro?: string;
+  sale_date?: string;
+  delivery_date?: string;
+  driver_name?: string;
 }
 
 export interface Address {
@@ -61,6 +76,15 @@ export interface OrderItem {
   name: string;
   quantity: number;
   price: number;
+  volumes_per_unit?: number;
+  purchased_quantity?: number | null;
+  unit_price_real?: number;
+  total_price_real?: number;
+  unit_price?: number;
+  total_price?: number;
+  labels?: string[];
+  location?: string;
+  has_assembly?: string;
 }
 
 export interface Route {
@@ -76,7 +100,7 @@ export interface Route {
 }
 
 export interface RouteWithDetails extends Route {
-  driver: DriverWithUser;
+  driver: Driver;
   vehicle?: Vehicle;
   route_orders: RouteOrderWithDetails[];
 }
@@ -139,4 +163,40 @@ export interface WebhookResponse {
   status: string;
   message: string;
   orders?: any[];
+}
+
+export interface AssemblyRoute {
+  id: string;
+  name: string;
+  admin_id: string;
+  status: 'pending' | 'in_progress' | 'completed';
+  deadline?: string;
+  observations?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AssemblyProduct {
+  id: string;
+  assembly_route_id: string;
+  order_id: string;
+  product_name: string;
+  product_sku?: string;
+  customer_name: string;
+  customer_phone?: string;
+  installation_address: Address;
+  assembly_date?: string;
+  installer_id?: string;
+  status: 'pending' | 'assigned' | 'in_progress' | 'completed' | 'cancelled';
+  completion_date?: string;
+  technical_notes?: string;
+  photos: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AssemblyProductWithDetails extends AssemblyProduct {
+  order: Order;
+  installer?: User;
+  assembly_route: AssemblyRoute;
 }

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { Package, RefreshCw, AlertCircle, Eye } from 'lucide-react';
+import { Package, RefreshCw, AlertCircle, Eye, Hammer, Truck, ArrowLeft, LayoutGrid, TruckIcon } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { supabase } from '../../supabase/client';
 
@@ -13,7 +14,21 @@ export default function OrdersImport() {
   const [showModal, setShowModal] = useState(false);
   const selectedOrderIdRef = useRef<string | null>(null);
   const showModalRef = useRef<boolean>(false);
+  const navigate = useNavigate();
   
+  useEffect(() => {
+    if (!showModal) return;
+    const handleEsc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        showModalRef.current = false;
+        localStorage.removeItem('oi_showModal');
+        localStorage.removeItem('oi_selectedOrderId');
+        setShowModal(false);
+      }
+    };
+    document.addEventListener('keydown', handleEsc);
+    return () => document.removeEventListener('keydown', handleEsc);
+  }, [showModal]);
 
   const fetchImportedOrders = async () => {
     const { data, error } = await supabase
@@ -89,92 +104,145 @@ export default function OrdersImport() {
       const items = Array.isArray(data) ? data : [data];
       setOrders(items);
 
-      // Transformar e salvar no banco
+      // Transformar e salvar no banco - SALVAR TODOS OS CAMPOS DO JSON
       const toDb = items.map((o: any) => {
-        const produtos = Array.isArray(o.produtos_locais) ? o.produtos_locais : [];
-        const xmls = Array.isArray(o.xmls_documentos) ? o.xmls_documentos : (Array.isArray(o.xmls) ? o.xmls : []);
-        const firstXml = Array.isArray(xmls) && xmls.length > 0
-          ? (typeof xmls[0] === 'string' ? xmls[0] : (xmls[0]?.xml || xmls[0]?.base64 || ''))
-          : '';
+        const produtos = Array.isArray(o.produtos) ? o.produtos : (Array.isArray(o.produtos_locais) ? o.produtos_locais : []);
+        const totalPedido = produtos.reduce((sum:number, p:any)=> sum + Number(p.valor_total_real ?? p.valor_total_item ?? 0), 0);
+        const xmlDanfe = o.xml_danfe_remessa || {};
+        
+        // Calcular total e volumes
+        let total = 0;
+        let quantidade_volumes = 0;
+        let etiquetas: string[] = [];
+        
+        if (produtos.length > 0) {
+          produtos.forEach((p: any) => {
+            if (p.quantidade_volumes) quantidade_volumes += p.quantidade_volumes;
+            if (p.etiquetas && Array.isArray(p.etiquetas)) {
+              etiquetas = etiquetas.concat(p.etiquetas);
+            }
+          });
+        }
+        
         return {
-          order_id_erp: String(o.lancamento_venda ?? o.codigo_cliente ?? Math.random().toString(36).slice(2)),
+          order_id_erp: String(o.numero_lancamento ?? o.lancamento_venda ?? o.codigo_cliente ?? Math.random().toString(36).slice(2)),
           customer_name: String(o.nome_cliente ?? ''),
           phone: String(o.cliente_celular ?? ''),
+          customer_cpf: String(o.cpf_cliente ?? ''),
+          filial_venda: String(o.filial_venda ?? ''),
+          vendedor_nome: String(o.nome_vendedor ?? o.vendedor ?? o.vendedor_nome ?? ''),
+          data_venda: o.data_venda ? new Date(o.data_venda).toISOString() : null,
+          previsao_entrega: o.previsao_entrega ? new Date(o.previsao_entrega).toISOString() : null,
+          observacoes_publicas: String(o.observacoes_publicas ?? ''),
+          observacoes_internas: String(o.observacoes_internas ?? ''),
+          tem_frete_full: String(o.tem_frete_full ?? ''),
           address_json: {
             street: String(o.destinatario_endereco ?? ''),
             neighborhood: String(o.destinatario_bairro ?? ''),
             city: String(o.destinatario_cidade ?? ''),
             state: '',
-            zip: String(o.destinatario_cep ?? ''),
-            complement: o.destinatario_complemento ?? ''
+            zip: pickZip(o),
+            complement: String(o.destinatario_complemento ?? '')
           },
           items_json: produtos.map((p: any) => ({
             sku: String(p.codigo_produto ?? ''),
             name: String(p.nome_produto ?? ''),
-            quantity: 1,
-            price: 0,
+            // volumes por unidade usados na conferência
+            quantity: Number(p.quantidade_volumes ?? 1),
+            volumes_per_unit: Number(p.quantidade_volumes ?? 1),
+            // quantidade comprada (unidades)
+            purchased_quantity: Number(p.quantidade_comprada ?? 1),
+            // preços reais e fallback
+            unit_price_real: Number(p.valor_unitario_real ?? p.valor_unitario ?? 0),
+            total_price_real: Number(p.valor_total_real ?? p.valor_total_item ?? 0),
+            unit_price: Number(p.valor_unitario_real ?? p.valor_unitario ?? 0),
+            total_price: Number(p.valor_total_real ?? p.valor_total_item ?? 0),
+            price: Number(p.valor_unitario_real ?? p.valor_unitario ?? 0),
+            // demais campos
             location: String(p.local_estocagem ?? ''),
+            has_assembly: String(p.tem_montagem ?? ''),
+            labels: Array.isArray(p.etiquetas) ? p.etiquetas : [],
           })),
-          total: 0,
-          observations: o.observacoes ?? null,
           status: 'pending' as const,
           raw_json: o,
-          xml_documento: firstXml || null,
+          xml_documento: xmlDanfe.conteudo_xml || null,
         } as any;
       });
 
-      // Evitar reimportar pedidos já em rota (status != 'pending')
-      const numeros = toDb.map((o: any) => o.order_id_erp);
-      const { data: existentes } = await supabase
-        .from('orders')
-        .select('id, order_id_erp, status')
-        .in('order_id_erp', numeros);
-      const bloqueados = new Set<string>((existentes || []).filter((e: any) => e.status && e.status !== 'pending').map((e: any) => String(e.order_id_erp)));
-      const paraUpsert = toDb.filter((o: any) => !bloqueados.has(String(o.order_id_erp)));
-      const ignorados = toDb.length - paraUpsert.length;
+      // Verificar quais pedidos já existem para evitar duplicidade usando apenas numero_lancamento
+      const numerosLancamento = toDb.map((o: any) => o.order_id_erp).filter(Boolean);
 
-      // Upsert por order_id_erp somente dos permitidos (tenta com raw_json; se a coluna não existir, faz fallback sem raw_json)
-      const { data: upsertData, error: upsertError } = await supabase
-        .from('orders')
-        .upsert(paraUpsert, { onConflict: 'order_id_erp' })
-        .select();
-      if (upsertError) {
-        const msg = String((upsertError as any)?.message || '').toLowerCase();
-        const missingRaw = msg.includes("could not find the 'raw_json' column") || msg.includes('column raw_json') || msg.includes('raw_json');
-        if (missingRaw) {
-          const toDbWithoutRaw = paraUpsert.map((o: any) => {
-            const { raw_json, ...rest } = o;
-            return rest;
-          });
-          const { error: retryError } = await supabase
+      // Remover duplicados dentro do próprio lote (mesmo order_id_erp)
+      const seen = new Set<string>();
+      const toDbUnique = toDb.filter((o: any) => {
+        const k = String(o.order_id_erp || '').trim();
+        if (!k) return false;
+        if (seen.has(k)) return false;
+        seen.add(k);
+        return true;
+      });
+      let existentes: any[] = [];
+      
+      // Verificar por order_id_erp (campo principal)
+      if (numerosLancamento.length > 0) {
+        const { data: existentesPorLancamento } = await supabase
+          .from('orders')
+          .select('id, order_id_erp')
+          .in('order_id_erp', numerosLancamento);
+        existentes = existentesPorLancamento || [];
+      }
+      
+      // Criar set com os números de lançamento existentes
+      const existentesLancamentoSet = new Set<string>((existentes || []).map((e: any) => String(e.order_id_erp)).filter(Boolean));
+      
+      const paraInserir = toDbUnique.filter((o: any) => {
+        // Verificar por order_id_erp (campo principal)
+        if (o.order_id_erp && existentesLancamentoSet.has(String(o.order_id_erp))) {
+          return false; // Já existe, não inserir
+        }
+        return true; // Não existe, pode inserir
+      });
+      const duplicados = toDb.length - toDbUnique.length + (toDbUnique.length - paraInserir.length);
+
+      // Inserir apenas pedidos completamente novos, um por vez para evitar erros de constraint
+      let inseridos = 0;
+      let errosInsercao = 0;
+      
+      for (const pedido of paraInserir) {
+        try {
+          const { error: insertError } = await supabase
             .from('orders')
-            .upsert(toDbWithoutRaw, { onConflict: 'order_id_erp' });
-          if (retryError) {
-            console.error('Erro ao salvar pedidos (fallback):', retryError);
-            toast.error('Erro ao salvar pedidos no banco (fallback)');
-            return;
+            .insert(pedido);
+          
+          if (!insertError) {
+            inseridos++;
+          } else {
+            errosInsercao++;
+            console.warn('Erro ao inserir pedido:', pedido.order_id_erp, insertError);
+            console.warn('Detalhes do erro:', insertError.message, insertError.details);
           }
-        } else {
-          console.error('Erro ao salvar pedidos:', upsertError);
-          const code = (upsertError as any)?.code || '';
-          if (code === '42501' || msg.includes('row-level security')) {
-            toast.error('Permissão negada: verifique policies RLS para INSERT/UPDATE em orders (admin).');
-            return;
-          }
-          if (msg.includes('unique')) {
-            toast.error('Conflito de duplicidade: alguns pedidos já existem.');
-            return;
-          }
-          toast.error((upsertError as any)?.message || 'Erro ao salvar pedidos no banco');
-          return;
+        } catch (e: any) {
+          errosInsercao++;
+          console.error('Erro crítico ao inserir pedido:', pedido.order_id_erp, e);
+          console.error('Stack do erro:', e.stack);
         }
       }
       // Nenhuma persistência de XML extra necessária: cada pedido tem um único XML
 
-      if (ignorados > 0) {
-        toast.info(`${ignorados} pedido(s) ignorado(s) por já estarem em rota`);
-      }
-      toast.success('Pedidos salvos no banco');
+      // Mensagem de sucesso com formato claro e direto
+      const totalPedidos = toDb.length;
+      const pedidosImportados = inseridos;
+      const pedidosIgnorados = duplicados;
+      
+      const erros = errosInsercao;
+      toast.success(`Processamento concluído: ${totalPedidos} pedidos analisados | ${pedidosImportados} novos pedidos importados | ${pedidosIgnorados} pedidos ignorados (já existentes) | ${erros} erros`, {
+        duration: 5000, // 5 segundos
+        style: {
+          background: '#10B981', // verde sucesso
+          color: 'white',
+        },
+        className: 'toast-success-animation'
+      });
 
       await fetchImportedOrders();
       setLastImport(new Date());
@@ -194,8 +262,45 @@ export default function OrdersImport() {
     return d.toLocaleDateString('pt-BR');
   };
 
+  const statusPT = (s: string | null | undefined) => {
+    switch (String(s || '').toLowerCase()) {
+      case 'pending': return 'Pendente';
+      case 'imported': return 'Importado';
+      case 'assigned': return 'Atribuído';
+      case 'delivered': return 'Entregue';
+      case 'returned': return 'Retornado';
+      default: return s || '-';
+    }
+  };
+  const pickZip = (raw: any) => {
+    const candidates = [raw?.destinatario_cep, raw?.cep, raw?.endereco_cep, raw?.codigo_postal, raw?.zip];
+    for (const c of candidates) { const s = String(c || '').trim(); if (s) return s; }
+    return '';
+  };
+  const pickSeller = (raw: any) => {
+    const direct = [raw?.vendedor_nome, raw?.vendedor, raw?.nome_vendedor, raw?.seller, raw?.atendente, raw?.responsavel_venda, raw?.operador];
+    for (const c of direct) { const s = String(c || '').trim(); if (s) return s; }
+    const arrs = [raw?.produtos, raw?.produtos_locais];
+    for (const arr of arrs) { if (Array.isArray(arr)) { for (const p of arr) { const s = String(p?.vendedor_nome || p?.vendedor || '').trim(); if (s) return s; } } }
+    try { for (const k of Object.keys(raw || {})) { if (k.toLowerCase().includes('vendedor')) { const s = String(raw[k] || '').trim(); if (s) return s; } } } catch {}
+    return '';
+  };
+
   return (
     <div className="bg-white rounded-lg shadow p-6">
+      <div className="flex items-center justify-between mb-4">
+        <button onClick={()=>navigate(-1)} className="inline-flex items-center px-3 py-2 rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50">
+          <ArrowLeft className="h-4 w-4 mr-2" /> Voltar
+        </button>
+        <div className="flex items-center space-x-2">
+          <button onClick={()=>navigate('/admin')} className="inline-flex items-center px-3 py-2 rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50">
+            <LayoutGrid className="h-4 w-4 mr-2" /> Dashboard
+          </button>
+          <button onClick={()=>navigate('/admin/routes')} className="inline-flex items-center px-3 py-2 rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50">
+            <TruckIcon className="h-4 w-4 mr-2" /> Gestão de Entregas
+          </button>
+        </div>
+      </div>
       <div className="flex items-center justify-between mb-6">
         <div>
           <h2 className="text-2xl font-bold text-gray-900 flex items-center">
@@ -253,7 +358,7 @@ export default function OrdersImport() {
             <table className="min-w-full divide-y divide-gray-200">
               <thead className="bg-gray-50">
                 <tr>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Nº Documento</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Nº Lançamento</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Cliente</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Data Emissão</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Previsão Entrega</th>
@@ -265,9 +370,9 @@ export default function OrdersImport() {
               <tbody className="bg-white divide-y divide-gray-200">
                 {dbOrders.map((o) => {
                   const city = o.address_json?.city ?? '-';
-                  const statusLabel = o.status === 'pending' ? 'Pendente' : o.status;
+                  const statusLabel = statusPT(o.status);
                   const raw = o.raw_json || {};
-                  const docNum = String(raw.lancamento_venda ?? o.order_id_erp ?? '-');
+                  const docNum = String(o.order_id_erp ?? raw.lancamento_venda ?? '-');
                   const dataVenda = formatDateBR(raw.data_venda);
                   const previsao = formatDateBR(raw.previsao_entrega);
                   return (
@@ -308,17 +413,50 @@ export default function OrdersImport() {
               <h4 className="text-lg font-semibold text-gray-900">Detalhes do Pedido</h4>
               <button className="text-gray-600 hover:text-gray-900" onClick={() => { showModalRef.current = false; localStorage.removeItem('oi_showModal'); localStorage.removeItem('oi_selectedOrderId'); setShowModal(false); }}>Fechar</button>
             </div>
-            <div className="p-6 space-y-4">
+              <div className="p-6 space-y-4">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
-                  <div><span className="font-medium">Nº Documento:</span> {String(selectedOrder.raw_json?.lancamento_venda ?? selectedOrder.order_id_erp)}</div>
+                  <div><span className="font-medium">Nº Lançamento:</span> {String(selectedOrder.order_id_erp ?? selectedOrder.raw_json?.lancamento_venda ?? '-')}</div>
                   <div><span className="font-medium">Operação:</span> {selectedOrder.raw_json?.operacoes ?? '-'}</div>
                   <div><span className="font-medium">Cliente:</span> {selectedOrder.customer_name}</div>
-                  <div><span className="font-medium">Documento:</span> {selectedOrder.raw_json?.documento_cliente ?? '-'}</div>
-                  <div><span className="font-medium">Telefone:</span> {selectedOrder.phone}</div>
-                  <div><span className="font-medium">Cidade:</span> {selectedOrder.address_json?.city ?? '-'}</div>
-                  <div><span className="font-medium">Bairro:</span> {selectedOrder.address_json?.neighborhood ?? '-'}</div>
-                  <div><span className="font-medium">Endereço:</span> {selectedOrder.address_json?.street ?? '-'}</div>
-                  <div><span className="font-medium">CEP:</span> {selectedOrder.address_json?.zip ?? '-'}</div>
+                  <div><span className="font-medium">CPF:</span> {selectedOrder.customer_cpf ?? selectedOrder.raw_json?.cpf_cliente ?? '-'}</div>
+                  
+                  <div>
+                    <span className="font-medium">Telefone:</span> {selectedOrder.phone}
+                    {(() => {
+                      const toDigits = (s: string) => String(s || '').replace(/\D/g, '');
+                      const d = toDigits(selectedOrder.phone);
+                      const n = d ? (d.startsWith('55') ? d : '55' + d) : '';
+                      const href = n ? `https://wa.me/${n}` : '';
+                      return href ? (
+                        <a href={href} target="_blank" rel="noopener noreferrer" className="ml-2 inline-flex items-center text-green-600 hover:text-green-700" title="Abrir WhatsApp">
+                          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M20.52 3.48A11.84 11.84 0 0 0 12.04 0C5.48 0 .16 5.32.16 11.88c0 2.08.56 4.08 1.6 5.84L0 24l6.48-1.68a11.66 11.66 0 0 0 5.56 1.44h.04c6.56 0 11.88-5.32 11.88-11.88 0-3.2-1.24-6.2-3.52-8.4ZM12.08 21.2h-.04a9.7 9.7 0 0 1-4.96-1.36l-.36-.2-3.84 1L3.96 16l-.24-.4A9.86 9.86 0 0 1 2 11.88c0-5.52 4.52-10.04 10.08-10.04 2.68 0 5.2 1.04 7.08 2.92a9.9 9.9 0 0 1 2.96 7.12c0 5.56-4.52 10.32-10.04 10.32Zm5.76-7.44c-.32-.2-1.88-.92-2.16-1.04-.28-.12-.48-.2-.68.12-.2.32-.8 1.04-.98 1.24-.2.2-.36.24-.68.08-.32-.16-1.36-.5-2.6-1.6-.96-.84-1.6-1.88-1.8-2.2-.2-.32 0-.52.16-.68.16-.16.32-.4.48-.6.16-.2.2-.36.32-.6.12-.24.08-.44-.04-.64-.12-.2-.68-1.64-.92-2.2-.24-.56-.48-.48-.68-.48h-.56c-.2 0-.52.08-.8.4-.28.32-1.08 1.08-1.08 2.64s1.12 3.08 1.28 3.3c.16.2 2.24 3.42 5.4 4.72.76.32 1.36.52 1.82.66.76.24 1.44.2 1.98.12.6-.1 1.88-.76 2.14-1.5.26-.74.26-1.36.18-1.5-.08-.14-.28-.22-.6-.4Z" />
+                          </svg>
+                        </a>
+                      ) : null;
+                    })()}
+                  </div>
+                  {(() => {
+                    const addr = selectedOrder.address_json || {};
+                    const raw = selectedOrder.raw_json || {};
+                    const zip = addr.zip || pickZip(raw) || '-';
+                    const neighborhood = addr.neighborhood || raw.destinatario_bairro || '';
+                    const city = addr.city || raw.destinatario_cidade || '';
+                    const street = addr.street || raw.destinatario_endereco || '';
+                    const combined = [street, neighborhood && `- ${neighborhood}`, city].filter(Boolean).join(', ').replace(', -', ' -');
+                    return (
+                      <>
+                        <div><span className="font-medium">Cidade:</span> {city || '-'}</div>
+                        <div><span className="font-medium">Endereço:</span> {combined || '-'}</div>
+                        <div><span className="font-medium">CEP:</span> {zip || '-'}</div>
+                      </>
+                    );
+                  })()}
+                  {(() => {
+                    const raw = selectedOrder.raw_json || {};
+                    const seller = pickSeller(raw);
+                    return <div><span className="font-medium">Vendedor:</span> {seller || '-'}</div>;
+                  })()}
                   <div><span className="font-medium">Data venda:</span> {formatDateBR(selectedOrder.raw_json?.data_venda)}</div>
                   <div><span className="font-medium">Previsão entrega:</span> {formatDateBR(selectedOrder.raw_json?.previsao_entrega)}</div>
                   <div><span className="font-medium">Filial venda:</span> {selectedOrder.raw_json?.filial_venda ?? '-'}</div>
@@ -328,22 +466,55 @@ export default function OrdersImport() {
               {Array.isArray(selectedOrder.items_json) && selectedOrder.items_json.length > 0 && (
                 <div>
                   <div className="text-sm font-semibold text-gray-900 mb-1">Produtos</div>
-                  <ul className="text-sm text-gray-800 list-disc list-inside">
-                    {selectedOrder.items_json.map((p: any, idx: number) => (
-                      <li key={idx}>{p.name} • Código: {p.sku} • Qtd: {p.quantity}</li>
-                    ))}
+                  <ul className="text-sm text-gray-800 space-y-1">
+                    {selectedOrder.items_json.map((p: any, idx: number) => {
+                      const hasAssembly = String(p?.has_assembly || '').toLowerCase().includes('sim');
+                      const freteRaw = String(selectedOrder.tem_frete_full || selectedOrder.raw_json?.tem_frete_full || '').toLowerCase();
+                      const isFreteFull = ['sim','true','1','y','yes'].some(v => freteRaw.includes(v));
+                      return (
+                        <li key={idx} className="flex items-center">
+                          <span>{p.name} • Código: {p.sku} • Qtd: {p.purchased_quantity ?? 1}</span>
+                          {hasAssembly && (
+                            <span className="ml-2 inline-flex items-center text-orange-500" title="Montagem">
+                              <Hammer className="h-4 w-4" />
+                            </span>
+                          )}
+                          {isFreteFull && (
+                            <span className="ml-2 inline-flex items-center text-emerald-600" title="Frete Full">
+                              <Truck className="h-4 w-4" />
+                            </span>
+                          )}
+                        </li>
+                      );
+                    })}
                   </ul>
                 </div>
               )}
+
+              {(() => {
+                const pub = selectedOrder.observacoes_publicas || selectedOrder.raw_json?.observacoes_publicas || '';
+                const priv = selectedOrder.observacoes_internas || selectedOrder.raw_json?.observacoes_internas || '';
+                return (pub || priv) ? (
+                  <div className="space-y-2">
+                    {pub && (
+                      <div className="text-sm text-gray-800 bg-yellow-50 p-2 rounded border border-yellow-200">
+                        <span className="font-semibold">Observações públicas:</span> {pub}
+                      </div>
+                    )}
+                    {priv && (
+                      <div className="text-sm text-gray-800 bg-blue-50 p-2 rounded border border-blue-200">
+                        <span className="font-semibold">Observações internas:</span> {priv}
+                      </div>
+                    )}
+                  </div>
+                ) : null;
+              })()}
 
               {selectedOrder.raw_json?.observacoes && (
                 <div className="text-sm text-gray-700">Obs.: {selectedOrder.raw_json.observacoes}</div>
               )}
 
-              <div className="mt-4">
-                <div className="text-sm font-semibold text-gray-900 mb-2">Payload completo</div>
-                <pre className="bg-gray-100 rounded p-3 text-xs overflow-auto max-h-64">{JSON.stringify(selectedOrder.raw_json ?? {}, null, 2)}</pre>
-              </div>
+              {/* Payload completo removido para simplificar a visualização do usuário admin */}
             </div>
           </div>
         </div>

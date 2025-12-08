@@ -30,15 +30,11 @@ export default function DriverDashboard() {
 
       if (driverData) {
         // Get routes assigned to this driver
-        const { data: routesData } = await supabase
-          .from('routes')
-          .select(`
-            *,
-            driver: drivers!driver_id(*),
-            vehicle: vehicles!vehicle_id(*)
-          `)
-          .eq('driver_id', driverData.id)
-          .order('created_at', { ascending: false });
+      const { data: routesData } = await supabase
+        .from('routes')
+        .select('*, vehicle:vehicles!vehicle_id(*)')
+        .eq('driver_id', driverData.id)
+        .order('created_at', { ascending: false });
 
         if (routesData) {
           setRoutes(routesData as RouteWithDetails[]);

@@ -13,10 +13,18 @@ import Settings from './pages/admin/Settings';
 import UsersTeams from './pages/admin/UsersTeams';
 import DriverDashboard from './pages/driver/Dashboard';
 import DriverRouteDetails from './pages/driver/RouteDetails';
+import ConferenteDashboard from './pages/conferente/Dashboard';
+import ConferenteRouteConference from './pages/conferente/RouteConference';
 import OrdersImport from './pages/admin/OrdersImport';
 import RouteCreation from './pages/admin/RouteCreation';
+import AssemblyManagement from './pages/admin/AssemblyManagement';
+import AssemblyDashboard from './pages/montador/AssemblyDashboard';
+import TesteImportacao from './pages/teste-importacao';
+import DiagnosticoOrders from './pages/diagnostico-orders';
+import VerificarColunasOrders from './pages/verificar-colunas';
 import ProtectedRoute from './components/ProtectedRoute';
 import { Toaster } from 'sonner';
+import AppErrorBoundary from './components/AppErrorBoundary';
 
 function App() {
   const { checkAuth, isLoading } = useAuthStore();
@@ -41,7 +49,7 @@ function App() {
   }
 
   return (
-    <>
+    <AppErrorBoundary>
       <Router>
         <Routes>
           <Route path="/login" element={<Login />} />
@@ -50,6 +58,9 @@ function App() {
           <Route path="/check-users" element={<CheckUsers />} />
           <Route path="/setup" element={<Setup />} />
           <Route path="/first-login" element={<FirstLogin />} />
+          <Route path="/teste-importacao" element={<TesteImportacao />} />
+          <Route path="/diagnostico-orders" element={<DiagnosticoOrders />} />
+          <Route path="/verificar-colunas" element={<VerificarColunasOrders />} />
           
           {/* Rotas de teste removidas para fluxo profissional */}
           
@@ -94,6 +105,14 @@ function App() {
               </ProtectedRoute>
             }
           />
+          <Route
+            path="/admin/assembly"
+            element={
+              <ProtectedRoute allowedRoles={['admin']}>
+                <AssemblyManagement />
+              </ProtectedRoute>
+            }
+          />
           
           {/* Driver Routes */}
           <Route
@@ -109,6 +128,33 @@ function App() {
             element={
               <ProtectedRoute allowedRoles={['driver']}>
                 <DriverRouteDetails />
+              </ProtectedRoute>
+            }
+          />
+          
+          {/* Montador Routes */}
+          <Route
+            path="/montador"
+            element={
+              <ProtectedRoute allowedRoles={['montador']}>
+                <AssemblyDashboard />
+              </ProtectedRoute>
+            }
+          />
+          {/* Conferente Routes */}
+          <Route
+            path="/conferente"
+            element={
+              <ProtectedRoute allowedRoles={['conferente']}>
+                <ConferenteDashboard />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/conferente/route/:routeId"
+            element={
+              <ProtectedRoute allowedRoles={['conferente']}>
+                <ConferenteRouteConference />
               </ProtectedRoute>
             }
           />
@@ -134,7 +180,7 @@ function App() {
         closeButton
         duration={4000}
       />
-    </>
+    </AppErrorBoundary>
   );
 }
 
@@ -145,7 +191,14 @@ function RoleBasedRedirect() {
   
   if (!user) {
     console.log('No user found, redirecting to login');
-    return <Navigate to="/login" replace />;
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <p className="text-gray-600 mb-4">Redirecionando para o login...</p>
+          <a href="/login" className="text-blue-600 underline">Ir para login agora</a>
+        </div>
+      </div>
+    );
   }
   
   if (user.must_change_password) {
@@ -154,7 +207,11 @@ function RoleBasedRedirect() {
   console.log('User found, redirecting based on role:', user.role);
   return user.role === 'admin' 
     ? <Navigate to="/admin" replace /> 
-    : <Navigate to="/driver" replace />;
+    : user.role === 'driver' 
+      ? <Navigate to="/driver" replace />
+      : user.role === 'conferente'
+        ? <Navigate to="/conferente" replace />
+        : <Navigate to="/driver" replace />;
 }
 
 export default App;

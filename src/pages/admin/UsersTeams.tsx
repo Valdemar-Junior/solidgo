@@ -11,11 +11,16 @@ export default function UsersTeams() {
 
   const [uName, setUName] = useState('')
   const [uPassword, setUPassword] = useState('')
-  const [uRole, setURole] = useState<'admin' | 'driver' | 'helper' | 'montador'>('driver')
+  const [uRole, setURole] = useState<'admin' | 'driver' | 'helper' | 'montador' | 'conferente'>('driver')
   const [generatedPassword, setGeneratedPassword] = useState<string | null>(null)
 
   const [teamDriverId, setTeamDriverId] = useState('')
   const [teamHelperId, setTeamHelperId] = useState('')
+
+  // veículos
+  const [vehicles, setVehicles] = useState<any[]>([])
+  const [vModel, setVModel] = useState('')
+  const [vPlate, setVPlate] = useState('')
 
   useEffect(() => { loadAll() }, [])
 
@@ -31,6 +36,13 @@ export default function UsersTeams() {
         .select('id,name,created_at, driver:users!driver_user_id(name), helper:users!helper_user_id(name)')
         .order('created_at', { ascending: false })
       if (teamsData) setTeams(teamsData)
+
+      // veículos
+      const { data: vehiclesData } = await supabase
+        .from('vehicles')
+        .select('id, model, plate, active')
+        .order('model')
+      if (vehiclesData) setVehicles(vehiclesData)
     } catch (e) {
       console.error(e)
       toast.error('Falha ao carregar dados')
@@ -44,17 +56,25 @@ export default function UsersTeams() {
     try {
       const pwd = uPassword.trim() ? uPassword.trim() : genPassword()
       setGeneratedPassword(pwd)
-      const pseudoEmail = toLoginEmailFromName(uName)
+      let pseudoEmail = toLoginEmailFromName(uName)
+      const { data: existsUserEmail } = await supabase.from('users').select('id').eq('email', pseudoEmail).maybeSingle()
+      if (existsUserEmail?.id) {
+        const base = slugifyName(uName)
+        pseudoEmail = `${base}.${String(Date.now()).slice(-4)}@solidgo.local`
+      }
       const { data: prev } = await supabase.auth.getSession()
       localStorage.setItem('auth_lock','1')
       let uid = ''
       let signRes = await supabase.auth.signUp({ email: pseudoEmail, password: pwd })
       if (signRes.error) {
         const msg = String(signRes.error.message || '').toLowerCase()
-        if (msg.includes('already registered') || msg.includes('user already exists')) {
-          const login = await supabase.auth.signInWithPassword({ email: pseudoEmail, password: pwd })
-          if (login.error) throw login.error
-          uid = login.data.user?.id || ''
+        if (msg.includes('already registered') || msg.includes('user already exists') || signRes.error.status === 422) {
+          // tentar com email alternativo único
+          const altEmail = `${slugifyName(uName)}.${String(Date.now()).slice(-6)}@solidgo.local`
+          const altSignup = await supabase.auth.signUp({ email: altEmail, password: pwd })
+          if (altSignup.error) throw altSignup.error
+          uid = altSignup.data.user?.id || ''
+          pseudoEmail = altEmail
         } else {
           throw signRes.error
         }
@@ -73,9 +93,42 @@ export default function UsersTeams() {
         email: pseudoEmail,
         name: uName.trim(),
         role: uRole,
+        must_change_password: true,
       }, { onConflict: 'id' })
       if (insErr) throw insErr
-      toast.success('Usuário criado. Senha inicial gerada.')
+
+      // Garantir criação do registro em drivers quando perfil for 'driver'
+      if (uRole === 'driver') {
+        try {
+          console.log('🚗 Criando registro de driver para user_id:', uid);
+          const { data: drvExists } = await supabase.from('drivers').select('id').eq('user_id', uid).maybeSingle();
+          console.log('📋 Driver existente:', drvExists);
+          const exists = !!(drvExists && drvExists.id);
+          if (!exists) {
+            console.log('➕ Criando novo driver...');
+            const { data, error } = await supabase.from('drivers').insert({ user_id: uid, active: true });
+            console.log('✅ Resultado criação:', { data, error });
+            if (error) {
+              console.error('❌ Erro ao criar driver:', error);
+              throw error;
+            }
+          } else {
+            console.log('✅ Driver já existe, pulando criação');
+          }
+        } catch (error) {
+          console.error('❌ Erro na criação de driver, tentando upsert:', error);
+          try {
+            const { data, error: upsertError } = await supabase.from('drivers').upsert({ user_id: uid, active: true }, { onConflict: 'user_id' });
+            console.log('🔄 Resultado upsert:', { data, upsertError });
+            if (upsertError) {
+              console.error('❌ Erro no upsert também:', upsertError);
+            }
+          } catch (upsertError) {
+            console.error('❌ Erro crítico no upsert:', upsertError);
+          }
+        }
+      }
+      toast.success('Usuário criado/atualizado. Senha inicial gerada.')
       setUName(''); setUPassword(''); setURole('driver')
       await loadAll()
     } catch (e: any) {
@@ -127,6 +180,21 @@ export default function UsersTeams() {
     }
   }
 
+  const createVehicle = async () => {
+    if (!vModel.trim() || !vPlate.trim()) { toast.error('Informe modelo e placa'); return }
+    try {
+      const plate = vPlate.trim().toUpperCase()
+      // usar RPC com security definer para evitar impacto de RLS
+      const { data: newId, error: rpcError } = await supabase.rpc('insert_vehicle', { p_model: vModel.trim(), p_plate: plate })
+      if (rpcError) throw rpcError
+      toast.success('Veículo salvo')
+      setVModel(''); setVPlate('')
+      await loadAll()
+    } catch (e:any) {
+      toast.error(String(e.message || 'Falha ao salvar veículo'))
+    }
+  }
+
   return (
     <div className="space-y-8 max-w-4xl mx-auto">
       <div className="bg-white rounded-lg shadow p-6">
@@ -143,6 +211,7 @@ export default function UsersTeams() {
               <option value="driver">Motorista</option>
               <option value="helper">Ajudante</option>
               <option value="montador">Montador</option>
+              <option value="conferente">Conferente</option>
             </select>
           </div>
           <div>
@@ -162,10 +231,39 @@ export default function UsersTeams() {
           <h3 className="text-sm font-semibold text-gray-900 mb-2">Usuários</h3>
           <div className="overflow-x-auto">
             <table className="min-w-full text-sm">
-              <thead><tr><th className="px-2 py-1 text-left">Nome</th><th className="px-2 py-1 text-left">Tipo</th><th className="px-2 py-1 text-left">Trocar senha no primeiro login</th></tr></thead>
+              <thead><tr><th className="px-2 py-1 text-left">Nome</th><th className="px-2 py-1 text-left">Tipo</th><th className="px-2 py-1 text-left">Trocar senha no primeiro login</th><th className="px-2 py-1 text-right">Ações</th></tr></thead>
               <tbody>
                 {users.map(u=> (
-                  <tr key={u.id} className="border-t"><td className="px-2 py-1">{u.name}</td><td className="px-2 py-1">{u.role==='driver'?'Motorista':u.role==='admin'?'Admin':u.role==='helper'?'Ajudante':'Montador'}</td><td className="px-2 py-1">{u.must_change_password === undefined ? '—' : (u.must_change_password ? 'Sim' : 'Não')}</td></tr>
+                  <tr key={u.id} className="border-t">
+                    <td className="px-2 py-1">{u.name}</td>
+                    <td className="px-2 py-1">{u.role==='driver'?'Motorista':u.role==='admin'?'Admin':u.role==='helper'?'Ajudante':u.role==='montador'?'Montador':'Conferente'}</td>
+                    <td className="px-2 py-1">{u.must_change_password === undefined ? '—' : (u.must_change_password ? 'Sim' : 'Não')}</td>
+                    <td className="px-2 py-1 text-right">
+                      <button
+                        onClick={async ()=>{
+                          const temp = genPassword()
+                          try {
+                            const resp = await fetch(`/api/reset-password`, {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({ userId: u.id, newPassword: temp })
+                            })
+                            if (!resp.ok) {
+                              let msg = 'Falha ao resetar senha'
+                              try { const j = await resp.json(); if (j?.error) msg = j.error } catch {}
+                              throw new Error(msg + ' — verifique configuração do servidor (SUPABASE_URL/SUPABASE_SERVICE_KEY)')
+                            }
+                            await supabase.from('users').update({ must_change_password: true }).eq('id', u.id)
+                            toast.success(`Senha resetada. Nova senha: ${temp}`)
+                            await loadAll()
+                          } catch (e:any) {
+                            toast.error(String(e.message||'Erro ao resetar senha'))
+                          }
+                        }}
+                        className="px-2 py-1 bg-orange-600 text-white rounded-md"
+                      >Resetar senha</button>
+                    </td>
+                  </tr>
                 ))}
               </tbody>
             </table>
@@ -204,6 +302,40 @@ export default function UsersTeams() {
               <tbody>
                 {teams.map((t:any)=> (
                   <tr key={t.id} className="border-t"><td className="px-2 py-1">{t.name}</td><td className="px-2 py-1">{t.driver?.name}</td><td className="px-2 py-1">{t.helper?.name}</td></tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div className="bg-white rounded-lg shadow p-6">
+        <h2 className="text-xl font-bold text-gray-900 mb-4">Cadastro de Veículo</h2>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Modelo</label>
+            <input value={vModel} onChange={e=>setVModel(e.target.value)} className="w-full px-3 py-2 border rounded-md" />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Placa</label>
+            <input value={vPlate} onChange={e=>setVPlate(e.target.value)} className="w-full px-3 py-2 border rounded-md" placeholder="ABC-1234" />
+          </div>
+          <div className="flex items-end">
+            <button onClick={createVehicle} className="px-4 py-2 bg-blue-600 text-white rounded-md">Salvar Veículo</button>
+          </div>
+        </div>
+        <div className="mt-6">
+          <h3 className="text-sm font-semibold text-gray-900 mb-2">Veículos</h3>
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-sm">
+              <thead><tr><th className="px-2 py-1 text-left">Modelo</th><th className="px-2 py-1 text-left">Placa</th><th className="px-2 py-1 text-left">Ativo</th></tr></thead>
+              <tbody>
+                {vehicles.map(v=> (
+                  <tr key={v.id} className="border-t">
+                    <td className="px-2 py-1">{v.model}</td>
+                    <td className="px-2 py-1">{v.plate}</td>
+                    <td className="px-2 py-1">{v.active ? 'Sim' : 'Não'}</td>
+                  </tr>
                 ))}
               </tbody>
             </table>

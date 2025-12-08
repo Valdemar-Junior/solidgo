@@ -29,7 +29,12 @@ export const useAuthStore = create<AuthState>()(
         
         try {
           console.log('Attempting Supabase auth signInWithPassword...');
-          const loginEmail = identifier.includes('@') ? identifier : toLoginEmailFromName(identifier);
+          // Resolve email: se existir perfil com nome igual ao identificador, usar o email do perfil
+          let loginEmail = identifier.includes('@') ? identifier : toLoginEmailFromName(identifier);
+          if (!identifier.includes('@')) {
+            const { data: byName } = await supabase.from('users').select('email').eq('name', identifier).maybeSingle();
+            if (byName?.email) loginEmail = byName.email;
+          }
           let { data, error } = await supabase.auth.signInWithPassword({ email: loginEmail, password });
 
           console.log('Supabase auth result:', { data, error });
@@ -42,15 +47,9 @@ export const useAuthStore = create<AuthState>()(
           if (error) {
             const msg = String(error.message || '').toLowerCase();
             if (msg.includes('invalid') || msg.includes('credentials')) {
-              const signup = await supabase.auth.signUp({ email: loginEmail, password });
-              if (signup.error) throw signup.error;
-              // tentar login novamente
-              const retry = await supabase.auth.signInWithPassword({ email: loginEmail, password });
-              data = retry.data; error = retry.error as any;
-              if (retry.error) throw retry.error;
-            } else {
-              throw error;
+              throw new Error('Credenciais inválidas');
             }
+            throw error;
           }
 
           if (data.user) {
@@ -72,6 +71,7 @@ export const useAuthStore = create<AuthState>()(
                 email: data.user.email,
                 name: fallbackName,
                 role: roleDefault,
+                must_change_password: true, // Forçar mudança de senha no primeiro acesso
               });
               if (insertErr) throw new Error('Perfil de usuário não encontrado');
               const { data: newProfile } = await supabase
@@ -101,12 +101,7 @@ export const useAuthStore = create<AuthState>()(
               };
 
               console.log('Setting user in store:', user);
-              set({
-                user,
-                isAuthenticated: true,
-                isLoading: false,
-                error: null,
-              });
+              set({ user, isAuthenticated: true, isLoading: false, error: null });
               console.log('Login process completed successfully');
             }
           } else {
@@ -124,21 +119,18 @@ export const useAuthStore = create<AuthState>()(
 
       logout: async () => {
         set({ isLoading: true });
-        
         try {
-          await supabase.auth.signOut();
-          set({
-            user: null,
-            isAuthenticated: false,
-            isLoading: false,
-            error: null,
-          });
+          try { localStorage.setItem('auth_lock','1'); } catch {}
+          await supabase.auth.signOut({ scope: 'local' });
         } catch (error: any) {
-          set({
-            isLoading: false,
-            error: error.message || 'Erro ao fazer logout',
-          });
-          throw error;
+          // ignorar 403 de scope global/local e seguir limpando estado
+          console.warn('Logout warning:', error?.message || error);
+        } finally {
+          set({ user: null, isAuthenticated: false, isLoading: false, error: null });
+          try { localStorage.removeItem('auth-storage'); } catch {}
+          try { localStorage.removeItem('delivery-app-auth-token'); } catch {}
+          try { localStorage.removeItem('sb-' + 'auth-token'); } catch {}
+          try { localStorage.removeItem('auth_lock'); } catch {}
         }
       },
 
@@ -249,7 +241,7 @@ supabase.auth.onAuthStateChange(async (event, session) => {
   }
   if (event === 'SIGNED_OUT') {
     useAuthStore.getState().checkAuth();
-  } else if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
+  } else if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') {
     useAuthStore.getState().checkAuth();
   }
 });

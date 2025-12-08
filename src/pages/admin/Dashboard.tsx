@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { useAuthStore } from '../../stores/authStore';
 import { supabase } from '../../supabase/client';
 import type { DashboardMetrics } from '../../types/database';
-import { BarChart3, Package, Truck, Users, FileText, Settings, RefreshCw, LogOut } from 'lucide-react';
+import { BarChart3, Package, Truck, Users, Settings, LogOut, Hammer } from 'lucide-react';
 
 export default function AdminDashboard() {
   const { user, logout } = useAuthStore();
@@ -84,18 +84,18 @@ export default function AdminDashboard() {
       color: 'bg-blue-500',
     },
     {
-      title: 'Rotas',
-      description: 'Criar e gerenciar rotas',
+      title: 'Gestão de Entregas',
+      description: 'Criar e gerenciar rotas de entrega',
       icon: Truck,
       href: '/admin/routes',
       color: 'bg-green-500',
     },
     {
-      title: 'Usuários e Equipes',
-      description: 'Cadastrar usuários, ajudantes e equipes',
-      icon: Users,
-      href: '/admin/users-teams',
-      color: 'bg-purple-500',
+      title: 'Gestão de Montagem',
+      description: 'Gerenciar romaneios e montagem',
+      icon: Hammer,
+      href: '/admin/assembly',
+      color: 'bg-indigo-500',
     },
     {
       title: 'Relatórios',
@@ -105,11 +105,11 @@ export default function AdminDashboard() {
       color: 'bg-orange-500',
     },
     {
-      title: 'Romaneios',
-      description: 'Gerar romaneios em PDF',
-      icon: FileText,
-      href: '/admin/delivery-sheets',
-      color: 'bg-red-500',
+      title: 'Usuários e Equipes',
+      description: 'Cadastrar usuários, ajudantes e equipes',
+      icon: Users,
+      href: '/admin/users-teams',
+      color: 'bg-purple-500',
     },
     {
       title: 'Configurações',
@@ -220,32 +220,7 @@ export default function AdminDashboard() {
           </div>
         </div>
 
-        {/* Quick Actions */}
-        <div className="mb-8">
-          <div className="flex space-x-4">
-            <Link
-              to="/admin/orders"
-              className="bg-blue-600 text-white px-6 py-3 rounded-lg font-medium hover:bg-blue-700 transition-colors flex items-center"
-            >
-              <Package className="h-5 w-5 mr-2" />
-              Importar Pedidos
-            </Link>
-            <Link
-              to="/admin/routes"
-              className="bg-green-600 text-white px-6 py-3 rounded-lg font-medium hover:bg-green-700 transition-colors flex items-center"
-            >
-              <Truck className="h-5 w-5 mr-2" />
-              Criar Rota
-            </Link>
-            <button
-              onClick={() => window.location.reload()}
-              className="bg-gray-600 text-white px-6 py-3 rounded-lg font-medium hover:bg-gray-700 transition-colors flex items-center"
-            >
-              <RefreshCw className="h-5 w-5 mr-2" />
-              Atualizar
-            </button>
-          </div>
-        </div>
+        {/* Quick Actions removidos conforme solicitação */}
 
         {/* Navigation Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">

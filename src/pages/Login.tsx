@@ -1,14 +1,29 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../stores/authStore';
 import { Loader2, Truck } from 'lucide-react';
 
 export default function Login() {
   const navigate = useNavigate();
-  const { login, isLoading, error, clearError } = useAuthStore();
+  const { login, isLoading, error, clearError, user, isAuthenticated } = useAuthStore();
   
   const [name, setName] = useState('');
   const [password, setPassword] = useState('');
+
+  // Monitorar quando o login for bem sucedido e redirecionar automaticamente
+  useEffect(() => {
+    if (isAuthenticated && user) {
+      console.log('User authenticated, redirecting...', user);
+      const path = user.role === 'admin' ? '/admin'
+        : user.role === 'driver' ? '/driver'
+        : user.role === 'conferente' ? '/conferente'
+        : user.role === 'montador' ? '/montador'
+        : '/driver';
+      navigate(path);
+      // força refresh de rota quando mudamos de usuário para evitar estados antigos
+      setTimeout(()=>{ try { window.location.replace(path); } catch {} }, 100);
+    }
+  }, [isAuthenticated, user, navigate]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -18,9 +33,7 @@ export default function Login() {
     try {
       console.log('Calling login function...');
       await login(name, password);
-      console.log('Login successful, navigating to home...');
-      // Redirect will be handled by the RoleBasedRedirect component
-      navigate('/');
+      console.log('Login successful - redirecionamento será feito pelo useEffect');
     } catch (error) {
       console.error('Login failed:', error);
       // Error is already handled in store

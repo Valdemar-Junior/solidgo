@@ -5,6 +5,13 @@ import { VitePWA } from 'vite-plugin-pwa';
 
 // https://vite.dev/config/
 export default defineConfig({
+  server: {
+    port: 5175,
+    strictPort: true,
+    proxy: {
+      '/api': 'http://localhost:3000',
+    },
+  },
   build: {
     sourcemap: 'hidden',
   },

@@ -31,6 +31,10 @@ export default function ProtectedRoute({ children, allowedRoles }: ProtectedRout
     return <Navigate to="/login" replace />;
   }
 
+  if (user?.must_change_password) {
+    return <Navigate to="/first-login" replace />;
+  }
+
   if (allowedRoles && !allowedRoles.includes(user?.role || '')) {
     return <Navigate to="/" replace />;
   }
