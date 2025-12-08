@@ -137,12 +137,11 @@ export const openNavigationSmartAddressJson = async (a: any) => {
 export const openNavigationTextLikeUI = (a: any) => {
   const addr = buildStrictAddress(a);
   if (!addr) return;
-  // Tenta Waze (q=) e deixa o usuário escolher
-  try {
-    openWazeWithText(addr);
-  } catch {
-    openGoogleWithText(addr);
-  }
+  // Abrir primeiro no Google (mais estável), depois Waze
+  openGoogleWithText(addr);
+  setTimeout(() => {
+    try { openWazeWithText(addr); } catch {}
+  }, 150);
 };
 
 export const geocodeAddress = async (a: any): Promise<{ lat: number; lng: number } | null> => {
