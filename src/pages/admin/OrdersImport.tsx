@@ -269,13 +269,13 @@ export default function OrdersImport() {
               const hasLng = addr.lng && !isNaN(Number(addr.lng));
               
               if (hasLat && hasLng) {
-                  // Já tem
-              } else {
-                // Delay para respeitar rate limit do Nominatim (aprox 1.2s)
-                await new Promise(r => setTimeout(r, 1200));
-                
-                const gRes = await fetch('/api/geocode-order', {
-                  method: 'POST',
+                   // Já tem
+               } else {
+                 // Delay para respeitar rate limit do LocationIQ (2 req/s -> 600ms safe)
+                 await new Promise(r => setTimeout(r, 600));
+                 
+                 const gRes = await fetch('/api/geocode-order', {
+                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({ orderId: order.id, debug: true })
                 });

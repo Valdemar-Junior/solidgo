@@ -30,36 +30,9 @@ export default async function handler(req: any, res: any) {
       zip: addr.zip || raw.destinatario_cep || '',
     }
 
-    // Enriquecer UF/cidade via ViaCEP se faltando
-    try {
-      const cepDigits = String(enriched.zip || '').replace(/\D/g, '').slice(0, 8)
-      if ((!enriched.state || !enriched.city) && cepDigits.length === 8) {
-        const via = await fetch(`https://viacep.com.br/ws/${cepDigits}/json/`, { headers: { 'Accept': 'application/json' } })
-        const vj: any = await via.json()
-        if (!vj?.erro) {
-          enriched.state = enriched.state || String(vj.uf || '')
-          enriched.city = enriched.city || String(vj.localidade || '')
-          // Se não tiver rua, tenta pegar do viacep
-          if (!enriched.street && vj.logradouro) enriched.street = vj.logradouro
-          if (!enriched.neighborhood && vj.bairro) enriched.neighborhood = vj.bairro
-        }
-      }
-    } catch {}
-
-    const ua = (process.env.NOMINATIM_USER_AGENT || 'SOLIDGO/1.0 (contact: support@example.com)').trim()
+    // Se tiver LOCATIONIQ_KEY, usa LocationIQ. Senão, tenta Nominatim (mas vamos recomendar LocationIQ)
+    const liqKey = process.env.LOCATIONIQ_KEY
     
-    // Helper para buscar
-    const fetchNominatim = async (params: string) => {
-      try {
-        const u = `https://nominatim.openstreetmap.org/search?format=json&limit=1&addressdetails=1&countrycodes=br&${params}`
-        const r = await fetch(u, { headers: { 'Accept': 'application/json', 'User-Agent': ua } })
-        if (!r.ok) return null
-        const j = await r.json()
-        if (Array.isArray(j) && j.length > 0) return j[0]
-        return null
-      } catch { return null }
-    }
-
     let lat = NaN
     let lon = NaN
     let result: any = null
@@ -67,79 +40,96 @@ export default async function handler(req: any, res: any) {
 
     // Limpeza basica
     const cleanStreet = (enriched.street || '').replace(/[^\w\s\.,-]/g, ' ').trim()
-    // Tenta identificar se o numero está no final da rua e separa
     let streetForStruct = cleanStreet
     let numberForStruct = enriched.number
     if (!numberForStruct) {
-      // Tenta extrair numero do final da string da rua (Ex: "Rua X, 123" ou "Rua X 123")
       const match = cleanStreet.match(/^(.*?)[,\s]+(\d+[a-zA-Z]?)$/)
       if (match) {
         streetForStruct = match[1].trim()
-        // Se quiser usar o numero extraido em alguma busca especifica, podemos.
-        // Mas o Nominatim structured search geralmente prefere o nome da rua limpo.
+        numberForStruct = match[2].trim()
       }
     }
 
-    const streetParam = encodeURIComponent(cleanStreet)
-    const streetCleanParam = encodeURIComponent(streetForStruct)
-    const cityParam = encodeURIComponent(String(enriched.city || ''))
-    const stateParam = encodeURIComponent(String(enriched.state || ''))
-    const zipParam = encodeURIComponent(String(enriched.zip || ''))
+    if (liqKey) {
+        // --- LOCATIONIQ LOGIC ---
+        // LocationIQ é muito melhor em freeform search
+        const fetchLocationIQ = async (q: string) => {
+            try {
+                // Rate limit do LocationIQ free é 2 req/s. 
+                // Vamos ser seguros e colocar um pequeno delay aleatorio se for loop rapido, 
+                // mas aqui é serverless function, entao ok.
+                const u = `https://us1.locationiq.com/v1/search?key=${liqKey}&q=${encodeURIComponent(q)}&format=json&limit=1&addressdetails=1&countrycodes=br`
+                const r = await fetch(u)
+                if (!r.ok) return null
+                const j = await r.json()
+                if (Array.isArray(j) && j.length > 0) return j[0]
+                return null
+            } catch { return null }
+        }
 
-    // Estrategia Revisada: Priorizar Freeform com CEP (geralmente mais robusto para "Rua, Numero")
-    
-    // 1. Freeform Search (com CEP) - Lida bem com "Rua X, 123 - Cidade, UF, CEP"
-    if (!result) {
-      const text = [
-        `${enriched.street}${enriched.number ? ', ' + enriched.number : ''}`,
-        enriched.neighborhood ? `- ${enriched.neighborhood}` : '',
-        `${enriched.city}${enriched.state ? ' - ' + enriched.state : ''}`,
-        enriched.zip ? `${enriched.zip}` : '',
-        'Brasil',
-      ].filter(Boolean).join(', ').replace(', -', ' -')
-      result = await fetchNominatim(`q=${encodeURIComponent(text)}`)
-      if (result) usedMethod = 'freeform_full'
-    }
+        // 1. Busca completa
+        const fullText = [
+            `${enriched.street} ${enriched.number || numberForStruct || ''}`,
+            enriched.neighborhood,
+            enriched.city,
+            enriched.state,
+            enriched.zip,
+            'Brasil'
+        ].filter(Boolean).join(', ')
+        
+        result = await fetchLocationIQ(fullText)
+        if (result) usedMethod = 'locationiq_full'
 
-    // 2. Structured Search (completo, usando street limpa sem numero)
-    if (!result) {
-      // Nominatim as vezes falha se street tem numero. Tentar street limpa.
-      const q = `street=${streetCleanParam}&city=${cityParam}&state=${stateParam}&postalcode=${zipParam}`
-      result = await fetchNominatim(q)
-      if (result) usedMethod = 'structured_clean_street_zip'
-    }
+        // 2. Busca sem CEP (se falhar)
+        if (!result) {
+             const textNoZip = [
+                `${enriched.street} ${enriched.number || numberForStruct || ''}`,
+                enriched.neighborhood,
+                enriched.city,
+                enriched.state,
+                'Brasil'
+            ].filter(Boolean).join(', ')
+            result = await fetchLocationIQ(textNoZip)
+            if (result) usedMethod = 'locationiq_no_zip'
+        }
+        
+        // 3. Busca só Rua e Cidade
+        if (!result) {
+            const textSimple = [
+                `${streetForStruct}`,
+                enriched.city,
+                enriched.state,
+                'Brasil'
+            ].filter(Boolean).join(', ')
+            result = await fetchLocationIQ(textSimple)
+            if (result) usedMethod = 'locationiq_simple'
+        }
 
-    // 3. Structured Search (completo, usando street original)
-    if (!result && streetParam !== streetCleanParam) {
-      const q = `street=${streetParam}&city=${cityParam}&state=${stateParam}&postalcode=${zipParam}`
-      result = await fetchNominatim(q)
-      if (result) usedMethod = 'structured_raw_street_zip'
-    }
-
-    // 4. Freeform Search SEM CEP
-    if (!result) {
-      const text = [
-        `${enriched.street}${enriched.number ? ', ' + enriched.number : ''}`,
-        enriched.neighborhood ? `- ${enriched.neighborhood}` : '',
-        `${enriched.city}${enriched.state ? ' - ' + enriched.state : ''}`,
-        'Brasil',
-      ].filter(Boolean).join(', ').replace(', -', ' -')
-      result = await fetchNominatim(`q=${encodeURIComponent(text)}`)
-      if (result) usedMethod = 'freeform_no_zip'
-    }
-
-    // 5. Structured Search SEM CEP (street limpa)
-    if (!result && enriched.street && enriched.city) {
-      const q = `street=${streetCleanParam}&city=${cityParam}&state=${stateParam}`
-      result = await fetchNominatim(q)
-      if (result) usedMethod = 'structured_clean_street_no_zip'
-    }
-
-    // 6. Fallback extremo: Apenas Rua e Cidade
-    if (!result && enriched.street && enriched.city) {
-        const q = `street=${streetCleanParam}&city=${cityParam}&state=${stateParam}`
-        result = await fetchNominatim(q)
-        if (result) usedMethod = 'street_city_fallback'
+    } else {
+        // --- FALLBACK NOMINATIM (CÓDIGO ANTIGO) ---
+        // (Mantido apenas como fallback se a chave não for configurada)
+        const ua = (process.env.NOMINATIM_USER_AGENT || 'SOLIDGO/1.0 (contact: support@example.com)').trim()
+        const fetchNominatim = async (params: string) => {
+          try {
+            const u = `https://nominatim.openstreetmap.org/search?format=json&limit=1&addressdetails=1&countrycodes=br&${params}`
+            const r = await fetch(u, { headers: { 'Accept': 'application/json', 'User-Agent': ua } })
+            if (!r.ok) return null
+            const j = await r.json()
+            if (Array.isArray(j) && j.length > 0) return j[0]
+            return null
+          } catch { return null }
+        }
+        
+        // ... (Lógica do nominatim simplificada para não poluir, focando na migração)
+        // Se cair aqui, vai usar a lógica freeform básica
+        const text = [
+            `${enriched.street}${enriched.number ? ', ' + enriched.number : ''}`,
+            enriched.neighborhood ? `- ${enriched.neighborhood}` : '',
+            `${enriched.city}${enriched.state ? ' - ' + enriched.state : ''}`,
+            'Brasil',
+        ].filter(Boolean).join(', ').replace(', -', ' -')
+        result = await fetchNominatim(`q=${encodeURIComponent(text)}`)
+        if (result) usedMethod = 'nominatim_fallback'
     }
 
     if (result) {
@@ -148,11 +138,11 @@ export default async function handler(req: any, res: any) {
     }
 
     if (debug) {
-      console.log('GEOCODE_ORDER', { orderId, usedMethod, result })
+      console.log('GEOCODE_ORDER', { orderId, usedMethod, result, provider: liqKey ? 'LocationIQ' : 'Nominatim' })
     }
 
     if (isNaN(lat) || isNaN(lon)) {
-        return res.status(200).json({ ok: false, message: 'Geocoding failed for all strategies' })
+        return res.status(200).json({ ok: false, message: 'Geocoding failed' })
     }
 
     const nextAddr = { ...addr, lat, lng: lon }
