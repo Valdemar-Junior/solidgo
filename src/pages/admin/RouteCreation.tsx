@@ -149,6 +149,8 @@ function RouteCreationContent() {
   const [filterOperation, setFilterOperation] = useState<string>('');
   const [showFilters, setShowFilters] = useState(true); // Toggle filters visibility
   const [filterHasAssembly, setFilterHasAssembly] = useState<boolean>(false);
+  const [filterSaleDate, setFilterSaleDate] = useState<string>('');
+  const [strictLocal, setStrictLocal] = useState<boolean>(false);
 
   // Logic specific
   const [selectedExistingRouteId, setSelectedExistingRouteId] = useState<string>('');
@@ -298,6 +300,7 @@ function RouteCreationContent() {
           if ('neighborhood' in f) setFilterNeighborhood(f.neighborhood || '');
           if ('filial' in f) setFilterFilialVenda(f.filial || '');
           if ('local' in f) setFilterLocalEstocagem(f.local || '');
+          if ('strictLocal' in f) setStrictLocal(!!f.strictLocal);
           if ('seller' in f) setFilterSeller(f.seller || '');
           if ('client' in f) { setFilterClient(f.client || ''); setClientQuery(f.client || ''); }
           if ('department' in f) setFilterDepartment(f.department || '');
@@ -305,6 +308,7 @@ function RouteCreationContent() {
           if ('freightFull' in f) setFilterFreightFull(f.freightFull ? '1' : '');
           if ('hasAssembly' in f) setFilterHasAssembly(!!f.hasAssembly);
           if ('operation' in f) setFilterOperation(f.operation || '');
+          if ('saleDate' in f) setFilterSaleDate(f.saleDate || '');
         }
       }
     } catch {}
@@ -317,6 +321,7 @@ function RouteCreationContent() {
         neighborhood: filterNeighborhood,
         filial: filterFilialVenda,
         local: filterLocalEstocagem,
+        strictLocal,
         seller: filterSeller,
         client: filterClient,
         department: filterDepartment,
@@ -324,6 +329,7 @@ function RouteCreationContent() {
         freightFull: Boolean(filterFreightFull),
         hasAssembly: filterHasAssembly,
         operation: filterOperation,
+        saleDate: filterSaleDate,
       };
       localStorage.setItem('rc_filters', JSON.stringify(payload));
     } catch {}
@@ -477,6 +483,10 @@ function RouteCreationContent() {
         if (strictDepartment && filterDepartment) {
           const allInDept = items.length > 0 && items.every((it:any)=> String(it?.department||'').toLowerCase() === filterDepartment.toLowerCase());
           if (!allInDept) continue;
+        }
+        if (strictLocal && filterLocalEstocagem) {
+          const allInLocal = items.length > 0 && items.every((it:any)=> String(it?.location||'').toLowerCase() === filterLocalEstocagem.toLowerCase());
+          if (!allInLocal) continue;
         }
         const byLocal = filterLocalEstocagem ? items.filter((it:any)=> String(it?.location||'').toLowerCase() === filterLocalEstocagem.toLowerCase()) : items;
         let byOther = byLocal;
@@ -858,6 +868,10 @@ function RouteCreationContent() {
                             <option value="">Todos</option>
                             {localOptions.map((c)=> (<option key={c} value={c}>{c}</option>))}
                         </select>
+                        <div className="flex items-center mt-1">
+                             <input type="checkbox" id="strictLocal" className="h-3 w-3 text-blue-600 rounded border-gray-300" checked={strictLocal} onChange={(e)=> setStrictLocal(e.currentTarget.checked)} />
+                             <label htmlFor="strictLocal" className="ml-2 text-xs text-gray-500">Apenas local exclusivo</label>
+                        </div>
                     </div>
                     <div className="space-y-1">
                         <label className="text-xs font-semibold text-gray-500 uppercase">Vendedor</label>
@@ -910,6 +924,15 @@ function RouteCreationContent() {
                         </select>
                     </div>
                     <div className="space-y-1">
+                        <label className="text-xs font-semibold text-gray-500 uppercase">Data da Venda</label>
+                        <input 
+                          type="date" 
+                          value={filterSaleDate}
+                          onChange={(e)=> setFilterSaleDate(e.target.value)}
+                          className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all" 
+                        />
+                    </div>
+                    <div className="space-y-1">
                         <label className="text-xs font-semibold text-gray-500 uppercase">Frete Full</label>
                         <div className="flex items-center gap-2 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg">
                             <input id="ffull" type="checkbox" className="h-4 w-4" checked={Boolean(filterFreightFull)} onChange={(e)=> setFilterFreightFull(e.target.checked ? '1' : '')} />
@@ -927,7 +950,7 @@ function RouteCreationContent() {
                 
                 <div className="flex justify-end mt-4 pt-4 border-t border-gray-100">
                      <button 
-                        onClick={()=>{setFilterCity('');setFilterNeighborhood('');setFilterFilialVenda('');setFilterLocalEstocagem('');setFilterSeller('');setFilterClient('');setClientQuery('');setFilterFreightFull('');setFilterOperation('');setFilterDepartment('');setFilterHasAssembly(false);}} 
+                        onClick={()=>{setFilterCity('');setFilterNeighborhood('');setFilterFilialVenda('');setFilterLocalEstocagem('');setStrictLocal(false);setFilterSeller('');setFilterClient('');setClientQuery('');setFilterFreightFull('');setFilterOperation('');setFilterDepartment('');setFilterHasAssembly(false);setFilterSaleDate('');}} 
                         className="text-sm text-red-600 hover:text-red-800 font-medium flex items-center"
                      >
                         <X className="h-3 w-3 mr-1" /> Limpar filtros
@@ -1023,21 +1046,24 @@ function RouteCreationContent() {
                                  return s === 'true' || s === '1' || s === 'sim' || s === 's' || s === 'y' || s === 'yes' || s === 't';
                                };
                                const filteredOrders = orders.filter((o:any) => {
-                                  const addr: any = o.address_json || {};
-                                  const raw: any = o.raw_json || {};
-                                  const city = String(addr.city || raw.destinatario_cidade || '').toLowerCase();
-                                  const nb = String(addr.neighborhood || raw.destinatario_bairro || '').toLowerCase();
-                                  const client = String(o.customer_name || '').toLowerCase();
-                                  const filial = String(o.filial_venda || raw.filial_venda || '').toLowerCase();
-                                  const seller = String(o.vendedor_nome || raw.vendedor || '').toLowerCase();
-                                  if (filterCity && !city.includes(filterCity.toLowerCase())) return false;
-                                  if (filterNeighborhood && !nb.includes(filterNeighborhood.toLowerCase())) return false;
-                                  if (clientQuery && !client.includes(clientQuery.toLowerCase())) return false;
-                                  if (filterFreightFull && !isTrue(o.tem_frete_full || raw?.tem_frete_full)) return false;
-                                  if (filterOperation && !String(raw.operacoes || '').toLowerCase().includes(filterOperation.toLowerCase())) return false;
-                                  if (filterFilialVenda && filial !== filterFilialVenda.toLowerCase()) return false;
-                                  if (filterSeller && !seller.includes(filterSeller.toLowerCase())) return false;
-                                  return true;
+                                 const addr: any = o.address_json || {};
+                                 const raw: any = o.raw_json || {};
+                                 const city = String(addr.city || raw.destinatario_cidade || '').toLowerCase();
+                                 const nb = String(addr.neighborhood || raw.destinatario_bairro || '').toLowerCase();
+                                 const client = String(o.customer_name || '').toLowerCase();
+                                 const filial = String(o.filial_venda || raw.filial_venda || '').toLowerCase();
+                                 const seller = String(o.vendedor_nome || raw.vendedor || '').toLowerCase();
+                                 const saleDateISO = (o.data_venda || raw.data_venda || '') as string;
+                                 const saleDateStr = saleDateISO ? new Date(saleDateISO).toISOString().slice(0,10) : '';
+                                 if (filterCity && !city.includes(filterCity.toLowerCase())) return false;
+                                 if (filterNeighborhood && !nb.includes(filterNeighborhood.toLowerCase())) return false;
+                                 if (clientQuery && !client.includes(clientQuery.toLowerCase())) return false;
+                                 if (filterFreightFull && !isTrue(o.tem_frete_full || raw?.tem_frete_full)) return false;
+                                 if (filterOperation && !String(raw.operacoes || '').toLowerCase().includes(filterOperation.toLowerCase())) return false;
+                                 if (filterFilialVenda && filial !== filterFilialVenda.toLowerCase()) return false;
+                                 if (filterSeller && !seller.includes(filterSeller.toLowerCase())) return false;
+                                 if (filterSaleDate && saleDateStr !== filterSaleDate) return false;
+                                 return true;
                                });
 
                                for (const o of filteredOrders) {
@@ -1046,6 +1072,10 @@ function RouteCreationContent() {
                                  if (strictDepartment && filterDepartment) {
                                    const allInDept = items.length > 0 && items.every((it:any)=> String(it?.department||'').toLowerCase() === filterDepartment.toLowerCase());
                                    if (!allInDept) continue;
+                                 }
+                                 if (strictLocal && filterLocalEstocagem) {
+                                   const allInLocal = items.length > 0 && items.every((it:any)=> String(it?.location||'').toLowerCase() === filterLocalEstocagem.toLowerCase());
+                                   if (!allInLocal) continue;
                                  }
                                  const itemsByLocal = filterLocalEstocagem
                                    ? items.filter((it:any)=> String(it?.location||'').toLowerCase() === filterLocalEstocagem.toLowerCase())
