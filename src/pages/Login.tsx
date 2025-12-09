@@ -214,8 +214,8 @@ export default function Login() {
               </div>
             </div>
             <div className="mt-6 flex justify-center space-x-6 text-gray-400">
-               <ShieldCheck className="h-5 w-5" title="Segurança Avançada" />
-               <CheckCircle2 className="h-5 w-5" title="Alta Disponibilidade" />
+               <ShieldCheck className="h-5 w-5" />
+               <CheckCircle2 className="h-5 w-5" />
             </div>
           </div>
         </div>

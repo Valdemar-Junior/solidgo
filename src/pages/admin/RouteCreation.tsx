@@ -822,8 +822,8 @@ function RouteCreationContent() {
                                  
                                  return orders.filter(o => {
                                      // Apply all filters here
-                                     const addr = o.address_json || {};
-                                     const raw = o.raw_json || {};
+                                     const addr: any = o.address_json || {};
+                                     const raw: any = o.raw_json || {};
                                      const city = String(addr.city || raw.destinatario_cidade || '').toLowerCase();
                                      const nb = String(addr.neighborhood || raw.destinatario_bairro || '').toLowerCase();
                                      const client = String(o.customer_name || '').toLowerCase();
