@@ -58,13 +58,6 @@ export default function ConferenteDashboard() {
       <div className="bg-white rounded-lg shadow p-6">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-3">
-            <button 
-              onClick={() => navigate(-1)} 
-              className="p-2 -ml-2 hover:bg-gray-100 rounded-full text-gray-600 transition-colors"
-              title="Voltar"
-            >
-              <ArrowLeft className="h-6 w-6" />
-            </button>
             <div>
               <h1 className="text-xl font-bold text-gray-900 flex items-center">
                 <Package className="h-5 w-5 mr-2" />
