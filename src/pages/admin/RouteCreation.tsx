@@ -161,8 +161,40 @@ export default function RouteCreation() {
       if (cols) {
         const parsed = JSON.parse(cols);
         if (Array.isArray(parsed)) {
-          const migrated = parsed.map((c:any)=> c?.id === 'localEstocagem' ? { ...c, label: 'Local de Saída' } : c);
-          setColumnsConf(migrated);
+          const migrated = parsed
+            .filter((c: any) => c && typeof c === 'object' && 'id' in c)
+            .map((c: any) => c.id === 'localEstocagem' ? { ...c, label: 'Local de Saída' } : c);
+          if (migrated.length > 0) {
+             // Merge with defaults to ensure no missing columns
+             const defaults = [
+                { id: 'data', label: 'Data', visible: true },
+                { id: 'pedido', label: 'Pedido', visible: true },
+                { id: 'cliente', label: 'Cliente', visible: true },
+                { id: 'telefone', label: 'Telefone', visible: true },
+                { id: 'sku', label: 'SKU', visible: true },
+                { id: 'produto', label: 'Produto', visible: true },
+                { id: 'quantidade', label: 'Qtd.', visible: true },
+                { id: 'department', label: 'Depto.', visible: true },
+                { id: 'brand', label: 'Marca', visible: true },
+                { id: 'localEstocagem', label: 'Local Saída', visible: true },
+                { id: 'cidade', label: 'Cidade', visible: true },
+                { id: 'bairro', label: 'Bairro', visible: true },
+                { id: 'filialVenda', label: 'Filial', visible: true },
+                { id: 'operacao', label: 'Operação', visible: true },
+                { id: 'vendedor', label: 'Vendedor', visible: true },
+                { id: 'situacao', label: 'Situação', visible: true },
+                { id: 'obsPublicas', label: 'Obs.', visible: true },
+                { id: 'obsInternas', label: 'Obs. Int.', visible: true },
+                { id: 'endereco', label: 'Endereço', visible: true },
+                { id: 'outrosLocs', label: 'Outros Locais', visible: true },
+             ];
+             // Update visibility based on saved, keep default structure
+             const merged = defaults.map(d => {
+                const found = migrated.find((m: any) => m.id === d.id);
+                return found ? { ...d, visible: found.visible, label: found.label || d.label } : d;
+             });
+             setColumnsConf(merged);
+          }
         }
       }
       setViewMode('products');

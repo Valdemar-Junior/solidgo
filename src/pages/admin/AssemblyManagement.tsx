@@ -1,40 +1,73 @@
-import { useEffect, useState } from 'react';
-import { Plus, Calendar, User as UserIcon, MapPin, Package, CheckCircle, Clock, AlertCircle } from 'lucide-react';
+import { useEffect, useState, useMemo } from 'react';
+import { 
+  Plus, 
+  Calendar, 
+  User as UserIcon, 
+  MapPin, 
+  Package, 
+  CheckCircle, 
+  Clock, 
+  AlertCircle,
+  Search,
+  Filter,
+  FileText,
+  MoreVertical,
+  Truck,
+  X,
+  ChevronDown,
+  ChevronUp,
+  Edit,
+  Trash2,
+  Settings
+} from 'lucide-react';
 import { toast } from 'sonner';
 import { supabase } from '../../supabase/client';
-import { AssemblyRoute, AssemblyProduct, AssemblyProductWithDetails, User } from '../../types/database';
-import jsPDF from 'jspdf';
+import { AssemblyRoute, AssemblyProductWithDetails, User } from '../../types/database';
 import { DeliverySheetGenerator, type DeliverySheetData } from '../../utils/pdf/deliverySheetGenerator';
 
 export default function AssemblyManagement() {
+  // State
   const [assemblyRoutes, setAssemblyRoutes] = useState<AssemblyRoute[]>([]);
   const [assemblyProducts, setAssemblyProducts] = useState<AssemblyProductWithDetails[]>([]);
   const [montadores, setMontadores] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
+  
+  // Modals
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [showDetailsModal, setShowDetailsModal] = useState(false);
+  const [showRouteEditModal, setShowRouteEditModal] = useState(false);
+  const [showRouteManageModal, setShowRouteManageModal] = useState(false);
+  const [showRouteDetailsModal, setShowRouteDetailsModal] = useState(false);
+
+  // Form Data
   const [newRouteName, setNewRouteName] = useState('');
   const [newRouteDeadline, setNewRouteDeadline] = useState('');
   const [newRouteObservations, setNewRouteObservations] = useState('');
-  const [selectedProducts, setSelectedProducts] = useState<string[]>([]);
-  const [availableProducts, setAvailableProducts] = useState<any[]>([]);
-  const [groupedProducts, setGroupedProducts] = useState<Record<string, any[]>>({});
-  const [filterCidade, setFilterCidade] = useState('');
-  const [filterBairro, setFilterBairro] = useState('');
-  const [selectedLancamentos, setSelectedLancamentos] = useState<string[]>([]);
-  const [showDetailsModal, setShowDetailsModal] = useState(false);
-  const [detailsItem, setDetailsItem] = useState<any | null>(null);
-  const [deliveryInfo, setDeliveryInfo] = useState<Record<string, { date?: string; driver?: string }>>({});
-  const [showRouteEditModal, setShowRouteEditModal] = useState(false);
+  
+  // Edit Data
   const [routeBeingEdited, setRouteBeingEdited] = useState<AssemblyRoute | null>(null);
   const [editRouteName, setEditRouteName] = useState('');
   const [editRouteDeadline, setEditRouteDeadline] = useState('');
   const [editRouteObservations, setEditRouteObservations] = useState('');
-  const [showRouteManageModal, setShowRouteManageModal] = useState(false);
+  
+  // Selection & Management
+  const [selectedProducts, setSelectedProducts] = useState<string[]>([]);
+  const [selectedLancamentos, setSelectedLancamentos] = useState<string[]>([]);
   const [routeBeingManaged, setRouteBeingManaged] = useState<AssemblyRoute | null>(null);
   const [selectedToRemove, setSelectedToRemove] = useState<string[]>([]);
   const [selectedToAdd, setSelectedToAdd] = useState<string[]>([]);
-  const [showRouteDetailsModal, setShowRouteDetailsModal] = useState(false);
   const [routeDetails, setRouteDetails] = useState<{ route: AssemblyRoute, products: any[] } | null>(null);
+  const [detailsItem, setDetailsItem] = useState<any | null>(null);
+
+  // Filters
+  const [filterCidade, setFilterCidade] = useState('');
+  const [filterBairro, setFilterBairro] = useState('');
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
+
+  // Derived Data
+  const [availableProducts, setAvailableProducts] = useState<any[]>([]);
+  const [groupedProducts, setGroupedProducts] = useState<Record<string, any[]>>({});
+  const [deliveryInfo, setDeliveryInfo] = useState<Record<string, { date?: string; driver?: string }>>({});
 
   const fetchData = async () => {
     try {
@@ -74,7 +107,7 @@ export default function AssemblyManagement() {
         return groups;
       }, {});
 
-      // Montar informações de entrega (motorista e data) a partir das rotas entregues
+      // Montar informações de entrega
       const orderIds = pendingUnrouted.map((ap: any) => ap.order_id);
       let deliveryByOrderId: Record<string, { date?: string; driver?: string }> = {};
       if (orderIds.length > 0) {
@@ -127,6 +160,11 @@ export default function AssemblyManagement() {
       setGroupedProducts(groupedByLancamento);
       setDeliveryInfo(deliveryByOrderId);
       
+      // Expand all groups by default
+      const initialExpanded: Record<string, boolean> = {};
+      Object.keys(groupedByLancamento).forEach(key => initialExpanded[key] = true);
+      setExpandedGroups(initialExpanded);
+      
     } catch (error) {
       console.error('Erro ao carregar dados:', error);
       toast.error('Erro ao carregar dados de montagem');
@@ -139,6 +177,7 @@ export default function AssemblyManagement() {
     fetchData();
   }, []);
 
+  // Actions
   const createAssemblyRoute = async () => {
     if (!newRouteName.trim()) {
       toast.error('Por favor, informe um nome para o romaneio');
@@ -151,7 +190,6 @@ export default function AssemblyManagement() {
     }
 
     try {
-      // Criar romaneio
       const { data: routeData, error: routeError } = await supabase
         .from('assembly_routes')
         .insert({
@@ -165,7 +203,6 @@ export default function AssemblyManagement() {
 
       if (routeError) throw routeError;
 
-      // Atribuir assembly_products selecionados ao romaneio (sem criar duplicatas)
       const { error: updateError } = await supabase
         .from('assembly_products')
         .update({ assembly_route_id: routeData.id })
@@ -200,121 +237,26 @@ export default function AssemblyManagement() {
     }
   };
 
-  const assignInstaller = async (productId: string, installerId: string) => {
-    try {
-      const { error } = await supabase
-        .from('assembly_products')
-        .update({
-          installer_id: installerId,
-          status: 'assigned',
-          assembly_date: new Date().toISOString()
-        })
-        .eq('id', productId);
-
-      if (error) throw error;
-      
-      toast.success('Montador atribuído com sucesso!');
-      fetchData();
-      try {
-        const userId = (await supabase.auth.getUser()).data.user?.id || '';
-        await supabase.from('audit_logs').insert({
-          entity_type: 'assembly_product',
-          entity_id: productId,
-          action: 'assigned_installer',
-          details: { installer_id: installerId },
-          user_id: userId,
-          timestamp: new Date().toISOString(),
-        });
-      } catch {}
-      
-    } catch (error) {
-      console.error('Erro ao atribuir montador:', error);
-      toast.error('Erro ao atribuir montador');
-    }
-  };
-
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'pending': return 'bg-yellow-100 text-yellow-800';
-      case 'assigned': return 'bg-blue-100 text-blue-800';
-      case 'in_progress': return 'bg-orange-100 text-orange-800';
-      case 'completed': return 'bg-green-100 text-green-800';
-      case 'cancelled': return 'bg-red-100 text-red-800';
-      default: return 'bg-gray-100 text-gray-800';
-    }
-  };
-
-  const getStatusLabel = (status: string) => {
-    switch (status) {
-      case 'pending': return 'Pendente';
-      case 'assigned': return 'Atribuído';
-      case 'in_progress': return 'Em Andamento';
-      case 'completed': return 'Concluído';
-      case 'cancelled': return 'Cancelado';
-      default: return status;
-    }
-  };
-
   const handleLancamentoSelection = (lancamento: string, checked: boolean) => {
     if (checked) {
       const productsInLancamento = groupedProducts[lancamento] || [];
       const productIds = productsInLancamento.map((p: any) => p.id);
-      setSelectedProducts([...selectedProducts, ...productIds]);
-      setSelectedLancamentos([...selectedLancamentos, lancamento]);
+      setSelectedProducts(prev => [...new Set([...prev, ...productIds])]);
+      setSelectedLancamentos(prev => [...prev, lancamento]);
     } else {
       const productsInLancamento = groupedProducts[lancamento] || [];
       const productIds = productsInLancamento.map((p: any) => p.id);
-      setSelectedProducts(selectedProducts.filter(id => !productIds.includes(id)));
-      setSelectedLancamentos(selectedLancamentos.filter(l => l !== lancamento));
+      setSelectedProducts(prev => prev.filter(id => !productIds.includes(id)));
+      setSelectedLancamentos(prev => prev.filter(l => l !== lancamento));
     }
   };
 
   const handleProductSelection = (productId: string, checked: boolean) => {
     if (checked) {
-      setSelectedProducts([...selectedProducts, productId]);
+      setSelectedProducts(prev => [...prev, productId]);
     } else {
-      setSelectedProducts(selectedProducts.filter(id => id !== productId));
+      setSelectedProducts(prev => prev.filter(id => id !== productId));
     }
-  };
-
-  const getFilteredProducts = () => {
-    const filtered: Record<string, any[]> = {};
-    Object.entries(groupedProducts).forEach(([lancamento, products]) => {
-      const filteredProducts = (products || []).filter((ap: any) => {
-        const addr = ap.order?.address_json || {};
-        const city = (addr.city || '').toLowerCase();
-        const bairro = (addr.neighborhood || '').toLowerCase();
-        const matchCidade = filterCidade ? city.includes(filterCidade.toLowerCase()) : true;
-        const matchBairro = filterBairro ? bairro.includes(filterBairro.toLowerCase()) : true;
-        return matchCidade && matchBairro;
-      });
-      if (filteredProducts.length > 0) {
-        filtered[lancamento] = filteredProducts;
-      }
-    });
-    return filtered;
-  };
-
-  const getUniqueCidades = () => {
-    const cidades = new Set<string>();
-    Object.values(groupedProducts).forEach(products => {
-      products.forEach((ap: any) => {
-        const city = ap.order?.address_json?.city;
-        if (city) cidades.add(city);
-      });
-    });
-    return Array.from(cidades).sort();
-  };
-
-  const getUniqueBairros = () => {
-    const bairros = new Set<string>();
-    Object.values(groupedProducts).forEach(products => {
-      products.forEach((ap: any) => {
-        const bairro = ap.order?.address_json?.neighborhood;
-        if (bairro) bairros.add(bairro);
-      });
-    });
-    return Array.from(bairros).sort();
   };
 
   const saveEditedRoute = async () => {
@@ -416,686 +358,660 @@ export default function AssemblyManagement() {
     }
   };
 
+  // Filter Logic
+  const filteredProducts = useMemo(() => {
+    const filtered: Record<string, any[]> = {};
+    Object.entries(groupedProducts).forEach(([lancamento, products]) => {
+      const filteredList = (products || []).filter((ap: any) => {
+        const addr = ap.order?.address_json || {};
+        const city = (addr.city || '').toLowerCase();
+        const bairro = (addr.neighborhood || '').toLowerCase();
+        const matchCidade = filterCidade ? city.includes(filterCidade.toLowerCase()) : true;
+        const matchBairro = filterBairro ? bairro.includes(filterBairro.toLowerCase()) : true;
+        return matchCidade && matchBairro;
+      });
+      if (filteredList.length > 0) {
+        filtered[lancamento] = filteredList;
+      }
+    });
+    return filtered;
+  }, [groupedProducts, filterCidade, filterBairro]);
+
+  const uniqueCidades = useMemo(() => {
+    const cidades = new Set<string>();
+    Object.values(groupedProducts).forEach(products => {
+      products.forEach((ap: any) => {
+        const city = ap.order?.address_json?.city;
+        if (city) cidades.add(city);
+      });
+    });
+    return Array.from(cidades).sort();
+  }, [groupedProducts]);
+
+  const uniqueBairros = useMemo(() => {
+    const bairros = new Set<string>();
+    Object.values(groupedProducts).forEach(products => {
+      products.forEach((ap: any) => {
+        const bairro = ap.order?.address_json?.neighborhood;
+        if (bairro) bairros.add(bairro);
+      });
+    });
+    return Array.from(bairros).sort();
+  }, [groupedProducts]);
+
+  const toggleGroup = (group: string) => {
+    setExpandedGroups(prev => ({ ...prev, [group]: !prev[group] }));
+  };
+
+  // Render Helpers
+  const StatusBadge = ({ status }: { status: string }) => {
+    const styles = {
+      pending: 'bg-yellow-100 text-yellow-800 border-yellow-200',
+      assigned: 'bg-blue-100 text-blue-800 border-blue-200',
+      in_progress: 'bg-orange-100 text-orange-800 border-orange-200',
+      completed: 'bg-green-100 text-green-800 border-green-200',
+      cancelled: 'bg-red-100 text-red-800 border-red-200',
+      default: 'bg-gray-100 text-gray-800 border-gray-200'
+    };
+    
+    const labels = {
+      pending: 'Pendente',
+      assigned: 'Atribuído',
+      in_progress: 'Em Andamento',
+      completed: 'Concluído',
+      cancelled: 'Cancelado'
+    };
+
+    const style = styles[status as keyof typeof styles] || styles.default;
+    const label = labels[status as keyof typeof labels] || status;
+
+    return (
+      <span className={`px-2.5 py-0.5 rounded-full text-xs font-medium border ${style}`}>
+        {label}
+      </span>
+    );
+  };
+
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+      <div className="flex items-center justify-center h-screen bg-gray-50">
+        <div className="flex flex-col items-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mb-4"></div>
+          <p className="text-gray-500 font-medium">Carregando dados de montagem...</p>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="space-y-6">
+    <div className="min-h-screen bg-gray-50 p-6 space-y-8">
       {/* Header */}
-      <div className="bg-white rounded-lg shadow p-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900 flex items-center">
-              <Package className="h-6 w-6 mr-2" />
-              Gestão de Montagem
-            </h1>
-            <p className="text-gray-600 mt-1">
-              Gerencie romaneios e atribua montadores para produtos que necessitam instalação
-            </p>
-          </div>
-          <button
-            onClick={() => setShowCreateModal(true)}
-            className="inline-flex items-center px-4 py-2 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
-            disabled={selectedProducts.length === 0}
-          >
-            <Plus className="h-4 w-4 mr-2" />
-            Criar Romaneio ({selectedProducts.length} produtos)
-          </button>
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
+            <Package className="h-7 w-7 text-blue-600" />
+            Gestão de Montagem
+          </h1>
+          <p className="text-gray-600 mt-1">
+            Gerencie romaneios, atribua montadores e acompanhe o status das montagens.
+          </p>
         </div>
+        <button
+          onClick={() => setShowCreateModal(true)}
+          disabled={selectedProducts.length === 0}
+          className="inline-flex items-center px-5 py-2.5 bg-blue-600 text-white font-medium rounded-xl hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm transition-all hover:shadow-md"
+        >
+          <Plus className="h-5 w-5 mr-2" />
+          Criar Romaneio ({selectedProducts.length})
+        </button>
       </div>
 
-      {/* Estatísticas */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <div className="bg-white rounded-lg shadow p-4">
-          <div className="flex items-center">
-            <div className="flex-shrink-0">
-              <Package className="h-8 w-8 text-blue-600" />
+      {/* Stats Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
+        {[
+          { 
+            label: 'Total Produtos', 
+            value: assemblyProducts.length, 
+            icon: Package, 
+            color: 'text-blue-600', 
+            bg: 'bg-blue-50' 
+          },
+          { 
+            label: 'Pendentes', 
+            value: assemblyProducts.filter(p => p.status === 'pending').length, 
+            icon: Clock, 
+            color: 'text-yellow-600', 
+            bg: 'bg-yellow-50' 
+          },
+          { 
+            label: 'Em Andamento', 
+            value: assemblyProducts.filter(p => p.status === 'in_progress').length, 
+            icon: UserIcon, 
+            color: 'text-orange-600', 
+            bg: 'bg-orange-50' 
+          },
+          { 
+            label: 'Concluídos', 
+            value: assemblyProducts.filter(p => p.status === 'completed').length, 
+            icon: CheckCircle, 
+            color: 'text-green-600', 
+            bg: 'bg-green-50' 
+          },
+        ].map((stat, idx) => (
+          <div key={idx} className="bg-white rounded-xl shadow-sm border border-gray-100 p-5 flex items-center transition-transform hover:scale-[1.01]">
+            <div className={`p-3 rounded-lg ${stat.bg} mr-4`}>
+              <stat.icon className={`h-6 w-6 ${stat.color}`} />
             </div>
-            <div className="ml-4">
-              <p className="text-sm font-medium text-gray-500">Total Produtos</p>
-              <p className="text-2xl font-semibold text-gray-900">{assemblyProducts.length}</p>
-            </div>
-          </div>
-        </div>
-        
-        <div className="bg-white rounded-lg shadow p-4">
-          <div className="flex items-center">
-            <div className="flex-shrink-0">
-              <Clock className="h-8 w-8 text-yellow-600" />
-            </div>
-            <div className="ml-4">
-              <p className="text-sm font-medium text-gray-500">Pendentes</p>
-              <p className="text-2xl font-semibold text-gray-900">
-                {assemblyProducts.filter(p => p.status === 'pending').length}
-              </p>
-            </div>
-          </div>
-        </div>
-        
-        <div className="bg-white rounded-lg shadow p-4">
-          <div className="flex items-center">
-            <div className="flex-shrink-0">
-              <UserIcon className="h-8 w-8 text-blue-600" />
-            </div>
-            <div className="ml-4">
-              <p className="text-sm font-medium text-gray-500">Em Andamento</p>
-              <p className="text-2xl font-semibold text-gray-900">
-                {assemblyProducts.filter(p => p.status === 'in_progress').length}
-              </p>
-            </div>
-          </div>
-        </div>
-        
-        <div className="bg-white rounded-lg shadow p-4">
-          <div className="flex items-center">
-            <div className="flex-shrink-0">
-              <CheckCircle className="h-8 w-8 text-green-600" />
-            </div>
-            <div className="ml-4">
-              <p className="text-sm font-medium text-gray-500">Concluídos</p>
-              <p className="text-2xl font-semibold text-gray-900">
-                {assemblyProducts.filter(p => p.status === 'completed').length}
-              </p>
+            <div>
+              <p className="text-sm font-medium text-gray-500">{stat.label}</p>
+              <p className="text-2xl font-bold text-gray-900">{stat.value}</p>
             </div>
           </div>
-        </div>
+        ))}
       </div>
 
-      {/* Romaneios Criados */}
-      <div className="bg-white rounded-lg shadow p-6">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-xl font-bold text-gray-900 flex items-center">
-            <Package className="h-5 w-5 mr-2" />
-            Romaneios Criados
-          </h2>
-          <div className="text-sm text-gray-600">{assemblyRoutes.length} romaneio(s)</div>
-        </div>
-        {assemblyRoutes.length === 0 ? (
-          <div className="px-6 py-8 text-center text-gray-500">
-            <Package className="h-12 w-12 mx-auto mb-4 text-gray-300" />
-            <p>Nenhum romaneio criado</p>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {assemblyRoutes.map(route => {
-              const productsInRoute = assemblyProducts.filter(p => p.assembly_route_id === route.id);
-              const total = productsInRoute.length;
-              const pendingCount = productsInRoute.filter(p => p.status === 'pending').length;
-              const inProgress = productsInRoute.filter(p => p.status === 'in_progress').length;
-              const completed = productsInRoute.filter(p => p.status === 'completed').length;
-              const statusClass = getStatusColor(route.status);
-              const statusText = getStatusLabel(route.status);
-              return (
-                <div key={route.id} className="bg-white rounded-lg border hover:shadow transition p-6">
-                  <div className="flex items-start justify-between mb-3">
-                    <div className="flex items-center">
-                      <Package className="h-5 w-5 text-blue-600 mr-2" />
-                      <h3 className="text-lg font-semibold text-gray-900">{route.name}</h3>
-                    </div>
-                    <span className={`px-2 py-1 rounded-full text-xs font-medium ${statusClass}`}>{statusText}</span>
-                  </div>
-                  <div className="text-sm text-gray-700 space-y-1 mb-4">
-                    <div>Produtos: {total} • Pendentes: {pendingCount} • Em Andamento: {inProgress} • Concluídos: {completed}</div>
-                    <div>Criado em: {new Date(route.created_at).toLocaleDateString('pt-BR')}</div>
-                    {route.deadline && (
-                      <div>Prazo: {new Date(route.deadline).toLocaleDateString('pt-BR')}</div>
-                    )}
-                    {route.observations && (
-                      <div>Obs: {route.observations}</div>
-                    )}
-                  </div>
-                  <div className="grid grid-cols-1">
-                    <button
-                      onClick={() => {
-                        setRouteDetails({ route, products: productsInRoute });
-                        setShowRouteDetailsModal(true);
-                      }}
-                      className="w-full bg-blue-600 text-white py-2 px-4 rounded-lg font-medium hover:bg-blue-700 transition-colors flex items-center justify-center"
+      {/* Main Content Grid */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+        
+        {/* Left Column: Products List (60% width on large screens) */}
+        <div className="lg:col-span-7 space-y-6">
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 flex flex-col h-[800px]">
+            {/* Filter Header */}
+            <div className="p-5 border-b border-gray-100 bg-gray-50/50 rounded-t-xl space-y-4">
+              <div className="flex items-center justify-between">
+                <h2 className="text-lg font-bold text-gray-900 flex items-center gap-2">
+                  <Package className="h-5 w-5 text-gray-500" />
+                  Produtos para Montagem
+                </h2>
+                <span className="text-sm font-medium px-2.5 py-1 bg-blue-100 text-blue-700 rounded-full">
+                  {Object.values(filteredProducts).reduce((acc, curr) => acc + curr.length, 0)} itens
+                </span>
+              </div>
+              
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div className="relative">
+                  <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+                  <select
+                    value={filterCidade}
+                    onChange={(e) => setFilterCidade(e.target.value)}
+                    className="w-full pl-9 pr-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white"
+                  >
+                    <option value="">Todas as Cidades</option>
+                    {uniqueCidades.map(c => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                </div>
+                <div className="relative">
+                  <Filter className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+                  <select
+                    value={filterBairro}
+                    onChange={(e) => setFilterBairro(e.target.value)}
+                    className="w-full pl-9 pr-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white"
+                  >
+                    <option value="">Todos os Bairros</option>
+                    {uniqueBairros.map(b => <option key={b} value={b}>{b}</option>)}
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            {/* Products List */}
+            <div className="flex-1 overflow-y-auto p-2 space-y-2 bg-gray-50">
+              {Object.keys(filteredProducts).length === 0 ? (
+                <div className="flex flex-col items-center justify-center h-full text-gray-400">
+                  <Package className="h-16 w-16 mb-4 opacity-20" />
+                  <p className="font-medium">Nenhum produto encontrado</p>
+                  <p className="text-sm opacity-70">Ajuste os filtros ou aguarde novos pedidos</p>
+                </div>
+              ) : (
+                Object.entries(filteredProducts).map(([lancamento, products]) => (
+                  <div key={lancamento} className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+                    {/* Group Header */}
+                    <div 
+                      className="px-4 py-3 bg-white border-b border-gray-100 flex items-center justify-between cursor-pointer hover:bg-gray-50 transition-colors"
+                      onClick={() => toggleGroup(lancamento)}
                     >
-                      Ver detalhes
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
-
-      {/* Lista de Produtos para Montagem por Número de Lançamento */}
-      <div className="bg-white rounded-lg shadow">
-        <div className="px-6 py-4 border-b border-gray-200">
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold text-gray-900">Produtos para Montagem por Número de Lançamento</h2>
-            <div className="text-sm text-gray-500">
-              {selectedProducts.length} produtos selecionados
-            </div>
-          </div>
-        </div>
-        
-        {/* Filtros */}
-        <div className="px-6 py-4 border-b border-gray-200 bg-gray-50">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Filtrar por Cidade
-              </label>
-              <select
-                value={filterCidade}
-                onChange={(e) => setFilterCidade(e.target.value)}
-                className="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                <option value="">Todas as Cidades</option>
-                {getUniqueCidades().map(cidade => (
-                  <option key={cidade} value={cidade}>{cidade}</option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Filtrar por Bairro
-              </label>
-              <select
-                value={filterBairro}
-                onChange={(e) => setFilterBairro(e.target.value)}
-                className="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                <option value="">Todos os Bairros</option>
-                {getUniqueBairros().map(bairro => (
-                  <option key={bairro} value={bairro}>{bairro}</option>
-                ))}
-              </select>
-            </div>
-          </div>
-        </div>
-        
-        {/* Produtos Agrupados por Lançamento */}
-        <div className="max-h-96 overflow-y-auto">
-          {Object.keys(getFilteredProducts()).length === 0 ? (
-            <div className="px-6 py-8 text-center text-gray-500">
-              <Package className="h-12 w-12 mx-auto mb-4 text-gray-300" />
-              <p>Nenhum produto disponível para montagem</p>
-              {filterCidade || filterBairro && (
-                <p className="text-sm mt-2">Tente ajustar os filtros</p>
-              )}
-            </div>
-          ) : (
-            Object.entries(getFilteredProducts()).map(([lancamento, products]) => (
-              <div key={lancamento} className="border-b border-gray-200">
-                <div className="px-6 py-3 bg-gray-50 border-b border-gray-200">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center">
-                      <input
-                        type="checkbox"
-                        checked={selectedLancamentos.includes(lancamento)}
-                        onChange={(e) => handleLancamentoSelection(lancamento, e.target.checked)}
-                        className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded mr-3"
-                      />
-                      <h3 className="text-sm font-semibold text-gray-900">
-                        Número de Lançamento: {lancamento}
-                      </h3>
-                      <span className="ml-2 text-xs text-gray-500">
-                        ({products.length} produtos)
-                      </span>
-                    </div>
-                  </div>
-                </div>
-                
-                <div className="divide-y divide-gray-100">
-                  {products.map((ap: any) => {
-                    const order = ap.order || {};
-                    const addr = order.address_json || {};
-                    return (
-                      <div key={ap.id} className="px-6 py-3 hover:bg-gray-50">
-                        <div className="flex items-start space-x-3">
+                      <div className="flex items-center gap-3">
+                        <div 
+                          className="p-1 hover:bg-gray-200 rounded"
+                          onClick={(e) => e.stopPropagation()}
+                        >
                           <input
                             type="checkbox"
-                            checked={selectedProducts.includes(ap.id)}
-                            onChange={(e) => handleProductSelection(ap.id, e.target.checked)}
-                            className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded mt-0.5"
+                            checked={selectedLancamentos.includes(lancamento)}
+                            onChange={(e) => handleLancamentoSelection(lancamento, e.target.checked)}
+                            className="h-4 w-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
                           />
-                          <div className="flex-1 min-w-0">
-                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 text-sm">
-                              {/* Produto e Cliente */}
-                              <div className="space-y-1">
-                                <div className="flex items-center space-x-2">
-                                  <h4 className="text-sm font-medium text-gray-900">
-                                    {ap.product_name || 'Produto para montagem'}
-                                  </h4>
-                                  {ap.product_sku && (
-                                    <span className="text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded">
-                                      {ap.product_sku}
-                                    </span>
-                                  )}
-                                </div>
-                                <div className="flex items-center text-xs text-gray-600">
-                                  <UserIcon className="h-3 w-3 mr-1" />
-                                  {ap.customer_name}
-                                </div>
-                              </div>
-                              
-                              {/* Endereço */}
-                              <div className="space-y-1">
-                                <div className="flex items-center text-xs text-gray-600">
-                                  <MapPin className="h-3 w-3 mr-1" />
-                                  {addr.city} - {addr.neighborhood}
-                                </div>
-                                {addr && (
-                                  <div className="text-xs text-gray-500">
-                                    {addr.street}, {addr.number} - {addr.neighborhood}
-                                  </div>
-                                )}
-                              </div>
-                              
-                              {/* Datas e Motorista */}
-                              <div className="space-y-1 text-xs text-gray-600">
-                                {order.data_venda && (
-                                  <div>
-                                    <strong>Venda:</strong> {new Date(order.data_venda).toLocaleDateString('pt-BR')}
-                                  </div>
-                                )}
-                                { (deliveryInfo[ap.order_id]?.date || order.previsao_entrega) && (
-                                  <div>
-                                    <strong>Entrega:</strong> {new Date(deliveryInfo[ap.order_id]?.date || order.previsao_entrega).toLocaleDateString('pt-BR')}
-                                  </div>
-                                )}
-                                { (deliveryInfo[ap.order_id]?.driver) && (
-                                  <div>
-                                    <strong>Motorista:</strong> {deliveryInfo[ap.order_id]?.driver}
-                                  </div>
-                                )}
-                              </div>
-                               
-                              {/* Observações */}
-                              <div className="space-y-1">
-                                {((order as any).observacoes_publicas || (order as any).raw_json?.observacoes) && (
-                                  <div className="text-xs text-gray-600 bg-yellow-50 p-2 rounded border border-yellow-200">
-                                    <strong>Obs:</strong> {(order as any).observacoes_publicas || (order as any).raw_json?.observacoes}
-                                  </div>
-                                )}
-                                {order.observacoes_publicas && (
-                                  <div className="text-xs text-gray-600 bg-yellow-50 p-2 rounded border border-yellow-200">
-                                    <strong>Obs Públicas:</strong> {order.observacoes_publicas}
-                                  </div>
-                                )}
-                                {order.observacoes_internas && (
-                                  <div className="text-xs text-gray-600 bg-blue-50 p-2 rounded border border-blue-200">
-                                    <strong>Obs Internas:</strong> {order.observacoes_internas}
-                                  </div>
-                                )}
-                              </div>
-                            </div>
-                          </div>
-                          <div className="flex-shrink-0">
-                            <button
-                              onClick={() => { setDetailsItem(ap); setShowDetailsModal(true); }}
-                              className="text-blue-600 hover:text-blue-800 text-xs font-medium"
-                            >
-                              Ver detalhes
-                            </button>
-                          </div>
+                        </div>
+                        <div>
+                          <p className="text-sm font-bold text-gray-900">Lançamento: {lancamento}</p>
+                          <p className="text-xs text-gray-500">{products.length} produtos</p>
                         </div>
                       </div>
+                      <button className="text-gray-400">
+                        {expandedGroups[lancamento] ? <ChevronUp className="h-5 w-5" /> : <ChevronDown className="h-5 w-5" />}
+                      </button>
+                    </div>
+
+                    {/* Group Items */}
+                    {expandedGroups[lancamento] && (
+                      <div className="divide-y divide-gray-100">
+                        {products.map((ap: any) => {
+                          const order = ap.order || {};
+                          const addr = order.address_json || {};
+                          return (
+                            <div key={ap.id} className="p-4 hover:bg-blue-50/30 transition-colors flex gap-3 group">
+                              <div className="pt-1">
+                                <input
+                                  type="checkbox"
+                                  checked={selectedProducts.includes(ap.id)}
+                                  onChange={(e) => handleProductSelection(ap.id, e.target.checked)}
+                                  className="h-4 w-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
+                                />
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <div className="flex justify-between items-start">
+                                  <div>
+                                    <h4 className="text-sm font-semibold text-gray-900 truncate pr-2">
+                                      {ap.product_name}
+                                    </h4>
+                                    <div className="flex items-center gap-1 text-xs text-gray-500 mt-0.5">
+                                      <UserIcon className="h-3 w-3" />
+                                      <span className="truncate max-w-[150px]">{ap.customer_name}</span>
+                                    </div>
+                                  </div>
+                                  <button 
+                                    onClick={() => { setDetailsItem(ap); setShowDetailsModal(true); }}
+                                    className="text-gray-400 hover:text-blue-600 opacity-0 group-hover:opacity-100 transition-opacity"
+                                  >
+                                    <FileText className="h-4 w-4" />
+                                  </button>
+                                </div>
+
+                                <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-gray-600 bg-gray-50 p-2 rounded border border-gray-100">
+                                  <div className="flex items-center gap-1">
+                                    <MapPin className="h-3 w-3 text-gray-400" />
+                                    <span className="truncate">{addr.city} - {addr.neighborhood}</span>
+                                  </div>
+                                  <div className="flex items-center gap-1">
+                                    <Calendar className="h-3 w-3 text-gray-400" />
+                                    <span>
+                                      Entrega: {(deliveryInfo[ap.order_id]?.date || order.previsao_entrega) 
+                                        ? new Date(deliveryInfo[ap.order_id]?.date || order.previsao_entrega).toLocaleDateString('pt-BR') 
+                                        : '—'}
+                                    </span>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Right Column: Assembly Routes (40% width) */}
+        <div className="lg:col-span-5 space-y-6">
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 flex flex-col h-[800px]">
+             <div className="p-5 border-b border-gray-100 rounded-t-xl flex justify-between items-center bg-gray-50/50">
+                <h2 className="text-lg font-bold text-gray-900 flex items-center gap-2">
+                  <Truck className="h-5 w-5 text-gray-500" />
+                  Romaneios Criados
+                </h2>
+                <span className="text-sm font-medium px-2.5 py-1 bg-gray-100 text-gray-700 rounded-full">
+                  {assemblyRoutes.length}
+                </span>
+             </div>
+
+             <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-50">
+                {assemblyRoutes.length === 0 ? (
+                   <div className="flex flex-col items-center justify-center h-full text-gray-400">
+                      <Truck className="h-16 w-16 mb-4 opacity-20" />
+                      <p className="font-medium">Nenhum romaneio criado</p>
+                   </div>
+                ) : (
+                  assemblyRoutes.map(route => {
+                    const productsInRoute = assemblyProducts.filter(p => p.assembly_route_id === route.id);
+                    const pendingCount = productsInRoute.filter(p => p.status === 'pending').length;
+                    
+                    return (
+                      <div key={route.id} className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 hover:shadow-md transition-shadow group">
+                         <div className="flex justify-between items-start mb-3">
+                            <div>
+                               <h3 className="font-bold text-gray-900 group-hover:text-blue-600 transition-colors">
+                                 {route.name}
+                               </h3>
+                               <p className="text-xs text-gray-500 mt-1">
+                                 Criado em {new Date(route.created_at).toLocaleDateString('pt-BR')}
+                               </p>
+                            </div>
+                            <StatusBadge status={route.status} />
+                         </div>
+                         
+                         <div className="flex items-center gap-2 mb-4 text-sm text-gray-600 bg-gray-50 p-2 rounded">
+                            <Package className="h-4 w-4" />
+                            <span>{productsInRoute.length} produtos</span>
+                            <span className="text-gray-300">|</span>
+                            <span className={pendingCount > 0 ? 'text-yellow-600 font-medium' : 'text-green-600'}>
+                              {pendingCount} pendentes
+                            </span>
+                         </div>
+
+                         <div className="grid grid-cols-2 gap-2">
+                           <button
+                             onClick={() => {
+                               setRouteDetails({ route, products: productsInRoute });
+                               setShowRouteDetailsModal(true);
+                             }}
+                             className="w-full py-2 px-3 bg-white border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors"
+                           >
+                             Detalhes
+                           </button>
+                           <button
+                             onClick={() => generateRoutePdf(route)}
+                             className="w-full py-2 px-3 bg-blue-50 border border-blue-100 text-blue-700 text-sm font-medium rounded-lg hover:bg-blue-100 transition-colors flex items-center justify-center gap-2"
+                           >
+                             <FileText className="h-4 w-4" />
+                             PDF
+                           </button>
+                         </div>
+                      </div>
                     );
-                  })}
-                </div>
-              </div>
-            ))
-          )}
+                  })
+                )}
+             </div>
+          </div>
         </div>
       </div>
 
-      {/* Modal de Criação de Romaneio */}
+      {/* --- MODALS --- */}
+
+      {/* Create Route Modal */}
       {showCreateModal && (
-        <div className="fixed inset-0 bg-gray-500 bg-opacity-75 flex items-center justify-center p-4 z-[40]">
-          <div className="bg-white rounded-lg max-w-2xl w-full max-h-[90vh] overflow-y-auto">
-            <div className="px-6 py-4 border-b border-gray-200">
-              <div className="flex items-center justify-between">
-                <h3 className="text-lg font-semibold text-gray-900">
-                  Criar Romaneio de Montagem ({selectedProducts.length} produtos selecionados)
-                </h3>
-                <button
-                  onClick={() => setShowCreateModal(false)}
-                  className="text-gray-400 hover:text-gray-500"
-                >
-                  <span className="sr-only">Fechar</span>
-                  <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
-              </div>
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-lg overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+            <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
+              <h3 className="text-lg font-bold text-gray-900">Criar Romaneio</h3>
+              <button onClick={() => setShowCreateModal(false)} className="text-gray-400 hover:text-gray-600">
+                <X className="h-5 w-5" />
+              </button>
             </div>
             
-            <div className="px-6 py-4 space-y-4">
+            <div className="p-6 space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Nome do Romaneio *
-                </label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Nome do Romaneio</label>
                 <input
                   type="text"
                   value={newRouteName}
                   onChange={(e) => setNewRouteName(e.target.value)}
-                  className="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  placeholder="Ex: Romaneio Montagem - Semana 1"
+                  placeholder="Ex: Montagem Zona Sul - 12/12"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 />
               </div>
               
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Prazo de Conclusão
-                </label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Prazo de Conclusão</label>
                 <input
                   type="date"
                   value={newRouteDeadline}
                   onChange={(e) => setNewRouteDeadline(e.target.value)}
-                  className="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 />
               </div>
               
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Observações
-                </label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Observações</label>
                 <textarea
                   value={newRouteObservations}
                   onChange={(e) => setNewRouteObservations(e.target.value)}
                   rows={3}
-                  className="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  placeholder="Observações sobre o romaneio..."
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 />
               </div>
-              
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Selecionar Produtos por Número de Lançamento *
-                </label>
-                <div className="max-h-60 overflow-y-auto border border-gray-300 rounded-md">
-                  {Object.keys(groupedProducts).length === 0 ? (
-                    <div className="p-4 text-center text-gray-500">
-                      <AlertCircle className="h-8 w-8 mx-auto mb-2" />
-                      <p>Nenhum produto disponível para montagem</p>
-                    </div>
-                  ) : (
-                    Object.entries(groupedProducts).map(([lancamento, products]) => (
-                      <div key={lancamento} className="border-b border-gray-200 last:border-b-0">
-                        <div className="p-3 bg-gray-50 border-b border-gray-100">
-                          <div className="flex items-center">
-                            <input
-                              type="checkbox"
-                              checked={selectedLancamentos.includes(lancamento)}
-                              onChange={(e) => handleLancamentoSelection(lancamento, e.target.checked)}
-                              className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded mr-2"
-                            />
-                            <h4 className="text-sm font-semibold text-gray-900">
-                              Número de Lançamento: {lancamento}
-                            </h4>
-                            <span className="ml-2 text-xs text-gray-500">
-                              ({products.length} produtos)
-                            </span>
-                          </div>
-                        </div>
-                        <div className="divide-y divide-gray-100">
-                          {products.map((ap: any) => {
-                            const order = ap.order || {};
-                            const addr = order.address_json || {};
-                            return (
-                              <label key={ap.id} className="flex items-start p-3 hover:bg-gray-50">
-                                <input
-                                  type="checkbox"
-                                  checked={selectedProducts.includes(ap.id)}
-                                  onChange={(e) => {
-                                    if (e.target.checked) {
-                                      setSelectedProducts([...selectedProducts, ap.id]);
-                                    } else {
-                                      setSelectedProducts(selectedProducts.filter(id => id !== ap.id));
-                                    }
-                                  }}
-                                  className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded mt-0.5"
-                                />
-                                <div className="ml-3 flex-1">
-                                  <div className="text-sm font-medium text-gray-900">
-                                    {ap.product_name || 'Produto para montagem'}
-                                  </div>
-                                  <div className="text-sm text-gray-500">
-                                    {ap.customer_name} - {addr.city} - {addr.neighborhood}
-                                  </div>
-                                  <div className="mt-1 text-xs text-gray-600 space-y-1">
-                                    {order.sale_date && (
-                                      <div><strong>Venda:</strong> {new Date(order.sale_date).toLocaleDateString('pt-BR')}</div>
-                                    )}
-                                    {order.delivery_date && (
-                                      <div><strong>Entrega:</strong> {new Date(order.delivery_date).toLocaleDateString('pt-BR')}</div>
-                                    )}
-                                    {order.driver_name && (
-                                      <div><strong>Motorista:</strong> {order.driver_name}</div>
-                                    )}
-                                    {order.observations && (
-                                      <div><strong>Obs:</strong> {order.observations}</div>
-                                    )}
-                                    {order.observacoes_internas && (
-                                      <div><strong>Obs Internas:</strong> {order.observacoes_internas}</div>
-                                    )}
-                                  </div>
-                                </div>
-                              </label>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    ))
-                  )}
-                </div>
+
+              <div className="bg-blue-50 p-3 rounded-lg flex items-center gap-3">
+                 <Package className="h-5 w-5 text-blue-600" />
+                 <span className="text-sm text-blue-800 font-medium">
+                   {selectedProducts.length} produtos selecionados
+                 </span>
               </div>
             </div>
-            
-            <div className="px-6 py-4 border-t border-gray-200 flex justify-end space-x-3">
+
+            <div className="px-6 py-4 bg-gray-50 border-t border-gray-100 flex justify-end gap-3">
               <button
                 onClick={() => setShowCreateModal(false)}
-                className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-md hover:bg-gray-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500"
+                className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50"
               >
                 Cancelar
               </button>
               <button
                 onClick={createAssemblyRoute}
-                className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 shadow-sm"
               >
-                Criar Romaneio
+                Confirmar Criação
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Modal de Detalhes do Pedido */}
+      {/* Product Details Modal */}
       {showDetailsModal && detailsItem && (
-        <div className="fixed inset-0 bg-gray-500 bg-opacity-75 flex items-center justify-center p-4 z-[90]">
-          <div className="bg-white rounded-lg max-w-3xl w-full max-h-[90vh] overflow-y-auto">
-            <div className="px-6 py-4 border-b border-gray-200">
-              <div className="flex items-center justify-between">
-                <h3 className="text-lg font-semibold text-gray-900">Detalhes da Venda</h3>
-                <button onClick={() => { setShowDetailsModal(false); setDetailsItem(null); }} className="text-gray-400 hover:text-gray-500">
-                  <span className="sr-only">Fechar</span>
-                  <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
-              </div>
-            </div>
-            <div className="px-6 py-4 space-y-4">
-              {(() => {
-                const ap = detailsItem;
-                const order = ap.order || {};
-                const addr = order.address_json || {};
-                return (
-                  <>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-                      <div>
-                        <h4 className="font-medium text-gray-900 mb-1">Produto</h4>
-                        <p className="text-gray-600">{ap.product_name} {ap.product_sku ? `(${ap.product_sku})` : ''}</p>
-                      </div>
-                      <div>
-                        <h4 className="font-medium text-gray-900 mb-1">Cliente</h4>
-                        <p className="text-gray-600">{ap.customer_name}</p>
-                      </div>
-                      <div>
-                        <h4 className="font-medium text-gray-900 mb-1">Nº Lançamento (ERP)</h4>
-                        <p className="text-gray-600">{order.order_id_erp}</p>
-                      </div>
-                      <div>
-                        <h4 className="font-medium text-gray-900 mb-1">Data da Venda</h4>
-                        <p className="text-gray-600">{order.data_venda ? new Date(order.data_venda).toLocaleDateString('pt-BR') : '—'}</p>
-                      </div>
-                      <div>
-                        <h4 className="font-medium text-gray-900 mb-1">Data da Entrega</h4>
-                        <p className="text-gray-600">{(deliveryInfo[ap.order_id]?.date || order.previsao_entrega) ? new Date(deliveryInfo[ap.order_id]?.date || order.previsao_entrega).toLocaleDateString('pt-BR') : '—'}</p>
-                      </div>
-                      <div>
-                        <h4 className="font-medium text-gray-900 mb-1">Motorista que Entregou</h4>
-                        <p className="text-gray-600">{deliveryInfo[ap.order_id]?.driver ?? '—'}</p>
-                      </div>
-                    </div>
-                    <div>
-                      <h4 className="font-medium text-gray-900 mb-1">Endereço Completo</h4>
-                      <p className="text-gray-600">{addr.street} {addr.number ? `, ${addr.number}` : ''} - {addr.neighborhood} - {addr.city}</p>
-                    </div>
-                    {order.observations && (
-                      <div>
-                        <h4 className="font-medium text-gray-900 mb-1">Observações</h4>
-                        <p className="text-gray-600 bg-yellow-50 p-2 rounded border border-yellow-200">{order.observations}</p>
-                      </div>
-                    )}
-                    {order.observacoes_publicas && (
-                      <div>
-                        <h4 className="font-medium text-gray-900 mb-1">Observações Públicas</h4>
-                        <p className="text-gray-600 bg-yellow-50 p-2 rounded border border-yellow-200">{order.observacoes_publicas}</p>
-                      </div>
-                    )}
-                    {order.observacoes_internas && (
-                      <div>
-                        <h4 className="font-medium text-gray-900 mb-1">Observações Internas</h4>
-                        <p className="text-gray-600 bg-blue-50 p-2 rounded border border-blue-200">{order.observacoes_internas}</p>
-                      </div>
-                    )}
-                  </>
-                );
-              })()}
-            </div>
-            <div className="px-6 py-4 border-t border-gray-200 flex justify-end">
-              <button onClick={() => { setShowDetailsModal(false); setDetailsItem(null); }} className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-md hover:bg-gray-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500">Fechar</button>
-            </div>
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+             <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
+               <h3 className="text-lg font-bold text-gray-900">Detalhes do Produto</h3>
+               <button onClick={() => { setShowDetailsModal(false); setDetailsItem(null); }} className="text-gray-400 hover:text-gray-600">
+                 <X className="h-5 w-5" />
+               </button>
+             </div>
+             
+             <div className="p-6 overflow-y-auto max-h-[70vh]">
+               {(() => {
+                 const ap = detailsItem;
+                 const order = ap.order || {};
+                 const addr = order.address_json || {};
+                 
+                 return (
+                   <div className="space-y-6">
+                     <div className="flex items-center gap-4 bg-gray-50 p-4 rounded-xl border border-gray-100">
+                        <div className="p-3 bg-white rounded-lg border border-gray-200 shadow-sm">
+                           <Package className="h-8 w-8 text-blue-600" />
+                        </div>
+                        <div>
+                           <h4 className="text-lg font-bold text-gray-900">{ap.product_name}</h4>
+                           <p className="text-sm text-gray-500">SKU: {ap.product_sku || '—'}</p>
+                        </div>
+                     </div>
+
+                     <div className="grid grid-cols-2 gap-6">
+                        <div className="space-y-1">
+                           <p className="text-xs font-medium text-gray-500 uppercase">Cliente</p>
+                           <p className="text-sm font-medium text-gray-900">{ap.customer_name}</p>
+                        </div>
+                        <div className="space-y-1">
+                           <p className="text-xs font-medium text-gray-500 uppercase">Lançamento ERP</p>
+                           <p className="text-sm font-medium text-gray-900">{order.order_id_erp || '—'}</p>
+                        </div>
+                        <div className="space-y-1">
+                           <p className="text-xs font-medium text-gray-500 uppercase">Data Venda</p>
+                           <p className="text-sm font-medium text-gray-900">{order.data_venda ? new Date(order.data_venda).toLocaleDateString('pt-BR') : '—'}</p>
+                        </div>
+                        <div className="space-y-1">
+                           <p className="text-xs font-medium text-gray-500 uppercase">Data Entrega</p>
+                           <p className="text-sm font-medium text-gray-900">
+                             {(deliveryInfo[ap.order_id]?.date || order.previsao_entrega) 
+                               ? new Date(deliveryInfo[ap.order_id]?.date || order.previsao_entrega).toLocaleDateString('pt-BR') 
+                               : '—'}
+                           </p>
+                        </div>
+                     </div>
+
+                     <div className="space-y-2">
+                        <p className="text-xs font-medium text-gray-500 uppercase">Endereço de Montagem</p>
+                        <div className="bg-gray-50 p-3 rounded-lg border border-gray-100 text-sm text-gray-700 flex items-start gap-2">
+                           <MapPin className="h-4 w-4 text-gray-400 mt-0.5" />
+                           {addr.street} {addr.number ? `, ${addr.number}` : ''} - {addr.neighborhood} - {addr.city}
+                        </div>
+                     </div>
+
+                     {order.observations && (
+                       <div className="space-y-2">
+                          <p className="text-xs font-medium text-gray-500 uppercase">Observações do Pedido</p>
+                          <div className="bg-yellow-50 p-3 rounded-lg border border-yellow-100 text-sm text-yellow-800">
+                             {order.observations}
+                          </div>
+                       </div>
+                     )}
+                   </div>
+                 );
+               })()}
+             </div>
           </div>
         </div>
       )}
 
-      {/* Modal Editar Romaneio */}
+      {/* Edit Route Modal */}
       {showRouteEditModal && routeBeingEdited && (
-        <div className="fixed inset-0 bg-gray-500 bg-opacity-75 flex items-center justify-center p-4 z-[80]">
-          <div className="bg-white rounded-lg max-w-xl w-full">
-            <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
-              <h3 className="text-lg font-semibold text-gray-900">Editar Romaneio</h3>
-              <button onClick={() => setShowRouteEditModal(false)} className="text-gray-400 hover:text-gray-500">
-                <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-[60]">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-lg overflow-hidden">
+            <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
+              <h3 className="text-lg font-bold text-gray-900">Editar Romaneio</h3>
+              <button onClick={() => setShowRouteEditModal(false)} className="text-gray-400 hover:text-gray-600">
+                <X className="h-5 w-5" />
               </button>
             </div>
-            <div className="px-6 py-4 space-y-4">
+            <div className="p-6 space-y-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Nome</label>
-                <input value={editRouteName} onChange={(e) => setEditRouteName(e.target.value)} className="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                <input value={editRouteName} onChange={(e) => setEditRouteName(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500" />
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Prazo</label>
-                <input type="date" value={editRouteDeadline} onChange={(e) => setEditRouteDeadline(e.target.value)} className="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                <input type="date" value={editRouteDeadline} onChange={(e) => setEditRouteDeadline(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500" />
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Observações</label>
-                <textarea value={editRouteObservations} onChange={(e) => setEditRouteObservations(e.target.value)} rows={3} className="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                <textarea value={editRouteObservations} onChange={(e) => setEditRouteObservations(e.target.value)} rows={3} className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500" />
               </div>
             </div>
-            <div className="px-6 py-4 border-t border-gray-200 flex justify-end space-x-3">
-              <button onClick={() => setShowRouteEditModal(false)} className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-md hover:bg-gray-200">Cancelar</button>
-              <button onClick={saveEditedRoute} className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700">Salvar</button>
+            <div className="px-6 py-4 bg-gray-50 border-t border-gray-100 flex justify-end gap-3">
+              <button onClick={() => setShowRouteEditModal(false)} className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50">Cancelar</button>
+              <button onClick={saveEditedRoute} className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700">Salvar Alterações</button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Modal Gerenciar Produtos do Romaneio */}
+      {/* Manage Route Products Modal */}
       {showRouteManageModal && routeBeingManaged && (
-        <div className="fixed inset-0 bg-gray-500 bg-opacity-75 flex items-center justify-center p-4 z-[85]">
-          <div className="bg-white rounded-lg max-w-4xl w-full max-h-[90vh] overflow-y-auto">
-            <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
-              <h3 className="text-lg font-semibold text-gray-900">Gerenciar Produtos — {routeBeingManaged.name}</h3>
-              <button onClick={() => setShowRouteManageModal(false)} className="text-gray-400 hover:text-gray-500">
-                <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-[65]">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-5xl h-[80vh] flex flex-col">
+            <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50 rounded-t-xl">
+              <h3 className="text-lg font-bold text-gray-900">Gerenciar Produtos — {routeBeingManaged.name}</h3>
+              <button onClick={() => setShowRouteManageModal(false)} className="text-gray-400 hover:text-gray-600">
+                <X className="h-5 w-5" />
               </button>
             </div>
-            <div className="px-6 py-4 grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div>
-                <h4 className="text-sm font-semibold text-gray-900 mb-2">Produtos no Romaneio</h4>
-                <div className="border rounded-md divide-y divide-gray-100">
-                  {assemblyProducts.filter(p => p.assembly_route_id === routeBeingManaged.id).map(p => (
-                    <label key={p.id} className="flex items-start p-3">
-                      <input type="checkbox" checked={selectedToRemove.includes(p.id)} onChange={(e) => {
-                        if (e.target.checked) setSelectedToRemove([...selectedToRemove, p.id]); else setSelectedToRemove(selectedToRemove.filter(id => id !== p.id));
-                      }} className="h-4 w-4 text-red-600 border-gray-300 rounded mt-0.5" />
-                      <div className="ml-3">
-                        <div className="text-sm font-medium text-gray-900">{p.product_name}</div>
-                        <div className="text-xs text-gray-600">{p.order?.customer_name} — {p.order?.address_json?.city}</div>
-                      </div>
-                    </label>
-                  ))}
-                  {assemblyProducts.filter(p => p.assembly_route_id === routeBeingManaged.id).length === 0 && (
-                    <div className="p-3 text-sm text-gray-500">Nenhum produto no romaneio</div>
-                  )}
+            
+            <div className="flex-1 overflow-hidden p-6 grid grid-cols-2 gap-6">
+              {/* Left: Products in Route */}
+              <div className="flex flex-col border border-gray-200 rounded-xl overflow-hidden">
+                <div className="bg-gray-50 px-4 py-3 border-b border-gray-200 font-semibold text-gray-700 flex justify-between items-center">
+                   <span>No Romaneio</span>
+                   <span className="text-xs bg-gray-200 px-2 py-1 rounded-full">{assemblyProducts.filter(p => p.assembly_route_id === routeBeingManaged.id).length}</span>
+                </div>
+                <div className="flex-1 overflow-y-auto p-2 space-y-2">
+                   {assemblyProducts.filter(p => p.assembly_route_id === routeBeingManaged.id).map(p => (
+                      <label key={p.id} className="flex items-start p-3 bg-white border border-gray-100 rounded-lg hover:bg-red-50 cursor-pointer transition-colors group">
+                        <input type="checkbox" checked={selectedToRemove.includes(p.id)} onChange={(e) => {
+                          if (e.target.checked) setSelectedToRemove([...selectedToRemove, p.id]); else setSelectedToRemove(selectedToRemove.filter(id => id !== p.id));
+                        }} className="h-4 w-4 text-red-600 border-gray-300 rounded mt-0.5 focus:ring-red-500" />
+                        <div className="ml-3">
+                          <div className="text-sm font-medium text-gray-900 group-hover:text-red-700">{p.product_name}</div>
+                          <div className="text-xs text-gray-500">{p.order?.customer_name} — {p.order?.address_json?.city}</div>
+                        </div>
+                      </label>
+                   ))}
+                   {assemblyProducts.filter(p => p.assembly_route_id === routeBeingManaged.id).length === 0 && (
+                     <div className="text-center p-8 text-gray-400">Nenhum produto</div>
+                   )}
+                </div>
+                <div className="p-3 bg-gray-50 border-t border-gray-200">
+                   <button 
+                     onClick={removeSelectedProductsFromRoute} 
+                     disabled={selectedToRemove.length === 0}
+                     className="w-full py-2 bg-red-600 text-white rounded-lg text-sm font-medium disabled:opacity-50 hover:bg-red-700 transition-colors"
+                   >
+                     Remover Selecionados ({selectedToRemove.length})
+                   </button>
                 </div>
               </div>
-              <div>
-                <h4 className="text-sm font-semibold text-gray-900 mb-2">Adicionar Produtos (Pendentes)</h4>
-                <div className="border rounded-md divide-y divide-gray-100">
-                  {assemblyProducts.filter(p => !p.assembly_route_id && p.status === 'pending').map(p => (
-                    <label key={p.id} className="flex items-start p-3">
-                      <input type="checkbox" checked={selectedToAdd.includes(p.id)} onChange={(e) => {
-                        if (e.target.checked) setSelectedToAdd([...selectedToAdd, p.id]); else setSelectedToAdd(selectedToAdd.filter(id => id !== p.id));
-                      }} className="h-4 w-4 text-blue-600 border-gray-300 rounded mt-0.5" />
-                      <div className="ml-3">
-                        <div className="text-sm font-medium text-gray-900">{p.product_name}</div>
-                        <div className="text-xs text-gray-600">{p.order?.customer_name} — {p.order?.address_json?.city}</div>
-                      </div>
-                    </label>
-                  ))}
-                  {assemblyProducts.filter(p => !p.assembly_route_id && p.status === 'pending').length === 0 && (
-                    <div className="p-3 text-sm text-gray-500">Nenhum produto pendente disponível</div>
-                  )}
+
+              {/* Right: Available Products */}
+              <div className="flex flex-col border border-gray-200 rounded-xl overflow-hidden">
+                <div className="bg-gray-50 px-4 py-3 border-b border-gray-200 font-semibold text-gray-700 flex justify-between items-center">
+                   <span>Disponíveis (Pendentes)</span>
+                   <span className="text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded-full">
+                     {assemblyProducts.filter(p => !p.assembly_route_id && p.status === 'pending').length}
+                   </span>
+                </div>
+                <div className="flex-1 overflow-y-auto p-2 space-y-2">
+                   {assemblyProducts.filter(p => !p.assembly_route_id && p.status === 'pending').map(p => (
+                      <label key={p.id} className="flex items-start p-3 bg-white border border-gray-100 rounded-lg hover:bg-blue-50 cursor-pointer transition-colors group">
+                        <input type="checkbox" checked={selectedToAdd.includes(p.id)} onChange={(e) => {
+                          if (e.target.checked) setSelectedToAdd([...selectedToAdd, p.id]); else setSelectedToAdd(selectedToAdd.filter(id => id !== p.id));
+                        }} className="h-4 w-4 text-blue-600 border-gray-300 rounded mt-0.5 focus:ring-blue-500" />
+                        <div className="ml-3">
+                          <div className="text-sm font-medium text-gray-900 group-hover:text-blue-700">{p.product_name}</div>
+                          <div className="text-xs text-gray-500">{p.order?.customer_name} — {p.order?.address_json?.city}</div>
+                        </div>
+                      </label>
+                   ))}
+                </div>
+                <div className="p-3 bg-gray-50 border-t border-gray-200">
+                   <button 
+                     onClick={addSelectedProductsToRoute} 
+                     disabled={selectedToAdd.length === 0}
+                     className="w-full py-2 bg-blue-600 text-white rounded-lg text-sm font-medium disabled:opacity-50 hover:bg-blue-700 transition-colors"
+                   >
+                     Adicionar Selecionados ({selectedToAdd.length})
+                   </button>
                 </div>
               </div>
-            </div>
-            <div className="px-6 py-4 border-t border-gray-200 flex justify-end space-x-3">
-              <button onClick={() => setShowRouteManageModal(false)} className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-md hover:bg-gray-200">Fechar</button>
-              <button onClick={removeSelectedProductsFromRoute} className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-md hover:bg-red-700" disabled={selectedToRemove.length === 0}>Remover Selecionados</button>
-              <button onClick={addSelectedProductsToRoute} className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700" disabled={selectedToAdd.length === 0}>Adicionar Selecionados</button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Modal Detalhes do Romaneio */}
+      {/* Route Details Modal (Main View) */}
       {showRouteDetailsModal && routeDetails && (
-        <div className="fixed inset-0 bg-gray-500 bg-opacity-75 flex items-center justify-center p-4 z-[70]">
-          <div className="bg-white rounded-lg max-w-5xl w-full max-h-[90vh] overflow-y-auto">
-            <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
-              <h3 className="text-lg font-semibold text-gray-900">Romaneio de Montagem — {routeDetails.route.name}</h3>
-              <button onClick={() => setShowRouteDetailsModal(false)} className="text-gray-400 hover:text-gray-500">
-                <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-[70]">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-6xl h-[90vh] flex flex-col animate-in fade-in zoom-in-95 duration-200">
+            {/* Header */}
+            <div className="px-6 py-5 border-b border-gray-100 flex justify-between items-start bg-gray-50 rounded-t-xl">
+              <div>
+                <h3 className="text-xl font-bold text-gray-900 flex items-center gap-2">
+                  {routeDetails.route.name}
+                  <StatusBadge status={routeDetails.route.status} />
+                </h3>
+                <p className="text-sm text-gray-500 mt-1">
+                  Criado em {new Date(routeDetails.route.created_at).toLocaleDateString('pt-BR')}
+                  {routeDetails.route.deadline && ` • Prazo: ${new Date(routeDetails.route.deadline).toLocaleDateString('pt-BR')}`}
+                </p>
+              </div>
+              <button onClick={() => setShowRouteDetailsModal(false)} className="text-gray-400 hover:text-gray-600 p-1">
+                <X className="h-6 w-6" />
               </button>
             </div>
-            <div className="px-6 py-4">
-              <div className="mb-4 flex items-center justify-end space-x-2">
-                <button
+
+            {/* Toolbar */}
+            <div className="px-6 py-3 border-b border-gray-100 flex flex-wrap gap-2 items-center bg-white">
+               <button
                   onClick={() => {
                     const products = routeDetails.products || [];
                     const toAddr = (o: any) => {
@@ -1110,16 +1026,19 @@ export default function AssemblyManagement() {
                     const url = `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent('Current Location')}&destination=${encodeURIComponent(destination)}&travelmode=driving${waypoints.length ? `&waypoints=${encodeURIComponent(waypoints.join('|'))}` : ''}`;
                     window.open(url, '_blank');
                   }}
-                  className="bg-indigo-600 text-white py-2 px-4 rounded-lg font-medium hover:bg-indigo-700"
+                  className="inline-flex items-center px-3 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-lg text-gray-700 bg-white hover:bg-gray-50"
                 >
-                  Abrir rota no GPS
+                  <MapPin className="h-4 w-4 mr-2 text-gray-500" />
+                  Abrir Rota GPS
                 </button>
                 <button
                   onClick={() => generateRoutePdf(routeDetails.route)}
-                  className="bg-green-600 text-white py-2 px-4 rounded-lg font-medium hover:bg-green-700"
+                  className="inline-flex items-center px-3 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-lg text-gray-700 bg-white hover:bg-gray-50"
                 >
+                  <FileText className="h-4 w-4 mr-2 text-gray-500" />
                   Gerar PDF
                 </button>
+                <div className="h-6 w-px bg-gray-300 mx-2" />
                 <button
                   onClick={() => {
                     setRouteBeingEdited(routeDetails.route);
@@ -1128,8 +1047,9 @@ export default function AssemblyManagement() {
                     setEditRouteObservations(routeDetails.route.observations || '');
                     setShowRouteEditModal(true);
                   }}
-                  className="bg-gray-100 text-gray-800 py-2 px-4 rounded-lg font-medium hover:bg-gray-200"
+                  className="inline-flex items-center px-3 py-2 border border-transparent text-sm font-medium rounded-lg text-blue-700 bg-blue-50 hover:bg-blue-100"
                 >
+                  <Edit className="h-4 w-4 mr-2" />
                   Editar
                 </button>
                 <button
@@ -1139,67 +1059,69 @@ export default function AssemblyManagement() {
                     setSelectedToAdd([]);
                     setShowRouteManageModal(true);
                   }}
-                  className="bg-purple-600 text-white py-2 px-4 rounded-lg font-medium hover:bg-purple-700"
+                  className="inline-flex items-center px-3 py-2 border border-transparent text-sm font-medium rounded-lg text-purple-700 bg-purple-50 hover:bg-purple-100"
                 >
+                  <Settings className="h-4 w-4 mr-2" />
                   Gerenciar Produtos
                 </button>
-              </div>
-              {(() => {
-                const products = routeDetails.products || [];
-                const total = products.length;
-                const pendingCount = products.filter((p: any) => p.status === 'pending').length;
-                const inProgress = products.filter((p: any) => p.status === 'in_progress').length;
-                const completed = products.filter((p: any) => p.status === 'completed').length;
-                return (
-                  <div className="space-y-4">
-                    <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-sm text-gray-700">
-                      <div><strong>Total:</strong> {total}</div>
-                      <div><strong>Pendentes:</strong> {pendingCount}</div>
-                      <div><strong>Em Andamento:</strong> {inProgress}</div>
-                      <div><strong>Concluídos:</strong> {completed}</div>
-                    </div>
-                    <div className="overflow-x-auto">
-                      <table className="min-w-full divide-y divide-gray-200">
-                        <thead className="bg-gray-50">
-                          <tr>
-                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Nº Lançamento</th>
-                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Cliente</th>
-                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Endereço Completo</th>
-                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Produto</th>
-                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Ações</th>
-                          </tr>
-                        </thead>
-                        <tbody className="bg-white divide-y divide-gray-200">
-                          {products.map((ap: any) => {
-                            const order = ap.order || {};
-                            const addr = order.address_json || {};
-                            const enderecoCompleto = `${addr.street || ''}${addr.number ? `, ${addr.number}` : ''} - ${addr.neighborhood || ''} - ${addr.city || ''}`;
-                            return (
-                              <tr key={ap.id} className="hover:bg-gray-50">
-                                <td className="px-6 py-4 text-sm text-gray-900">{order.order_id_erp ?? '—'}</td>
-                                <td className="px-6 py-4 text-sm text-gray-500">{order.customer_name}</td>
-                                <td className="px-6 py-4 text-sm text-gray-500">{enderecoCompleto}</td>
-                                <td className="px-6 py-4 text-sm text-gray-500">{ap.product_name}</td>
-                                <td className="px-6 py-4 text-sm">
-                                  <button
-                                    onClick={() => { setDetailsItem(ap); setShowDetailsModal(true); }}
-                                    className="text-blue-600 hover:text-blue-800 font-medium"
-                                  >
-                                    Ver mais
-                                  </button>
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                );
-              })()}
             </div>
-            <div className="px-6 py-4 border-t border-gray-200 flex justify-end">
-              <button onClick={() => setShowRouteDetailsModal(false)} className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-md hover:bg-gray-200">Fechar</button>
+
+            {/* Content */}
+            <div className="flex-1 overflow-y-auto p-6 bg-gray-50">
+               {routeDetails.route.observations && (
+                 <div className="mb-6 bg-yellow-50 border border-yellow-200 rounded-lg p-4 flex items-start gap-3">
+                    <AlertCircle className="h-5 w-5 text-yellow-600 mt-0.5" />
+                    <div>
+                       <h4 className="text-sm font-bold text-yellow-800">Observações do Romaneio</h4>
+                       <p className="text-sm text-yellow-700 mt-1">{routeDetails.route.observations}</p>
+                    </div>
+                 </div>
+               )}
+
+               <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                  <table className="min-w-full divide-y divide-gray-200">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Produto</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Cliente / Endereço</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                        <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Ações</th>
+                      </tr>
+                    </thead>
+                    <tbody className="bg-white divide-y divide-gray-200">
+                      {routeDetails.products.map((ap: any) => {
+                         const order = ap.order || {};
+                         const addr = order.address_json || {};
+                         return (
+                           <tr key={ap.id} className="hover:bg-gray-50 transition-colors">
+                              <td className="px-6 py-4">
+                                 <div className="text-sm font-medium text-gray-900">{ap.product_name}</div>
+                                 <div className="text-xs text-gray-500">Lançamento: {order.order_id_erp || '—'}</div>
+                              </td>
+                              <td className="px-6 py-4">
+                                 <div className="text-sm text-gray-900">{order.customer_name}</div>
+                                 <div className="text-xs text-gray-500 flex items-center gap-1">
+                                   <MapPin className="h-3 w-3" />
+                                   {addr.street}, {addr.number} - {addr.neighborhood}
+                                 </div>
+                              </td>
+                              <td className="px-6 py-4">
+                                 <StatusBadge status={ap.status} />
+                              </td>
+                              <td className="px-6 py-4 text-right">
+                                 <button
+                                    onClick={() => { setDetailsItem(ap); setShowDetailsModal(true); }}
+                                    className="text-blue-600 hover:text-blue-900 text-sm font-medium"
+                                 >
+                                    Ver Detalhes
+                                 </button>
+                              </td>
+                           </tr>
+                         );
+                      })}
+                    </tbody>
+                  </table>
+               </div>
             </div>
           </div>
         </div>
