@@ -1018,7 +1018,7 @@ function RouteCreationContent() {
                                  })();
 
                                  const values: any = {
-                                   data: formatDate(o.created_at),
+                                   data: formatDate(o.data_venda || raw.data_venda || o.created_at),
                                    pedido: o.order_id_erp || raw.lancamento_venda || '-',
                                    cliente: o.customer_name,
                                    telefone: o.phone,
