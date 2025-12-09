@@ -474,6 +474,10 @@ function RouteCreationContent() {
       const ids = new Set<string>();
       for (const o of filtered) {
         const items = Array.isArray(o.items_json) ? o.items_json : [];
+        if (strictDepartment && filterDepartment) {
+          const allInDept = items.length > 0 && items.every((it:any)=> String(it?.department||'').toLowerCase() === filterDepartment.toLowerCase());
+          if (!allInDept) continue;
+        }
         const byLocal = filterLocalEstocagem ? items.filter((it:any)=> String(it?.location||'').toLowerCase() === filterLocalEstocagem.toLowerCase()) : items;
         let byOther = byLocal;
         if (filterHasAssembly) byOther = byOther.filter((it:any)=> isTrueGlobal(it?.has_assembly));
@@ -1038,6 +1042,11 @@ function RouteCreationContent() {
 
                                for (const o of filteredOrders) {
                                  const items = Array.isArray(o.items_json) ? o.items_json : [];
+                                 // Strict department: require ALL items in the order to match selected department
+                                 if (strictDepartment && filterDepartment) {
+                                   const allInDept = items.length > 0 && items.every((it:any)=> String(it?.department||'').toLowerCase() === filterDepartment.toLowerCase());
+                                   if (!allInDept) continue;
+                                 }
                                  const itemsByLocal = filterLocalEstocagem
                                    ? items.filter((it:any)=> String(it?.location||'').toLowerCase() === filterLocalEstocagem.toLowerCase())
                                    : items;
