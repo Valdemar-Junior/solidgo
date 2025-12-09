@@ -147,6 +147,7 @@ function RouteCreationContent() {
   const [strictDepartment, setStrictDepartment] = useState<boolean>(false);
   const [filterOperation, setFilterOperation] = useState<string>('');
   const [showFilters, setShowFilters] = useState(true); // Toggle filters visibility
+  const [filterHasAssembly, setFilterHasAssembly] = useState<boolean>(false);
 
   // Logic specific
   const [selectedExistingRouteId, setSelectedExistingRouteId] = useState<string>('');
@@ -746,11 +747,25 @@ function RouteCreationContent() {
                              <label htmlFor="strictDept" className="ml-2 text-xs text-gray-500">Apenas dept. exclusivo</label>
                         </div>
                     </div>
+                    <div className="space-y-1">
+                        <label className="text-xs font-semibold text-gray-500 uppercase">Frete Full</label>
+                        <div className="flex items-center gap-2 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg">
+                            <input id="ffull" type="checkbox" className="h-4 w-4" checked={Boolean(filterFreightFull)} onChange={(e)=> setFilterFreightFull(e.target.checked ? '1' : '')} />
+                            <label htmlFor="ffull" className="text-sm text-gray-700">Apenas pedidos com Frete Full</label>
+                        </div>
+                    </div>
+                    <div className="space-y-1">
+                        <label className="text-xs font-semibold text-gray-500 uppercase">Tem Montagem</label>
+                        <div className="flex items-center gap-2 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg">
+                            <input id="fmont" type="checkbox" className="h-4 w-4" checked={filterHasAssembly} onChange={(e)=> setFilterHasAssembly(e.target.checked)} />
+                            <label htmlFor="fmont" className="text-sm text-gray-700">Apenas produtos com Montagem</label>
+                        </div>
+                    </div>
                 </div>
                 
                 <div className="flex justify-end mt-4 pt-4 border-t border-gray-100">
                      <button 
-                        onClick={()=>{setFilterCity('');setFilterNeighborhood('');setFilterFilialVenda('');setFilterLocalEstocagem('');setFilterSeller('');setFilterClient('');setClientQuery('');setFilterFreightFull('');setFilterOperation('');setFilterDepartment('');}} 
+                        onClick={()=>{setFilterCity('');setFilterNeighborhood('');setFilterFilialVenda('');setFilterLocalEstocagem('');setFilterSeller('');setFilterClient('');setClientQuery('');setFilterFreightFull('');setFilterOperation('');setFilterDepartment('');setFilterHasAssembly(false);}} 
                         className="text-sm text-red-600 hover:text-red-800 font-medium flex items-center"
                      >
                         <X className="h-3 w-3 mr-1" /> Limpar filtros
@@ -840,6 +855,11 @@ function RouteCreationContent() {
                              {/* Reuse the massive mapping logic here but cleaner */}
                              {(() => {
                                const rows: Array<{ order: any; item: any }> = [];
+                               const isTrue = (v:any) => {
+                                 if (typeof v === 'boolean') return v;
+                                 const s = String(v || '').trim().toLowerCase();
+                                 return s === 'true' || s === '1' || s === 'sim' || s === 's' || s === 'y' || s === 'yes' || s === 't';
+                               };
                                const filteredOrders = orders.filter((o:any) => {
                                  const addr: any = o.address_json || {};
                                  const raw: any = o.raw_json || {};
@@ -849,6 +869,7 @@ function RouteCreationContent() {
                                  if (filterCity && !city.includes(filterCity.toLowerCase())) return false;
                                  if (filterNeighborhood && !nb.includes(filterNeighborhood.toLowerCase())) return false;
                                  if (clientQuery && !client.includes(clientQuery.toLowerCase())) return false;
+                                 if (filterFreightFull && !isTrue(o.tem_frete_full || raw?.tem_frete_full)) return false;
                                  return true;
                                });
 
@@ -857,15 +878,13 @@ function RouteCreationContent() {
                                  const itemsByLocal = filterLocalEstocagem
                                    ? items.filter((it:any)=> String(it?.location||'').toLowerCase() === filterLocalEstocagem.toLowerCase())
                                    : items;
-                                 if (itemsByLocal.length === 0 && filterLocalEstocagem) continue;
-                                 for (const it of itemsByLocal) rows.push({ order: o, item: it });
+                                 let itemsFiltered = itemsByLocal;
+                                 if (filterHasAssembly) itemsFiltered = itemsFiltered.filter((it:any)=> isTrue(it?.has_assembly));
+                                 if (itemsFiltered.length === 0 && (filterLocalEstocagem || filterHasAssembly)) continue;
+                                 for (const it of itemsFiltered) rows.push({ order: o, item: it });
                                }
 
-                               const isTrue = (v:any) => {
-                                 if (typeof v === 'boolean') return v;
-                                 const s = String(v || '').trim().toLowerCase();
-                                 return s === 'true' || s === '1' || s === 'sim' || s === 's' || s === 'y' || s === 'yes' || s === 't';
-                               };
+                               
 
                                return rows.map(({ order: o, item: it }, idx) => {
                                  const isSelected = selectedOrders.has(o.id);
