@@ -615,7 +615,7 @@ function RouteCreationContent() {
       console.error('Error loading data:', error);
       toast.error('Erro ao carregar dados');
     } finally {
-      if (!silent) setLoading(false);
+      setLoading(false);
     }
   };
 
