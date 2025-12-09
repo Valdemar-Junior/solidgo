@@ -237,9 +237,9 @@ function RouteCreationContent() {
 
   useEffect(() => {
     try {
-      const sCreate = localStorage.getItem('rc_showCreateModal');
       const rid = localStorage.getItem('rc_selectedRouteId');
-      if (sCreate === '1') { showCreateModalRef.current = true; setShowCreateModal(true); }
+      // Do not auto-open create modal on load
+      localStorage.setItem('rc_showCreateModal', '0');
       // Do NOT auto-open route modal on load; only open when user clicks
       localStorage.setItem('rc_showRouteModal', '0');
       const cols = localStorage.getItem('rc_columns_conf');
@@ -1264,7 +1264,7 @@ function RouteCreationContent() {
               <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden">
                   <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
                       <h3 className="text-lg font-bold text-gray-900">Nova Rota / Romaneio</h3>
-                      <button onClick={()=>setShowCreateModal(false)} className="text-gray-400 hover:text-gray-600"><X className="h-5 w-5"/></button>
+                      <button onClick={()=>{ setShowCreateModal(false); showCreateModalRef.current = false; localStorage.setItem('rc_showCreateModal','0'); }} className="text-gray-400 hover:text-gray-600"><X className="h-5 w-5"/></button>
                   </div>
                   <div className="p-6 space-y-6">
                       <div>
