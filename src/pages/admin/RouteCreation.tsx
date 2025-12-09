@@ -210,6 +210,27 @@ function RouteCreationContent() {
     loadData();
   }, []);
 
+  // Restore persisted selections and scroll position
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('rc_selectedOrders');
+      if (saved) {
+        const arr = JSON.parse(saved);
+        if (Array.isArray(arr)) setSelectedOrders(new Set(arr.map(String)));
+      }
+      const sLeft = Number(localStorage.getItem('rc_productsScrollLeft') || '0');
+      if (productsScrollRef.current && sLeft > 0) productsScrollRef.current.scrollLeft = sLeft;
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    try { localStorage.setItem('rc_selectedOrders', JSON.stringify(Array.from(selectedOrders))); } catch {}
+  }, [selectedOrders]);
+
+  const onProductsScroll = () => {
+    try { if (productsScrollRef.current) localStorage.setItem('rc_productsScrollLeft', String(productsScrollRef.current.scrollLeft || 0)); } catch {}
+  };
+
   useEffect(() => {
     const handler = async () => {
       if (document.visibilityState === 'visible') {
@@ -918,11 +939,12 @@ function RouteCreationContent() {
             {/* Table Area */}
             <div 
                 ref={productsScrollRef} 
+                onScroll={onProductsScroll}
                 onMouseDown={onProductsMouseDown} 
                 onMouseMove={onProductsMouseMove} 
                 onMouseUp={endProductsDrag} 
                 onMouseLeave={endProductsDrag}
-                className={`overflow-auto max-h-[500px] ${draggingProducts ? 'cursor-grabbing select-none' : 'cursor-grab'}`}
+                className={`overflow-auto max-h[500px] ${draggingProducts ? 'cursor-grabbing select-none' : 'cursor-grab'}`}
             >
                 {orders.length === 0 ? (
                     <div className="flex flex-col items-center justify-center py-16 text-center">
