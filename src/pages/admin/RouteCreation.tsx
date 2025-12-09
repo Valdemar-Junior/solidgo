@@ -164,6 +164,7 @@ function RouteCreationContent() {
     { id: 'cliente', label: 'Cliente', visible: true },
     { id: 'telefone', label: 'Telefone', visible: true },
     { id: 'sku', label: 'SKU', visible: true },
+    { id: 'flags', label: 'Sinais', visible: true },
     { id: 'produto', label: 'Produto', visible: true },
     { id: 'quantidade', label: 'Qtd.', visible: true },
     { id: 'department', label: 'Depto.', visible: true },
@@ -242,6 +243,7 @@ function RouteCreationContent() {
                 { id: 'cliente', label: 'Cliente', visible: true },
                 { id: 'telefone', label: 'Telefone', visible: true },
                 { id: 'sku', label: 'SKU', visible: true },
+                { id: 'flags', label: 'Sinais', visible: true },
                 { id: 'produto', label: 'Produto', visible: true },
                 { id: 'quantidade', label: 'Qtd.', visible: true },
                 { id: 'department', label: 'Depto.', visible: true },
@@ -929,7 +931,7 @@ function RouteCreationContent() {
                                      </td>
                                      {columnsConf.filter(c=>c.visible).map(c=> (
                                        <td key={c.id} className="px-4 py-3 text-gray-700 whitespace-nowrap">
-                                         {c.id === 'produto' ? (
+                                         {c.id === 'flags' ? (
                                            <div className="flex items-center gap-2">
                                              {hasAssembly && (
                                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-orange-100 text-orange-700 border border-orange-200" title="Produto com montagem">
@@ -943,6 +945,9 @@ function RouteCreationContent() {
                                                  Full
                                                </span>
                                              )}
+                                           </div>
+                                         ) : c.id === 'produto' ? (
+                                           <div className="flex items-center gap-2">
                                              <span className="truncate max-w-[420px]">{values[c.id]}</span>
                                            </div>
                                          ) : (
