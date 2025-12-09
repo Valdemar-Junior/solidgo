@@ -1022,7 +1022,7 @@ function RouteCreationContent() {
                                    telefone: o.phone,
                                    sku: it.sku || '-',
                                    produto: it.name || '-',
-                                   quantidade: Number(it.quantity || 1),
+                                   quantidade: Number(it.purchased_quantity ?? it.quantity ?? 1),
                                    department: it.department || raw.departamento || '-',
                                    brand: it.brand || raw.marca || '-',
                                    localEstocagem: it.location || raw.local_estocagem || '-',
