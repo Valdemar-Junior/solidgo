@@ -974,19 +974,21 @@ function RouteCreationContent() {
                                  return s === 'true' || s === '1' || s === 'sim' || s === 's' || s === 'y' || s === 'yes' || s === 't';
                                };
                                const filteredOrders = orders.filter((o:any) => {
-                                 const addr: any = o.address_json || {};
-                                 const raw: any = o.raw_json || {};
-                                 const city = String(addr.city || raw.destinatario_cidade || '').toLowerCase();
-                                 const nb = String(addr.neighborhood || raw.destinatario_bairro || '').toLowerCase();
-                                 const client = String(o.customer_name || '').toLowerCase();
-                                 const seller = String(o.vendedor_nome || raw.vendedor || '').toLowerCase();
-                                 if (filterCity && !city.includes(filterCity.toLowerCase())) return false;
-                                 if (filterNeighborhood && !nb.includes(filterNeighborhood.toLowerCase())) return false;
-                                 if (clientQuery && !client.includes(clientQuery.toLowerCase())) return false;
-                                 if (filterFreightFull && !isTrue(o.tem_frete_full || raw?.tem_frete_full)) return false;
-                                 if (filterOperation && !String(raw.operacoes || '').toLowerCase().includes(filterOperation.toLowerCase())) return false;
-                                 if (filterSeller && !seller.includes(filterSeller.toLowerCase())) return false;
-                                 return true;
+                                  const addr: any = o.address_json || {};
+                                  const raw: any = o.raw_json || {};
+                                  const city = String(addr.city || raw.destinatario_cidade || '').toLowerCase();
+                                  const nb = String(addr.neighborhood || raw.destinatario_bairro || '').toLowerCase();
+                                  const client = String(o.customer_name || '').toLowerCase();
+                                  const filial = String(o.filial_venda || raw.filial_venda || '').toLowerCase();
+                                  const seller = String(o.vendedor_nome || raw.vendedor || '').toLowerCase();
+                                  if (filterCity && !city.includes(filterCity.toLowerCase())) return false;
+                                  if (filterNeighborhood && !nb.includes(filterNeighborhood.toLowerCase())) return false;
+                                  if (clientQuery && !client.includes(clientQuery.toLowerCase())) return false;
+                                  if (filterFreightFull && !isTrue(o.tem_frete_full || raw?.tem_frete_full)) return false;
+                                  if (filterOperation && !String(raw.operacoes || '').toLowerCase().includes(filterOperation.toLowerCase())) return false;
+                                  if (filterFilialVenda && filial !== filterFilialVenda.toLowerCase()) return false;
+                                  if (filterSeller && !seller.includes(filterSeller.toLowerCase())) return false;
+                                  return true;
                                });
 
                                for (const o of filteredOrders) {
