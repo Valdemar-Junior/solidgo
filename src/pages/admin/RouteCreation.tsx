@@ -333,9 +333,48 @@ function RouteCreationContent() {
     return result;
   }, [selectedOrders, orders, filterLocalEstocagem]);
 
+  const selectedMixedOrdersPlus = useMemo(()=>{
+    const map = new Map<string, { id:string; pedido:string; otherLocs:string[]; reasons:string[] }>();
+    // Base from local storage filter
+    for (const m of selectedMixedOrders as any[]) {
+      map.set(m.id, { id: m.id, pedido: m.pedido, otherLocs: m.otherLocs || [], reasons: ['outro local de saída'] });
+    }
+    const isTrue = (v:any) => { const s = String(v||'').toLowerCase(); return s==='true'||s==='1'||s==='sim'||s==='s'||s==='y'||s==='yes'||s==='t'; };
+    // Assembly reason
+    if (filterHasAssembly) {
+      for (const oid of Array.from(selectedOrders)) {
+        const o: any = (orders || []).find((x:any)=> String(x.id) === String(oid));
+        if (!o) continue;
+        const items = Array.isArray(o.items_json) ? o.items_json : [];
+        const hasNonAsm = items.some((it:any)=> !isTrue(it?.has_assembly));
+        if (hasNonAsm) {
+          const pedido = String(o.raw_json?.lancamento_venda ?? o.order_id_erp ?? o.id ?? '');
+          const cur = map.get(String(o.id)) || { id: String(o.id), pedido, otherLocs: [], reasons: [] };
+          if (!cur.reasons.includes('há itens sem montagem')) cur.reasons.push('há itens sem montagem');
+          map.set(String(o.id), cur);
+        }
+      }
+    }
+    // Department reason (strict only)
+    if (filterDepartment && strictDepartment) {
+      for (const oid of Array.from(selectedOrders)) {
+        const o: any = (orders || []).find((x:any)=> String(x.id) === String(oid));
+        if (!o) continue;
+        const items = Array.isArray(o.items_json) ? o.items_json : [];
+        const hasOtherDept = items.some((it:any)=> String(it?.department||'').toLowerCase() !== String(filterDepartment||'').toLowerCase());
+        if (hasOtherDept) {
+          const pedido = String(o.raw_json?.lancamento_venda ?? o.order_id_erp ?? o.id ?? '');
+          const cur = map.get(String(o.id)) || { id: String(o.id), pedido, otherLocs: [], reasons: [] };
+          if (!cur.reasons.includes('há itens de outro departamento')) cur.reasons.push('há itens de outro departamento');
+          map.set(String(o.id), cur);
+        }
+      }
+    }
+    return Array.from(map.values());
+  }, [selectedMixedOrders, selectedOrders, orders, filterHasAssembly, filterDepartment, strictDepartment]);
+
   const openMixedConfirm = (action:'create'|'add') => {
-    if (!filterLocalEstocagem) return false;
-    const list = selectedMixedOrders;
+    const list = selectedMixedOrdersPlus;
     if (list.length === 0) return false;
     setMixedConfirmOrders(list);
     setMixedConfirmAction(action);
@@ -813,14 +852,14 @@ function RouteCreationContent() {
                 </div>
             </div>
 
-            {/* Warning for Mixed Locais */}
-            {filterLocalEstocagem && selectedMixedOrders.length > 0 && (
+            {/* Warning for Mixed selection across filters */}
+            {selectedMixedOrdersPlus.length > 0 && (
                 <div className="bg-yellow-50 border-b border-yellow-100 px-6 py-3 flex items-start gap-3">
                     <AlertTriangle className="h-5 w-5 text-yellow-600 shrink-0 mt-0.5" />
                     <div className="text-sm text-yellow-800">
-                        <span className="font-bold">Atenção:</span> Alguns pedidos selecionados possuem itens fora de <strong>{filterLocalEstocagem}</strong>:
+                        <span className="font-bold">Atenção:</span> Alguns pedidos selecionados possuem itens fora dos filtros atuais.
                         <div className="mt-1 font-mono text-xs">
-                             {selectedMixedOrders.map((m)=> `${m.pedido} (${m.otherLocs.join(', ')})`).join(' • ')}
+                             {selectedMixedOrdersPlus.map((m)=> `${m.pedido}${m.otherLocs.length?` (${m.otherLocs.join(', ')})`:''} — ${m.reasons.join(', ')}`).join(' • ')}
                         </div>
                     </div>
                 </div>
