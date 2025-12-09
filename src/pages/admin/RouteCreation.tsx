@@ -438,6 +438,45 @@ function RouteCreationContent() {
     return true;
   };
 
+  const isTrueGlobal = (v:any) => {
+    if (typeof v === 'boolean') return v;
+    const s = String(v || '').trim().toLowerCase();
+    return s === 'true' || s === '1' || s === 'sim' || s === 's' || s === 'y' || s === 'yes' || s === 't';
+  };
+
+  const getFilteredOrderIds = (): Set<string> => {
+    try {
+      const filtered = (orders || []).filter((o:any) => {
+        const addr: any = o.address_json || {};
+        const raw: any = o.raw_json || {};
+        const city = String(addr.city || raw.destinatario_cidade || '').toLowerCase();
+        const nb = String(addr.neighborhood || raw.destinatario_bairro || '').toLowerCase();
+        const client = String(o.customer_name || '').toLowerCase();
+        const filial = String(o.filial_venda || raw.filial_venda || '').toLowerCase();
+        const seller = String(o.vendedor_nome || raw.vendedor || '').toLowerCase();
+        if (filterCity && !city.includes(filterCity.toLowerCase())) return false;
+        if (filterNeighborhood && !nb.includes(filterNeighborhood.toLowerCase())) return false;
+        if (clientQuery && !client.includes(clientQuery.toLowerCase())) return false;
+        if (filterFreightFull && !isTrueGlobal(o.tem_frete_full || raw?.tem_frete_full)) return false;
+        if (filterOperation && !String(raw.operacoes || '').toLowerCase().includes(filterOperation.toLowerCase())) return false;
+        if (filterFilialVenda && filial !== filterFilialVenda.toLowerCase()) return false;
+        if (filterSeller && !seller.includes(filterSeller.toLowerCase())) return false;
+        return true;
+      });
+      // Apply per-item filters
+      const ids = new Set<string>();
+      for (const o of filtered) {
+        const items = Array.isArray(o.items_json) ? o.items_json : [];
+        const byLocal = filterLocalEstocagem ? items.filter((it:any)=> String(it?.location||'').toLowerCase() === filterLocalEstocagem.toLowerCase()) : items;
+        let byOther = byLocal;
+        if (filterHasAssembly) byOther = byOther.filter((it:any)=> isTrueGlobal(it?.has_assembly));
+        if (filterDepartment) byOther = byOther.filter((it:any)=> String(it?.department||'').toLowerCase() === filterDepartment.toLowerCase());
+        if (byOther.length > 0) ids.add(String(o.id));
+      }
+      return ids;
+    } catch { return new Set(); }
+  };
+
   // --- DATA LOADING ---
   const loadData = async (silent: boolean = true) => {
     try {
@@ -905,15 +944,14 @@ function RouteCreationContent() {
                             type="checkbox"
                             className="h-4 w-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
                             onChange={(e) => {
-                                // Select all logic (simplified for brevity, reuse logic from original if needed)
                                 if (e.currentTarget.checked) {
-                                    const ids = new Set(orders.map(o=>o.id));
+                                    const ids = getFilteredOrderIds();
                                     setSelectedOrders(ids);
                                 } else {
                                     setSelectedOrders(new Set());
                                 }
                             }}
-                            checked={orders.length > 0 && selectedOrders.size === orders.length}
+                            checked={getFilteredOrderIds().size > 0 && selectedOrders.size === getFilteredOrderIds().size}
                         />
                         <span className="ml-2 text-sm font-medium text-gray-700">Selecionar Todos</span>
                     </label>
