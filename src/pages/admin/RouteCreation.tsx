@@ -911,6 +911,7 @@ function RouteCreationContent() {
                                  if (filterNeighborhood && !nb.includes(filterNeighborhood.toLowerCase())) return false;
                                  if (clientQuery && !client.includes(clientQuery.toLowerCase())) return false;
                                  if (filterFreightFull && !isTrue(o.tem_frete_full || raw?.tem_frete_full)) return false;
+                                 if (filterOperation && !String(raw.operacoes || '').toLowerCase().includes(filterOperation.toLowerCase())) return false;
                                  return true;
                                });
 
@@ -921,6 +922,7 @@ function RouteCreationContent() {
                                    : items;
                                  let itemsFiltered = itemsByLocal;
                                  if (filterHasAssembly) itemsFiltered = itemsFiltered.filter((it:any)=> isTrue(it?.has_assembly));
+                                 if (filterDepartment) itemsFiltered = itemsFiltered.filter((it:any)=> String(it?.department||'').toLowerCase() === filterDepartment.toLowerCase());
                                  if (itemsFiltered.length === 0 && (filterLocalEstocagem || filterHasAssembly)) continue;
                                  for (const it of itemsFiltered) rows.push({ order: o, item: it });
                                }
