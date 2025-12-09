@@ -397,34 +397,41 @@ function RouteCreationContent() {
     }
     const isTrue = (v:any) => { const s = String(v||'').toLowerCase(); return s==='true'||s==='1'||s==='sim'||s==='s'||s==='y'||s==='yes'||s==='t'; };
     // Assembly reason
-    if (filterHasAssembly) {
-      for (const oid of Array.from(selectedOrders)) {
-        const o: any = (orders || []).find((x:any)=> String(x.id) === String(oid));
-        if (!o) continue;
-        const items = Array.isArray(o.items_json) ? o.items_json : [];
-        const hasNonAsm = items.some((it:any)=> !isTrue(it?.has_assembly));
-        if (hasNonAsm) {
-          const pedido = String(o.raw_json?.lancamento_venda ?? o.order_id_erp ?? o.id ?? '');
-          const cur = map.get(String(o.id)) || { id: String(o.id), pedido, otherLocs: [], reasons: [] };
-          if (!cur.reasons.includes('há itens sem montagem')) cur.reasons.push('há itens sem montagem');
-          map.set(String(o.id), cur);
-        }
+    for (const oid of Array.from(selectedOrders)) {
+      const o: any = (orders || []).find((x:any)=> String(x.id) === String(oid));
+      if (!o) continue;
+      const pedido = String(o.raw_json?.lancamento_venda ?? o.order_id_erp ?? o.id ?? '');
+      const items = Array.isArray(o.items_json) ? o.items_json : [];
+      const byLocal = filterLocalEstocagem ? items.filter((it:any)=> String(it?.location||'').toLowerCase() === filterLocalEstocagem.toLowerCase()) : items;
+      let visibleItems = byLocal;
+      if (filterHasAssembly) visibleItems = visibleItems.filter((it:any)=> isTrue(it?.has_assembly));
+      if (filterDepartment) visibleItems = visibleItems.filter((it:any)=> String(it?.department||'').toLowerCase() === String(filterDepartment||'').toLowerCase());
+
+      const allLocs: string[] = Array.from(new Set<string>(items.map((it:any)=> String(it?.location||'').toLowerCase()).filter(Boolean)));
+      const visibleLocs: string[] = Array.from(new Set<string>(visibleItems.map((it:any)=> String(it?.location||'').toLowerCase()).filter(Boolean)));
+      const otherLocs = allLocs.filter(l => !visibleLocs.includes(l));
+
+      const cur = map.get(String(o.id)) || { id: String(o.id), pedido, otherLocs: [], reasons: [] };
+
+      // If some items are filtered out by current combination, add a generic reason
+      if (visibleItems.length < items.length) {
+        if (!cur.reasons.includes('há itens fora dos filtros')) cur.reasons.push('há itens fora dos filtros');
       }
-    }
-    // Department reason (strict only)
-    if (filterDepartment && strictDepartment) {
-      for (const oid of Array.from(selectedOrders)) {
-        const o: any = (orders || []).find((x:any)=> String(x.id) === String(oid));
-        if (!o) continue;
-        const items = Array.isArray(o.items_json) ? o.items_json : [];
-        const hasOtherDept = items.some((it:any)=> String(it?.department||'').toLowerCase() !== String(filterDepartment||'').toLowerCase());
-        if (hasOtherDept) {
-          const pedido = String(o.raw_json?.lancamento_venda ?? o.order_id_erp ?? o.id ?? '');
-          const cur = map.get(String(o.id)) || { id: String(o.id), pedido, otherLocs: [], reasons: [] };
-          if (!cur.reasons.includes('há itens de outro departamento')) cur.reasons.push('há itens de outro departamento');
-          map.set(String(o.id), cur);
-        }
+      // Specific reasons
+      if (filterHasAssembly && items.some((it:any)=> !isTrue(it?.has_assembly))) {
+        if (!cur.reasons.includes('há itens sem montagem')) cur.reasons.push('há itens sem montagem');
       }
+      if (filterDepartment && items.some((it:any)=> String(it?.department||'').toLowerCase() !== String(filterDepartment||'').toLowerCase())) {
+        if (!cur.reasons.includes('há itens de outro departamento')) cur.reasons.push('há itens de outro departamento');
+      }
+      if (otherLocs.length > 0) {
+        const merged = Array.from(new Set<string>([...(cur.otherLocs || [] as string[]), ...otherLocs]));
+        cur.otherLocs = merged;
+        if (!cur.reasons.includes('outro local de saída')) cur.reasons.push('outro local de saída');
+      }
+
+      // Save
+      if (cur.reasons.length > 0) map.set(String(o.id), cur);
     }
     return Array.from(map.values());
   }, [selectedMixedOrders, selectedOrders, orders, filterHasAssembly, filterDepartment, strictDepartment]);
