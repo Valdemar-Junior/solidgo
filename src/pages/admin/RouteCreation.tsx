@@ -232,15 +232,7 @@ function RouteCreationContent() {
   };
 
   useEffect(() => {
-    const handler = async () => {
-      if (document.visibilityState === 'visible') {
-        await loadData();
-        if (showRouteModalRef.current) setShowRouteModal(true);
-        if (showCreateModalRef.current) setShowCreateModal(true);
-      }
-    };
-    document.addEventListener('visibilitychange', handler);
-    return () => document.removeEventListener('visibilitychange', handler);
+    loadData();
   }, []);
 
   useEffect(() => {
