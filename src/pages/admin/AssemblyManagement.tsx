@@ -69,6 +69,17 @@ export default function AssemblyManagement() {
   const [groupedProducts, setGroupedProducts] = useState<Record<string, any[]>>({});
   const [deliveryInfo, setDeliveryInfo] = useState<Record<string, { date?: string; driver?: string }>>({});
 
+  const formatDate = (dateStr: string | null | undefined) => {
+    if (!dateStr) return '-';
+    try {
+      const d = new Date(dateStr);
+      if (isNaN(d.getTime())) return '-';
+      return d.toLocaleDateString('pt-BR');
+    } catch {
+      return '-';
+    }
+  };
+
   const fetchData = async () => {
     try {
       setLoading(true);
@@ -635,9 +646,7 @@ export default function AssemblyManagement() {
                                   <div className="flex items-center gap-1">
                                     <Calendar className="h-3 w-3 text-gray-400" />
                                     <span>
-                                      Entrega: {(deliveryInfo[ap.order_id]?.date || order.previsao_entrega) 
-                                        ? new Date(deliveryInfo[ap.order_id]?.date || order.previsao_entrega).toLocaleDateString('pt-BR') 
-                                        : '—'}
+                                      Entrega: {formatDate(deliveryInfo[ap.order_id]?.date || order.previsao_entrega)}
                                     </span>
                                   </div>
                                 </div>
@@ -686,7 +695,7 @@ export default function AssemblyManagement() {
                                  {route.name}
                                </h3>
                                <p className="text-xs text-gray-500 mt-1">
-                                 Criado em {new Date(route.created_at).toLocaleDateString('pt-BR')}
+                                 Criado em {formatDate(route.created_at)}
                                </p>
                             </div>
                             <StatusBadge status={route.status} />
@@ -839,14 +848,12 @@ export default function AssemblyManagement() {
                         </div>
                         <div className="space-y-1">
                            <p className="text-xs font-medium text-gray-500 uppercase">Data Venda</p>
-                           <p className="text-sm font-medium text-gray-900">{order.data_venda ? new Date(order.data_venda).toLocaleDateString('pt-BR') : '—'}</p>
+                           <p className="text-sm font-medium text-gray-900">{formatDate(order.data_venda)}</p>
                         </div>
                         <div className="space-y-1">
                            <p className="text-xs font-medium text-gray-500 uppercase">Data Entrega</p>
                            <p className="text-sm font-medium text-gray-900">
-                             {(deliveryInfo[ap.order_id]?.date || order.previsao_entrega) 
-                               ? new Date(deliveryInfo[ap.order_id]?.date || order.previsao_entrega).toLocaleDateString('pt-BR') 
-                               : '—'}
+                             {formatDate(deliveryInfo[ap.order_id]?.date || order.previsao_entrega)}
                            </p>
                         </div>
                      </div>
@@ -1000,8 +1007,8 @@ export default function AssemblyManagement() {
                   <StatusBadge status={routeDetails.route.status} />
                 </h3>
                 <p className="text-sm text-gray-500 mt-1">
-                  Criado em {new Date(routeDetails.route.created_at).toLocaleDateString('pt-BR')}
-                  {routeDetails.route.deadline && ` • Prazo: ${new Date(routeDetails.route.deadline).toLocaleDateString('pt-BR')}`}
+                  Criado em {formatDate(routeDetails.route.created_at)}
+                  {routeDetails.route.deadline && ` • Prazo: ${formatDate(routeDetails.route.deadline)}`}
                 </p>
               </div>
               <button onClick={() => setShowRouteDetailsModal(false)} className="text-gray-400 hover:text-gray-600 p-1">
