@@ -28,7 +28,9 @@ import {
   ArrowLeft,
   Hammer,
   Zap,
-  MessageCircle
+  MessageCircle,
+  ClipboardList,
+  ClipboardCheck
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { DeliverySheetGenerator } from '../../utils/pdf/deliverySheetGenerator';
@@ -1247,9 +1249,26 @@ function RouteCreationContent() {
                                                 {formatDate(route.created_at)}
                                             </p>
                                         </div>
-                                        <span className={`px-2.5 py-1 rounded-full text-xs font-bold border ${statusColors[route.status] || 'bg-gray-100'}`}>
-                                            {statusLabel[route.status] || route.status}
-                                        </span>
+                        <div className="flex items-center gap-2">
+                          <span className={`px-2.5 py-1 rounded-full text-xs font-bold border ${statusColors[route.status] || 'bg-gray-100'}`}>
+                              {statusLabel[route.status] || route.status}
+                          </span>
+                          {(() => {
+                            const conf: any = (route as any).conference;
+                            const cStatus = String(conf?.status || '').toLowerCase();
+                            const ok = conf?.result_ok === true || cStatus === 'completed';
+                            const badgeClass = ok
+                              ? 'bg-green-50 text-green-700 border-green-200'
+                              : (cStatus === 'in_progress' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-yellow-50 text-yellow-700 border-yellow-200');
+                            const label = ok ? 'Conferência: Finalizada' : (cStatus === 'in_progress' ? 'Conferência: Em curso' : 'Conferência: Aguardando');
+                            return (
+                              <span className={`px-2.5 py-1 rounded-full text-xs font-bold border inline-flex items-center gap-1 ${badgeClass}`} title="Status de conferência">
+                                {ok ? <ClipboardCheck className="h-3.5 w-3.5"/> : <ClipboardList className="h-3.5 w-3.5"/>}
+                                {label}
+                              </span>
+                            );
+                          })()}
+                        </div>
                                     </div>
                                     
                                     <div className="space-y-3 mb-6">
@@ -1669,12 +1688,16 @@ function RouteCreationContent() {
                         </button>
                      )}
 
-                     {/* Start Route Button */}
-                     <button
+                    {/* Start Route Button */}
+                    <button
                         onClick={async () => {
                             if (!selectedRoute) return;
                             try {
                                 if (selectedRoute.status !== 'pending') { toast.error('A rota já foi iniciada'); return; }
+                                const conf: any = (selectedRoute as any).conference;
+                                const cStatus = String(conf?.status || '').toLowerCase();
+                                const ok = conf?.result_ok === true || cStatus === 'completed';
+                                if (!ok) { toast.error('Finalize a conferência para iniciar a rota'); return; }
                                 const { error } = await supabase.from('routes').update({ status: 'in_progress' }).eq('id', selectedRoute.id);
                                 if (error) throw error;
                                 const updated = { ...selectedRoute, status: 'in_progress' } as any;
@@ -1685,10 +1708,11 @@ function RouteCreationContent() {
                                 toast.error('Falha ao iniciar rota');
                             }
                         }}
-                        disabled={selectedRoute.status !== 'pending'}
+                        disabled={selectedRoute.status !== 'pending' || !((selectedRoute as any)?.conference?.result_ok === true || String((selectedRoute as any)?.conference?.status || '').toLowerCase() === 'completed')}
+                        title={selectedRoute.status !== 'pending' ? 'A rota já foi iniciada' : (!((selectedRoute as any)?.conference?.result_ok === true || String((selectedRoute as any)?.conference?.status || '').toLowerCase() === 'completed') ? 'Finalize a conferência para iniciar' : '')}
                         className="flex items-center justify-center px-4 py-2 bg-yellow-50 text-yellow-700 hover:bg-yellow-100 rounded-lg font-medium text-sm transition-colors border border-yellow-200 disabled:opacity-50 disabled:cursor-not-allowed"
                      >
-                         <Clock className="h-4 w-4 mr-2" /> Iniciar Rota
+                        <Clock className="h-4 w-4 mr-2" /> Iniciar Rota
                      </button>
 
                      {/* WhatsApp Button */}
