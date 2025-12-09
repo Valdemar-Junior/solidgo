@@ -225,10 +225,10 @@ function RouteCreationContent() {
   useEffect(() => {
     try {
       const sCreate = localStorage.getItem('rc_showCreateModal');
-      const sRoute = localStorage.getItem('rc_showRouteModal');
       const rid = localStorage.getItem('rc_selectedRouteId');
       if (sCreate === '1') { showCreateModalRef.current = true; setShowCreateModal(true); }
-      if (sRoute === '1' && rid) { selectedRouteIdRef.current = rid; showRouteModalRef.current = true; setShowRouteModal(true); }
+      // Do NOT auto-open route modal on load; only open when user clicks
+      localStorage.setItem('rc_showRouteModal', '0');
       const cols = localStorage.getItem('rc_columns_conf');
       if (cols) {
         const parsed = JSON.parse(cols);
@@ -273,6 +273,48 @@ function RouteCreationContent() {
       setViewMode('products');
     } catch {}
   }, []);
+
+  // Persist filters across refresh/tab switch
+  useEffect(() => {
+    try {
+      const data = localStorage.getItem('rc_filters');
+      if (data) {
+        const f = JSON.parse(data);
+        if (f && typeof f === 'object') {
+          if ('city' in f) setFilterCity(f.city || '');
+          if ('neighborhood' in f) setFilterNeighborhood(f.neighborhood || '');
+          if ('filial' in f) setFilterFilialVenda(f.filial || '');
+          if ('local' in f) setFilterLocalEstocagem(f.local || '');
+          if ('seller' in f) setFilterSeller(f.seller || '');
+          if ('client' in f) { setFilterClient(f.client || ''); setClientQuery(f.client || ''); }
+          if ('department' in f) setFilterDepartment(f.department || '');
+          if ('strictDepartment' in f) setStrictDepartment(!!f.strictDepartment);
+          if ('freightFull' in f) setFilterFreightFull(f.freightFull ? '1' : '');
+          if ('hasAssembly' in f) setFilterHasAssembly(!!f.hasAssembly);
+          if ('operation' in f) setFilterOperation(f.operation || '');
+        }
+      }
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    try {
+      const payload = {
+        city: filterCity,
+        neighborhood: filterNeighborhood,
+        filial: filterFilialVenda,
+        local: filterLocalEstocagem,
+        seller: filterSeller,
+        client: filterClient,
+        department: filterDepartment,
+        strictDepartment,
+        freightFull: Boolean(filterFreightFull),
+        hasAssembly: filterHasAssembly,
+        operation: filterOperation,
+      };
+      localStorage.setItem('rc_filters', JSON.stringify(payload));
+    } catch {}
+  }, [filterCity, filterNeighborhood, filterFilialVenda, filterLocalEstocagem, filterSeller, filterClient, filterDepartment, strictDepartment, filterFreightFull, filterHasAssembly, filterOperation]);
 
   // --- MEMOS (Options) ---
   const cityOptions = useMemo(() => Array.from(new Set((orders || []).map((o: any) => String((o.address_json?.city || o.raw_json?.destinatario_cidade || '')).trim()).filter(Boolean))).sort(), [orders]);
@@ -1119,6 +1161,7 @@ function RouteCreationContent() {
                                             localStorage.setItem('rc_selectedRouteId', String(route.id));
                                             setSelectedRoute(route);
                                             showRouteModalRef.current = true;
+                                            localStorage.setItem('rc_showRouteModal','1');
                                             setShowRouteModal(true);
                                         }}
                                         className="flex-1 inline-flex items-center justify-center px-4 py-2 bg-white border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors shadow-sm"
@@ -1467,7 +1510,7 @@ function RouteCreationContent() {
                             • {(selectedRoute.driver as any)?.user?.name || selectedRoute.driver?.name}
                         </p>
                      </div>
-                     <button onClick={()=>setShowRouteModal(false)} className="p-2 hover:bg-gray-200 rounded-full text-gray-500"><X className="h-6 w-6"/></button>
+                    <button onClick={()=>{ setShowRouteModal(false); showRouteModalRef.current = false; localStorage.setItem('rc_showRouteModal','0'); }} className="p-2 hover:bg-gray-200 rounded-full text-gray-500"><X className="h-6 w-6"/></button>
                  </div>
                  
                  {/* Toolbar */}
