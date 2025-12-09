@@ -755,6 +755,14 @@ function RouteCreationContent() {
                 Filtros
               </button>
               <button 
+                onClick={()=> loadData()} 
+                disabled={loading}
+                className="inline-flex items-center px-4 py-2 rounded-lg border text-sm font-medium transition-colors bg-white border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+              >
+                <RefreshCcw className={`h-4 w-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
+                Recarregar
+              </button>
+              <button 
                 onClick={()=> { showCreateModalRef.current = true; localStorage.setItem('rc_showCreateModal','1'); setShowCreateModal(true); }} 
                 disabled={selectedOrders.size === 0}
                 className="inline-flex items-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm transition-all transform active:scale-95"
