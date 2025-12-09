@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../../supabase/client';
 import { useAuthStore } from '../../stores/authStore';
-import { Package, Eye, LogOut } from 'lucide-react';
+import { Package, Eye, LogOut, ArrowLeft } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 
@@ -57,12 +57,21 @@ export default function ConferenteDashboard() {
     <div className="p-6 space-y-6">
       <div className="bg-white rounded-lg shadow p-6">
         <div className="flex items-center justify-between mb-4">
-          <div>
-            <h1 className="text-xl font-bold text-gray-900 flex items-center">
-              <Package className="h-5 w-5 mr-2" />
-              Rotas para Conferência
-            </h1>
-            <p className="text-sm text-gray-600">Bem-vindo, {user?.name || 'Conferente'}</p>
+          <div className="flex items-center gap-3">
+            <button 
+              onClick={() => navigate(-1)} 
+              className="p-2 -ml-2 hover:bg-gray-100 rounded-full text-gray-600 transition-colors"
+              title="Voltar"
+            >
+              <ArrowLeft className="h-6 w-6" />
+            </button>
+            <div>
+              <h1 className="text-xl font-bold text-gray-900 flex items-center">
+                <Package className="h-5 w-5 mr-2" />
+                Rotas para Conferência
+              </h1>
+              <p className="text-sm text-gray-600">Bem-vindo, {user?.name || 'Conferente'}</p>
+            </div>
           </div>
           <div className="flex items-center space-x-3">
             <span className="bg-yellow-100 text-yellow-800 px-3 py-1 rounded-full text-sm font-medium">Conferente</span>

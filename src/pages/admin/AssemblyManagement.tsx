@@ -1,5 +1,7 @@
 import { useEffect, useState, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { 
+  ArrowLeft,
   Plus, 
   Calendar, 
   User as UserIcon, 
@@ -26,6 +28,7 @@ import { AssemblyRoute, AssemblyProductWithDetails, User } from '../../types/dat
 import { DeliverySheetGenerator, type DeliverySheetData } from '../../utils/pdf/deliverySheetGenerator';
 
 export default function AssemblyManagement() {
+  const navigate = useNavigate();
   // State
   const [assemblyRoutes, setAssemblyRoutes] = useState<AssemblyRoute[]>([]);
   const [assemblyProducts, setAssemblyProducts] = useState<AssemblyProductWithDetails[]>([]);
@@ -458,14 +461,23 @@ export default function AssemblyManagement() {
     <div className="min-h-screen bg-gray-50 p-6 space-y-8">
       {/* Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
-            <Package className="h-7 w-7 text-blue-600" />
-            Gestão de Montagem
-          </h1>
-          <p className="text-gray-600 mt-1">
-            Gerencie romaneios, atribua montadores e acompanhe o status das montagens.
-          </p>
+        <div className="flex items-center gap-4">
+          <button 
+            onClick={() => navigate(-1)} 
+            className="p-2 -ml-2 hover:bg-gray-200 rounded-lg text-gray-600 transition-colors"
+            title="Voltar"
+          >
+            <ArrowLeft className="h-6 w-6" />
+          </button>
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
+              <Package className="h-7 w-7 text-blue-600" />
+              Gestão de Montagem
+            </h1>
+            <p className="text-gray-600 mt-1">
+              Gerencie romaneios, atribua montadores e acompanhe o status das montagens.
+            </p>
+          </div>
         </div>
         <button
           onClick={() => setShowCreateModal(true)}

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useAuthStore } from '../../stores/authStore';
 import { supabase } from '../../supabase/client';
 import type { RouteWithDetails } from '../../types/database';
-import { Truck, MapPin, Package, Clock, Users, LogOut } from 'lucide-react';
+import { Truck, MapPin, Package, Clock, Users, LogOut, ArrowLeft } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
 export default function DriverDashboard() {
@@ -89,13 +89,22 @@ export default function DriverDashboard() {
       <div className="bg-white shadow">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center py-6">
-            <div>
-              <h1 className="text-3xl font-bold text-gray-900">
-                Minhas Rotas
-              </h1>
-              <p className="text-gray-600 mt-1">
-                Bem-vindo, {user?.name || user?.email}
-              </p>
+            <div className="flex items-center gap-3">
+              <button 
+                onClick={() => navigate(-1)} 
+                className="p-2 -ml-2 hover:bg-gray-100 rounded-full text-gray-600 transition-colors"
+                title="Voltar"
+              >
+                <ArrowLeft className="h-6 w-6" />
+              </button>
+              <div>
+                <h1 className="text-3xl font-bold text-gray-900">
+                  Minhas Rotas
+                </h1>
+                <p className="text-gray-600 mt-1">
+                  Bem-vindo, {user?.name || user?.email}
+                </p>
+              </div>
             </div>
             <div className="flex items-center space-x-4">
               <span className="bg-blue-100 text-blue-800 px-3 py-1 rounded-full text-sm font-medium">Motorista</span>

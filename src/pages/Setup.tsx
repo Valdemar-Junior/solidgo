@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { supabase } from '../supabase/client';
 import { useNavigate } from 'react-router-dom';
-import { Loader2, UserPlus, AlertCircle } from 'lucide-react';
+import { Loader2, UserPlus, AlertCircle, ArrowLeft } from 'lucide-react';
 
 export default function Setup() {
   const navigate = useNavigate();
@@ -109,7 +109,14 @@ export default function Setup() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-green-50 to-blue-100 flex items-center justify-center p-4">
+    <div className="min-h-screen bg-gradient-to-br from-green-50 to-blue-100 flex items-center justify-center p-4 relative">
+      <button
+        onClick={() => navigate(-1)}
+        className="absolute top-4 left-4 p-2 bg-white/80 rounded-full shadow-sm hover:bg-white transition-colors text-gray-600"
+        title="Voltar"
+      >
+        <ArrowLeft className="h-6 w-6" />
+      </button>
       <div className="bg-white rounded-2xl shadow-xl p-8 w-full max-w-md">
         <div className="text-center mb-8">
           <div className="flex items-center justify-center mb-4">

@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { supabase } from '../../supabase/client';
 import { 
+  ArrowLeft,
   Save, 
   RefreshCw, 
   Settings as SettingsIcon, 
@@ -16,6 +18,7 @@ import {
 import { toast } from 'sonner';
 
 export default function Settings() {
+  const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   
@@ -88,6 +91,13 @@ export default function Settings() {
       <div className="bg-white border-b border-gray-200 sticky top-0 z-20 shadow-sm">
         <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
           <div className="flex items-center gap-3">
+            <button 
+              onClick={() => navigate(-1)} 
+              className="p-2 -ml-2 hover:bg-gray-100 rounded-lg text-gray-600 transition-colors"
+              title="Voltar"
+            >
+              <ArrowLeft className="h-6 w-6" />
+            </button>
             <div className="p-2 bg-blue-50 rounded-lg">
               <SettingsIcon className="h-6 w-6 text-blue-600" />
             </div>

@@ -1,16 +1,17 @@
 import { useEffect, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import { supabase } from '../../supabase/client';
 import { backgroundSync } from '../../utils/offline/backgroundSync';
 import DeliveryMarking from '../../components/DeliveryMarking';
 import { OfflineStorage, NetworkStatus } from '../../utils/offline/storage';
 import type { RouteWithDetails, RouteOrder, Order } from '../../types/database';
-import { Truck, MapPin, Clock, Package, RefreshCw, LogOut } from 'lucide-react';
+import { Truck, MapPin, Clock, Package, RefreshCw, LogOut, ArrowLeft } from 'lucide-react';
 import { useAuthStore } from '../../stores/authStore';
 import { toast } from 'sonner';
 import { buildFullAddress } from '../../utils/maps';
 
 export default function DriverRouteDetails() {
+  const navigate = useNavigate();
   const { user, logout } = useAuthStore();
   const { routeId } = useParams<{ routeId: string }>();
   const [route, setRoute] = useState<RouteWithDetails | null>(null);
@@ -162,6 +163,13 @@ export default function DriverRouteDetails() {
           <div className="py-6">
             <div className="flex items-center justify-between">
               <div className="flex items-center">
+                <button 
+                  onClick={() => navigate(-1)} 
+                  className="p-2 mr-3 hover:bg-gray-100 rounded-full text-gray-600 transition-colors"
+                  title="Voltar"
+                >
+                  <ArrowLeft className="h-6 w-6" />
+                </button>
                 <Truck className="h-8 w-8 text-blue-600 mr-3" />
                 <div>
                   <h1 className="text-2xl font-bold text-gray-900">

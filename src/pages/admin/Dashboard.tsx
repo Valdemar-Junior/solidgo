@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../../stores/authStore';
 import { supabase } from '../../supabase/client';
 import type { DashboardMetrics } from '../../types/database';
@@ -15,10 +15,12 @@ import {
   TrendingUp,
   AlertTriangle,
   CheckCircle2,
-  Bell
+  Bell,
+  ArrowLeft
 } from 'lucide-react';
 
 export default function AdminDashboard() {
+  const navigate = useNavigate();
   const { user, logout } = useAuthStore();
   const [metrics, setMetrics] = useState<DashboardMetrics>({
     total_routes_today: 0,
@@ -153,6 +155,13 @@ export default function AdminDashboard() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center h-20">
             <div className="flex items-center gap-4">
+              <button 
+                onClick={() => navigate(-1)} 
+                className="p-2 -ml-2 hover:bg-gray-100 rounded-lg text-gray-600 transition-colors"
+                title="Voltar"
+              >
+                <ArrowLeft className="h-6 w-6" />
+              </button>
               <div className="bg-blue-600 p-2 rounded-lg">
                 <Truck className="h-6 w-6 text-white" />
               </div>

@@ -226,7 +226,13 @@ export default function RouteConference() {
       <div className="bg-white rounded-lg shadow p-6">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center space-x-3">
-            <button onClick={() => navigate('/conferente')} className="px-3 py-2 bg-gray-100 rounded-md hover:bg-gray-200 flex items-center"><ArrowLeft className="h-4 w-4 mr-1"/>Voltar</button>
+            <button 
+              onClick={() => navigate(-1)} 
+              className="p-2 -ml-2 hover:bg-gray-100 rounded-full text-gray-600 transition-colors"
+              title="Voltar"
+            >
+              <ArrowLeft className="h-6 w-6" />
+            </button>
             <h1 className="text-xl font-bold text-gray-900">Conferência da Rota</h1>
           </div>
           {!started ? (

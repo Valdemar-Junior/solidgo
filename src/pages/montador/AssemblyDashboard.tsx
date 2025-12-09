@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Package, MapPin, User as UserIcon, Calendar, Camera, CheckCircle, Clock, AlertCircle, Plus } from 'lucide-react';
+import { Package, MapPin, User as UserIcon, Calendar, Camera, CheckCircle, Clock, AlertCircle, Plus, ArrowLeft } from 'lucide-react';
 import { toast } from 'sonner';
 import { supabase } from '../../supabase/client';
 import { AssemblyProductWithDetails } from '../../types/database';
@@ -263,10 +263,19 @@ export default function AssemblyDashboard() {
       {/* Header */}
       <div className="bg-white rounded-lg shadow p-6">
         <div className="flex items-center justify-between">
-          <h1 className="text-2xl font-bold text-gray-900 flex items-center">
-            <Package className="h-6 w-6 mr-2" />
-            Dashboard de Montagem
-          </h1>
+          <div className="flex items-center gap-3">
+             <button 
+               onClick={() => navigate(-1)} 
+               className="p-2 -ml-2 hover:bg-gray-100 rounded-full text-gray-600 transition-colors"
+               title="Voltar"
+             >
+               <ArrowLeft className="h-6 w-6" />
+             </button>
+             <h1 className="text-2xl font-bold text-gray-900 flex items-center">
+               <Package className="h-6 w-6 mr-2" />
+               Dashboard de Montagem
+             </h1>
+          </div>
           <div className="flex items-center space-x-2">
             <span className="bg-indigo-100 text-indigo-800 px-3 py-1 rounded-full text-sm font-medium">Montador</span>
             <button onClick={logout} className="px-3 py-2 bg-gray-100 text-gray-800 rounded border hover:bg-gray-200">Sair</button>
