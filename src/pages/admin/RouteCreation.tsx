@@ -861,12 +861,18 @@ function RouteCreationContent() {
                                  for (const it of itemsByLocal) rows.push({ order: o, item: it });
                                }
 
+                               const isTrue = (v:any) => {
+                                 if (typeof v === 'boolean') return v;
+                                 const s = String(v || '').trim().toLowerCase();
+                                 return s === 'true' || s === '1' || s === 'sim' || s === 's' || s === 'y' || s === 'yes' || s === 't';
+                               };
+
                                return rows.map(({ order: o, item: it }, idx) => {
                                  const isSelected = selectedOrders.has(o.id);
                                  const raw: any = o.raw_json || {};
                                  const addr: any = o.address_json || {};
-                                 const temFreteFull = String(o.tem_frete_full || raw?.tem_frete_full || '').toLowerCase();
-                                 const hasAssembly = String(it?.has_assembly || '').toLowerCase();
+                                 const temFreteFull = isTrue(o.tem_frete_full) || isTrue(raw?.tem_frete_full);
+                                 const hasAssembly = isTrue(it?.has_assembly);
 
                                  const values: any = {
                                    data: formatDate(o.created_at),
@@ -906,19 +912,19 @@ function RouteCreationContent() {
                                        <td key={c.id} className="px-4 py-3 text-gray-700 whitespace-nowrap">
                                          {c.id === 'produto' ? (
                                            <div className="flex items-center gap-2">
-                                             <span>{values[c.id]}</span>
-                                             {hasAssembly === 'true' || hasAssembly === '1' ? (
+                                             {hasAssembly && (
                                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-orange-100 text-orange-700 border border-orange-200" title="Produto com montagem">
                                                  <Hammer className="h-3.5 w-3.5" />
                                                  Montagem
                                                </span>
-                                             ) : null}
-                                             {(temFreteFull === 'true' || temFreteFull === '1' || temFreteFull === 'sim') ? (
+                                             )}
+                                             {temFreteFull && (
                                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-yellow-100 text-yellow-800 border border-yellow-200" title="Frete Full">
                                                  <Zap className="h-3.5 w-3.5" />
                                                  Full
                                                </span>
-                                             ) : null}
+                                             )}
+                                             <span className="truncate max-w-[420px]">{values[c.id]}</span>
                                            </div>
                                          ) : (
                                            values[c.id] || '-'
