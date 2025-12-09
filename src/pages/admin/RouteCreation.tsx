@@ -835,19 +835,34 @@ function RouteCreationContent() {
                                      return true;
                                  }).map((o: any) => {
                                      const isSelected = selectedOrders.has(o.id);
-                                     const raw = o.raw_json || {};
-                                     const addr = o.address_json || {};
-                                     
-                                     // Values mapping
+                                    const raw = o.raw_json || {};
+                                    const addr = o.address_json || {};
+                                    const items = Array.isArray(o.items_json) ? o.items_json : [];
+                                    const firstItem = items[0] || {};
+                                    
+                                    // Values mapping
                                     const values: any = {
                                         data: formatDate(o.created_at),
                                         pedido: o.order_id_erp || raw.lancamento_venda || '-',
-                                         cliente: o.customer_name,
-                                         telefone: o.phone,
-                                         cidade: addr.city || raw.destinatario_cidade,
-                                         bairro: addr.neighborhood || raw.destinatario_bairro,
-                                         // ... others
-                                     };
+                                        cliente: o.customer_name,
+                                        telefone: o.phone,
+                                        sku: items.map((i:any)=>i.sku).join(', ') || '-',
+                                        produto: items.map((i:any)=>i.name).join(', ') || '-',
+                                        quantidade: items.reduce((acc:number, i:any)=> acc + (Number(i.quantity)||1), 0),
+                                        department: firstItem.department || raw.departamento || '-',
+                                        brand: firstItem.brand || raw.marca || '-',
+                                        localEstocagem: firstItem.location || raw.local_estocagem || '-',
+                                        cidade: addr.city || raw.destinatario_cidade,
+                                        bairro: addr.neighborhood || raw.destinatario_bairro,
+                                        filialVenda: o.filial_venda || raw.filial_venda || '-',
+                                        operacao: raw.operacoes || '-',
+                                        vendedor: o.vendedor_nome || raw.vendedor || raw.vendedor_nome || '-',
+                                        situacao: o.status === 'pending' ? 'Pendente' : o.status === 'assigned' ? 'Atribuído' : o.status,
+                                        obsPublicas: o.observacoes_publicas || raw.observacoes || '-',
+                                        obsInternas: o.observacoes_internas || raw.observacoes_internas || '-',
+                                        endereco: [addr.street, addr.number, addr.complement].filter(Boolean).join(', ') || raw.destinatario_endereco || '-',
+                                        outrosLocs: getOrderLocations(o).join(', ') || '-'
+                                    };
 
                                      return (
                                          <tr 
