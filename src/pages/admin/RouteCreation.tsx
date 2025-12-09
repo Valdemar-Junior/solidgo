@@ -207,7 +207,7 @@ function RouteCreationContent() {
   // --- EFFECTS ---
 
   useEffect(() => {
-    loadData();
+    loadData(true);
   }, []);
 
   // Restore persisted selections and scroll position
@@ -439,9 +439,9 @@ function RouteCreationContent() {
   };
 
   // --- DATA LOADING ---
-  const loadData = async () => {
+  const loadData = async (silent: boolean = true) => {
     try {
-      if (!showRouteModal && !showCreateModal) setLoading(true);
+      if (!silent && !showRouteModal && !showCreateModal) setLoading(true);
 
       // Load available orders (pending status)
       const { data: ordersData } = await supabase
@@ -615,7 +615,7 @@ function RouteCreationContent() {
       console.error('Error loading data:', error);
       toast.error('Erro ao carregar dados');
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 
@@ -700,7 +700,7 @@ function RouteCreationContent() {
       setShowCreateModal(false);
       
       // Reload data
-      loadData();
+      loadData(false);
       
     } catch (error) {
       console.error('Error creating route:', error);
@@ -754,11 +754,11 @@ function RouteCreationContent() {
                 <Filter className="h-4 w-4 mr-2" />
                 Filtros
               </button>
-              <button 
-                onClick={()=> loadData()} 
-                disabled={loading}
-                className="inline-flex items-center px-4 py-2 rounded-lg border text-sm font-medium transition-colors bg-white border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50"
-              >
+            <button 
+              onClick={()=> loadData(false)} 
+              disabled={loading}
+              className="inline-flex items-center px-4 py-2 rounded-lg border text-sm font-medium transition-colors bg-white border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+            >
                 <RefreshCcw className={`h-4 w-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
                 Recarregar
               </button>
