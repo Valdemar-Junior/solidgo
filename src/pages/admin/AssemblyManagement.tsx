@@ -191,6 +191,23 @@ export default function AssemblyManagement() {
     fetchData();
   }, []);
 
+  // Realtime: when a delivery is marked as delivered, refresh assembly view
+  useEffect(() => {
+    try {
+      const channel = supabase
+        .channel('assembly-realtime')
+        .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'route_orders' }, (payload: any) => {
+          const st = String((payload?.new || {})?.status || '').toLowerCase();
+          if (st === 'delivered') {
+            fetchData();
+          }
+        })
+        .subscribe();
+
+      return () => { try { channel.unsubscribe(); } catch {} };
+    } catch {}
+  }, []);
+
   // Actions
   const createAssemblyRoute = async () => {
     if (!newRouteName.trim()) {
