@@ -25,7 +25,9 @@ import {
   Calendar,
   User,
   RefreshCcw,
-  ArrowLeft
+  ArrowLeft,
+  Hammer,
+  Zap
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { DeliverySheetGenerator } from '../../utils/pdf/deliverySheetGenerator';
@@ -521,10 +523,21 @@ function RouteCreationContent() {
 
   const toggleOrderSelection = (orderId: string) => {
     const newSelected = new Set(selectedOrders);
-    if (newSelected.has(orderId)) {
+    const wasSelected = newSelected.has(orderId);
+    if (wasSelected) {
       newSelected.delete(orderId);
     } else {
       newSelected.add(orderId);
+      if (filterLocalEstocagem) {
+        try {
+          const o = (orders || []).find((x:any)=> String(x.id) === String(orderId));
+          const locs = getOrderLocations(o || {}).map(l=> String(l));
+          const other = locs.filter(l=> l.toLowerCase() !== filterLocalEstocagem.toLowerCase());
+          if (other.length > 0) {
+            toast.warning(`Pedido possui itens também em outros locais: ${Array.from(new Set(other)).join(', ')}`);
+          }
+        } catch {}
+      }
     }
     setSelectedOrders(newSelected);
   };
@@ -826,82 +839,95 @@ function RouteCreationContent() {
                         <tbody className="divide-y divide-gray-100 bg-white">
                              {/* Reuse the massive mapping logic here but cleaner */}
                              {(() => {
-                                 // Simplified render for brevity - reusing logic from original file would be best here
-                                 // But to keep it working, I'll copy the map logic 
-                                 // ... (Insert filter/map logic here) ...
-                                 // For now, let's assume 'orders' is filtered by the user manually or via the useMemo approach if implemented
-                                 // Since we are doing a full rewrite, let's just map 'orders' directly but applying filters
-                                 
-                                 return orders.filter(o => {
-                                     // Apply all filters here
-                                     const addr: any = o.address_json || {};
-                                     const raw: any = o.raw_json || {};
-                                     const city = String(addr.city || raw.destinatario_cidade || '').toLowerCase();
-                                     const nb = String(addr.neighborhood || raw.destinatario_bairro || '').toLowerCase();
-                                     const client = String(o.customer_name || '').toLowerCase();
-                                     
-                                     if (filterCity && !city.includes(filterCity.toLowerCase())) return false;
-                                     if (filterNeighborhood && !nb.includes(filterNeighborhood.toLowerCase())) return false;
-                                     if (clientQuery && !client.includes(clientQuery.toLowerCase())) return false;
-                                     // ... other filters ...
-                                     return true;
-                                 }).map((o: any) => {
-                                     const isSelected = selectedOrders.has(o.id);
-                                    const raw = o.raw_json || {};
-                                    const addr = o.address_json || {};
-                                    const items = Array.isArray(o.items_json) ? o.items_json : [];
-                                    const firstItem = items[0] || {};
-                                    
-                                    // Values mapping
-                                    const values: any = {
-                                        data: formatDate(o.created_at),
-                                        pedido: o.order_id_erp || raw.lancamento_venda || '-',
-                                        cliente: o.customer_name,
-                                        telefone: o.phone,
-                                        sku: items.map((i:any)=>i.sku).join(', ') || '-',
-                                        produto: items.map((i:any)=>i.name).join(', ') || '-',
-                                        quantidade: items.reduce((acc:number, i:any)=> acc + (Number(i.quantity)||1), 0),
-                                        department: firstItem.department || raw.departamento || '-',
-                                        brand: firstItem.brand || raw.marca || '-',
-                                        localEstocagem: firstItem.location || raw.local_estocagem || '-',
-                                        cidade: addr.city || raw.destinatario_cidade,
-                                        bairro: addr.neighborhood || raw.destinatario_bairro,
-                                        filialVenda: o.filial_venda || raw.filial_venda || '-',
-                                        operacao: raw.operacoes || '-',
-                                        vendedor: o.vendedor_nome || raw.vendedor || raw.vendedor_nome || '-',
-                                        situacao: o.status === 'pending' ? 'Pendente' : o.status === 'assigned' ? 'Atribuído' : o.status,
-                                        obsPublicas: o.observacoes_publicas || raw.observacoes || '-',
-                                        obsInternas: o.observacoes_internas || raw.observacoes_internas || '-',
-                                        endereco: [addr.street, addr.number, addr.complement].filter(Boolean).join(', ') || raw.destinatario_endereco || '-',
-                                        outrosLocs: getOrderLocations(o).join(', ') || '-'
-                                    };
+                               const rows: Array<{ order: any; item: any }> = [];
+                               const filteredOrders = orders.filter((o:any) => {
+                                 const addr: any = o.address_json || {};
+                                 const raw: any = o.raw_json || {};
+                                 const city = String(addr.city || raw.destinatario_cidade || '').toLowerCase();
+                                 const nb = String(addr.neighborhood || raw.destinatario_bairro || '').toLowerCase();
+                                 const client = String(o.customer_name || '').toLowerCase();
+                                 if (filterCity && !city.includes(filterCity.toLowerCase())) return false;
+                                 if (filterNeighborhood && !nb.includes(filterNeighborhood.toLowerCase())) return false;
+                                 if (clientQuery && !client.includes(clientQuery.toLowerCase())) return false;
+                                 return true;
+                               });
 
-                                     return (
-                                         <tr 
-                                            key={o.id} 
-                                            onClick={()=> toggleOrderSelection(o.id)}
-                                            className={`group hover:bg-gray-50 transition-colors cursor-pointer ${isSelected ? 'bg-blue-50/60 hover:bg-blue-100/50' : ''}`}
-                                         >
-                                             <td className="px-4 py-3">
-                                                 <div className={`w-5 h-5 rounded border flex items-center justify-center transition-colors ${isSelected ? 'bg-blue-600 border-blue-600' : 'border-gray-300 bg-white'}`}>
-                                                     {isSelected && <CheckCircle2 className="h-3.5 w-3.5 text-white" />}
-                                                 </div>
-                                             </td>
-                                             {columnsConf.filter(c=>c.visible).map(c=> (
-                                                 <td key={c.id} className="px-4 py-3 text-gray-700 whitespace-nowrap">
-                                                     {/* Render logic specific to column */}
-                                                     {c.id === 'produto' && Array.isArray(o.items_json) ? (
-                                                         <div className="flex flex-col gap-1">
-                                                             {o.items_json.map((i:any, idx:number) => <span key={idx} className="text-xs">{i.name}</span>)}
-                                                         </div>
-                                                     ) : (
-                                                         values[c.id] || '-'
-                                                     )}
-                                                 </td>
-                                             ))}
-                                         </tr>
-                                     );
-                                 });
+                               for (const o of filteredOrders) {
+                                 const items = Array.isArray(o.items_json) ? o.items_json : [];
+                                 const itemsByLocal = filterLocalEstocagem
+                                   ? items.filter((it:any)=> String(it?.location||'').toLowerCase() === filterLocalEstocagem.toLowerCase())
+                                   : items;
+                                 if (itemsByLocal.length === 0 && filterLocalEstocagem) continue;
+                                 for (const it of itemsByLocal) rows.push({ order: o, item: it });
+                               }
+
+                               return rows.map(({ order: o, item: it }, idx) => {
+                                 const isSelected = selectedOrders.has(o.id);
+                                 const raw: any = o.raw_json || {};
+                                 const addr: any = o.address_json || {};
+                                 const temFreteFull = String(o.tem_frete_full || raw?.tem_frete_full || '').toLowerCase();
+                                 const hasAssembly = String(it?.has_assembly || '').toLowerCase();
+
+                                 const values: any = {
+                                   data: formatDate(o.created_at),
+                                   pedido: o.order_id_erp || raw.lancamento_venda || '-',
+                                   cliente: o.customer_name,
+                                   telefone: o.phone,
+                                   sku: it.sku || '-',
+                                   produto: it.name || '-',
+                                   quantidade: Number(it.quantity || 1),
+                                   department: it.department || raw.departamento || '-',
+                                   brand: it.brand || raw.marca || '-',
+                                   localEstocagem: it.location || raw.local_estocagem || '-',
+                                   cidade: addr.city || raw.destinatario_cidade,
+                                   bairro: addr.neighborhood || raw.destinatario_bairro,
+                                   filialVenda: o.filial_venda || raw.filial_venda || '-',
+                                   operacao: raw.operacoes || '-',
+                                   vendedor: o.vendedor_nome || raw.vendedor || raw.vendedor_nome || '-',
+                                   situacao: o.status === 'pending' ? 'Pendente' : o.status === 'assigned' ? 'Atribuído' : o.status,
+                                   obsPublicas: o.observacoes_publicas || raw.observacoes || '-',
+                                   obsInternas: o.observacoes_internas || raw.observacoes_internas || '-',
+                                   endereco: [addr.street, addr.number, addr.complement].filter(Boolean).join(', ') || raw.destinatario_endereco || '-',
+                                   outrosLocs: getOrderLocations(o).join(', ') || '-'
+                                 };
+
+                                 return (
+                                   <tr
+                                     key={`${o.id}-${it.sku}-${idx}`}
+                                     onClick={()=> toggleOrderSelection(o.id)}
+                                     className={`group hover:bg-gray-50 transition-colors cursor-pointer ${isSelected ? 'bg-blue-50/60 hover:bg-blue-100/50' : ''}`}
+                                   >
+                                     <td className="px-4 py-3">
+                                       <div className={`w-5 h-5 rounded border flex items-center justify-center transition-colors ${isSelected ? 'bg-blue-600 border-blue-600' : 'border-gray-300 bg-white'}`}>
+                                         {isSelected && <CheckCircle2 className="h-3.5 w-3.5 text-white" />}
+                                       </div>
+                                     </td>
+                                     {columnsConf.filter(c=>c.visible).map(c=> (
+                                       <td key={c.id} className="px-4 py-3 text-gray-700 whitespace-nowrap">
+                                         {c.id === 'produto' ? (
+                                           <div className="flex items-center gap-2">
+                                             <span>{values[c.id]}</span>
+                                             {hasAssembly === 'true' || hasAssembly === '1' ? (
+                                               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-orange-100 text-orange-700 border border-orange-200" title="Produto com montagem">
+                                                 <Hammer className="h-3.5 w-3.5" />
+                                                 Montagem
+                                               </span>
+                                             ) : null}
+                                             {(temFreteFull === 'true' || temFreteFull === '1' || temFreteFull === 'sim') ? (
+                                               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-yellow-100 text-yellow-800 border border-yellow-200" title="Frete Full">
+                                                 <Zap className="h-3.5 w-3.5" />
+                                                 Full
+                                               </span>
+                                             ) : null}
+                                           </div>
+                                         ) : (
+                                           values[c.id] || '-'
+                                         )}
+                                       </td>
+                                     ))}
+                                   </tr>
+                                 );
+                               });
                              })()}
                         </tbody>
                     </table>
