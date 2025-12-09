@@ -27,7 +27,8 @@ import {
   RefreshCcw,
   ArrowLeft,
   Hammer,
-  Zap
+  Zap,
+  MessageCircle
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { DeliverySheetGenerator } from '../../utils/pdf/deliverySheetGenerator';
@@ -935,6 +936,11 @@ function RouteCreationContent() {
                                  const addr: any = o.address_json || {};
                                  const temFreteFull = isTrue(o.tem_frete_full) || isTrue(raw?.tem_frete_full);
                                  const hasAssembly = isTrue(it?.has_assembly);
+                                 const waLink = (() => {
+                                   const p = String(o.phone || '').replace(/\D/g, '');
+                                   const e164 = p ? (p.startsWith('55') ? p : '55' + p) : '';
+                                   return e164 ? `https://wa.me/${e164}` : '';
+                                 })();
 
                                  const values: any = {
                                    data: formatDate(o.created_at),
@@ -970,32 +976,41 @@ function RouteCreationContent() {
                                          {isSelected && <CheckCircle2 className="h-3.5 w-3.5 text-white" />}
                                        </div>
                                      </td>
-                                     {columnsConf.filter(c=>c.visible).map(c=> (
-                                       <td key={c.id} className="px-4 py-3 text-gray-700 whitespace-nowrap">
-                                         {c.id === 'flags' ? (
-                                           <div className="flex items-center gap-2">
-                                             {hasAssembly && (
-                                               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-orange-100 text-orange-700 border border-orange-200" title="Produto com montagem">
-                                                 <Hammer className="h-3.5 w-3.5" />
-                                                 Montagem
-                                               </span>
-                                             )}
-                                             {temFreteFull && (
-                                               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-yellow-100 text-yellow-800 border border-yellow-200" title="Frete Full">
-                                                 <Zap className="h-3.5 w-3.5" />
-                                                 Full
-                                               </span>
-                                             )}
-                                           </div>
-                                         ) : c.id === 'produto' ? (
-                                           <div className="flex items-center gap-2">
-                                             <span className="truncate max-w-[420px]">{values[c.id]}</span>
-                                           </div>
-                                         ) : (
-                                           values[c.id] || '-'
-                                         )}
-                                       </td>
-                                     ))}
+                                        {columnsConf.filter(c=>c.visible).map(c=> (
+                                          <td key={c.id} className="px-4 py-3 text-gray-700 whitespace-nowrap">
+                                            {c.id === 'telefone' ? (
+                                              <div className="flex items-center gap-2">
+                                                {waLink && (
+                                                  <a href={waLink} target="_blank" rel="noreferrer" className="p-1 rounded text-green-600 hover:bg-green-50" title="Abrir WhatsApp">
+                                                    <MessageCircle className="h-4 w-4" />
+                                                  </a>
+                                                )}
+                                                <span>{values[c.id] || '-'}</span>
+                                              </div>
+                                            ) : c.id === 'flags' ? (
+                                              <div className="flex items-center gap-2">
+                                                {hasAssembly && (
+                                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-orange-100 text-orange-700 border border-orange-200" title="Produto com montagem">
+                                                    <Hammer className="h-3.5 w-3.5" />
+                                                    Montagem
+                                                  </span>
+                                                )}
+                                                {temFreteFull && (
+                                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-yellow-100 text-yellow-800 border border-yellow-200" title="Frete Full">
+                                                    <Zap className="h-3.5 w-3.5" />
+                                                    Full
+                                                  </span>
+                                                )}
+                                              </div>
+                                            ) : c.id === 'produto' ? (
+                                              <div className="flex items-center gap-2">
+                                                <span className="truncate max-w-[420px]">{values[c.id]}</span>
+                                              </div>
+                                            ) : (
+                                              values[c.id] || '-'
+                                            )}
+                                          </td>
+                                        ))}
                                    </tr>
                                  );
                                });
