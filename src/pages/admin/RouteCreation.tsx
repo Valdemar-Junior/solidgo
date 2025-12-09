@@ -151,6 +151,7 @@ function RouteCreationContent() {
   const [filterHasAssembly, setFilterHasAssembly] = useState<boolean>(false);
   const [filterSaleDate, setFilterSaleDate] = useState<string>('');
   const [strictLocal, setStrictLocal] = useState<boolean>(false);
+  const [filterBrand, setFilterBrand] = useState<string>('');
 
   // Logic specific
   const [selectedExistingRouteId, setSelectedExistingRouteId] = useState<string>('');
@@ -309,6 +310,7 @@ function RouteCreationContent() {
           if ('hasAssembly' in f) setFilterHasAssembly(!!f.hasAssembly);
           if ('operation' in f) setFilterOperation(f.operation || '');
           if ('saleDate' in f) setFilterSaleDate(f.saleDate || '');
+          if ('brand' in f) setFilterBrand(f.brand || '');
         }
       }
     } catch {}
@@ -330,10 +332,11 @@ function RouteCreationContent() {
         hasAssembly: filterHasAssembly,
         operation: filterOperation,
         saleDate: filterSaleDate,
+        brand: filterBrand,
       };
       localStorage.setItem('rc_filters', JSON.stringify(payload));
     } catch {}
-  }, [filterCity, filterNeighborhood, filterFilialVenda, filterLocalEstocagem, filterSeller, filterClient, filterDepartment, strictDepartment, filterFreightFull, filterHasAssembly, filterOperation]);
+  }, [filterCity, filterNeighborhood, filterFilialVenda, filterLocalEstocagem, strictLocal, filterSeller, filterClient, filterDepartment, strictDepartment, filterFreightFull, filterHasAssembly, filterOperation, filterSaleDate, filterBrand]);
 
   // --- MEMOS (Options) ---
   const cityOptions = useMemo(() => Array.from(new Set((orders || []).map((o: any) => String((o.address_json?.city || o.raw_json?.destinatario_cidade || '')).trim()).filter(Boolean))).sort(), [orders]);
@@ -351,6 +354,12 @@ function RouteCreationContent() {
     const fromItems = (orders || []).flatMap((o: any) => Array.isArray(o.items_json) ? o.items_json.map((it: any) => String(it?.department || '').trim()) : []);
     const fromRaw = (orders || []).flatMap((o: any) => Array.isArray(o.raw_json?.produtos_locais) ? o.raw_json.produtos_locais.map((p: any) => String(p?.departamento || '').trim()) : []);
     return Array.from(new Set([...(fromItems||[]), ...(fromRaw||[])] .filter(Boolean))).sort();
+  }, [orders]);
+  const brandOptions = useMemo(() => {
+    const fromItems = (orders || []).flatMap((o: any) => Array.isArray(o.items_json) ? o.items_json.map((it: any) => String(it?.brand || '').trim()) : []);
+    const fromProdLoc = (orders || []).flatMap((o: any) => Array.isArray(o.raw_json?.produtos_locais) ? o.raw_json.produtos_locais.map((p: any) => String(p?.marca || '').trim()) : []);
+    const fromRawSingle = (orders || []).map((o: any) => String(o.raw_json?.marca || '').trim());
+    return Array.from(new Set([...(fromItems||[]), ...(fromProdLoc||[]), ...(fromRawSingle||[])].filter(Boolean))).sort();
   }, [orders]);
   
   const filteredClients = useMemo(() => {
@@ -492,6 +501,7 @@ function RouteCreationContent() {
         let byOther = byLocal;
         if (filterHasAssembly) byOther = byOther.filter((it:any)=> isTrueGlobal(it?.has_assembly));
         if (filterDepartment) byOther = byOther.filter((it:any)=> String(it?.department||'').toLowerCase() === filterDepartment.toLowerCase());
+        if (filterBrand) byOther = byOther.filter((it:any)=> String(it?.brand||'').toLowerCase() === filterBrand.toLowerCase());
         if (byOther.length > 0) ids.add(String(o.id));
       }
       return ids;
@@ -842,6 +852,15 @@ function RouteCreationContent() {
             <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5 animate-in slide-in-from-top-2 duration-200">
                 <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-4">
                     <div className="space-y-1">
+                        <label className="text-xs font-semibold text-gray-500 uppercase">Data da Venda</label>
+                        <input 
+                          type="date" 
+                          value={filterSaleDate}
+                          onChange={(e)=> setFilterSaleDate(e.target.value)}
+                          className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all" 
+                        />
+                    </div>
+                    <div className="space-y-1">
                         <label className="text-xs font-semibold text-gray-500 uppercase">Cidade</label>
                         <select value={filterCity} onChange={(e)=>setFilterCity(e.target.value)} className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all">
                             <option value="">Todas</option>
@@ -917,20 +936,18 @@ function RouteCreationContent() {
                         </div>
                     </div>
                     <div className="space-y-1">
+                        <label className="text-xs font-semibold text-gray-500 uppercase">Marca</label>
+                        <select value={filterBrand} onChange={(e)=>setFilterBrand(e.target.value)} className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all">
+                            <option value="">Todas</option>
+                            {brandOptions.map((c)=> (<option key={c} value={c}>{c}</option>))}
+                        </select>
+                    </div>
+                    <div className="space-y-1">
                         <label className="text-xs font-semibold text-gray-500 uppercase">Operação</label>
                         <select value={filterOperation} onChange={(e)=>setFilterOperation(e.target.value)} className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all">
                             <option value="">Todas</option>
                             {operationOptions.map((c)=> (<option key={c} value={c}>{c}</option>))}
                         </select>
-                    </div>
-                    <div className="space-y-1">
-                        <label className="text-xs font-semibold text-gray-500 uppercase">Data da Venda</label>
-                        <input 
-                          type="date" 
-                          value={filterSaleDate}
-                          onChange={(e)=> setFilterSaleDate(e.target.value)}
-                          className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all" 
-                        />
                     </div>
                     <div className="space-y-1">
                         <label className="text-xs font-semibold text-gray-500 uppercase">Frete Full</label>
@@ -950,7 +967,7 @@ function RouteCreationContent() {
                 
                 <div className="flex justify-end mt-4 pt-4 border-t border-gray-100">
                      <button 
-                        onClick={()=>{setFilterCity('');setFilterNeighborhood('');setFilterFilialVenda('');setFilterLocalEstocagem('');setStrictLocal(false);setFilterSeller('');setFilterClient('');setClientQuery('');setFilterFreightFull('');setFilterOperation('');setFilterDepartment('');setFilterHasAssembly(false);setFilterSaleDate('');}} 
+                        onClick={()=>{setFilterCity('');setFilterNeighborhood('');setFilterFilialVenda('');setFilterLocalEstocagem('');setStrictLocal(false);setFilterSeller('');setFilterClient('');setClientQuery('');setFilterFreightFull('');setFilterOperation('');setFilterDepartment('');setFilterHasAssembly(false);setFilterSaleDate('');setFilterBrand('');}} 
                         className="text-sm text-red-600 hover:text-red-800 font-medium flex items-center"
                      >
                         <X className="h-3 w-3 mr-1" /> Limpar filtros
@@ -1083,7 +1100,8 @@ function RouteCreationContent() {
                                  let itemsFiltered = itemsByLocal;
                                  if (filterHasAssembly) itemsFiltered = itemsFiltered.filter((it:any)=> isTrue(it?.has_assembly));
                                  if (filterDepartment) itemsFiltered = itemsFiltered.filter((it:any)=> String(it?.department||'').toLowerCase() === filterDepartment.toLowerCase());
-                                 if (itemsFiltered.length === 0 && (filterLocalEstocagem || filterHasAssembly)) continue;
+                                 if (filterBrand) itemsFiltered = itemsFiltered.filter((it:any)=> String(it?.brand||'').toLowerCase() === filterBrand.toLowerCase());
+                                 if (itemsFiltered.length === 0 && (filterLocalEstocagem || filterHasAssembly || filterBrand || filterDepartment)) continue;
                                  for (const it of itemsFiltered) rows.push({ order: o, item: it });
                                }
 
