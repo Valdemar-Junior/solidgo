@@ -116,7 +116,7 @@ function RouteCreationContent() {
   const [observations, setObservations] = useState<string>('');
   
   // UI States
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [routesList, setRoutesList] = useState<RouteWithDetails[]>([]);
   
