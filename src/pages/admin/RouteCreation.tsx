@@ -790,6 +790,13 @@ function RouteCreationContent() {
                         </div>
                     </div>
                     <div className="space-y-1">
+                        <label className="text-xs font-semibold text-gray-500 uppercase">Operação</label>
+                        <select value={filterOperation} onChange={(e)=>setFilterOperation(e.target.value)} className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all">
+                            <option value="">Todas</option>
+                            {operationOptions.map((c)=> (<option key={c} value={c}>{c}</option>))}
+                        </select>
+                    </div>
+                    <div className="space-y-1">
                         <label className="text-xs font-semibold text-gray-500 uppercase">Frete Full</label>
                         <div className="flex items-center gap-2 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg">
                             <input id="ffull" type="checkbox" className="h-4 w-4" checked={Boolean(filterFreightFull)} onChange={(e)=> setFilterFreightFull(e.target.checked ? '1' : '')} />
@@ -908,11 +915,13 @@ function RouteCreationContent() {
                                  const city = String(addr.city || raw.destinatario_cidade || '').toLowerCase();
                                  const nb = String(addr.neighborhood || raw.destinatario_bairro || '').toLowerCase();
                                  const client = String(o.customer_name || '').toLowerCase();
+                                 const seller = String(o.vendedor_nome || raw.vendedor || '').toLowerCase();
                                  if (filterCity && !city.includes(filterCity.toLowerCase())) return false;
                                  if (filterNeighborhood && !nb.includes(filterNeighborhood.toLowerCase())) return false;
                                  if (clientQuery && !client.includes(clientQuery.toLowerCase())) return false;
                                  if (filterFreightFull && !isTrue(o.tem_frete_full || raw?.tem_frete_full)) return false;
                                  if (filterOperation && !String(raw.operacoes || '').toLowerCase().includes(filterOperation.toLowerCase())) return false;
+                                 if (filterSeller && !seller.includes(filterSeller.toLowerCase())) return false;
                                  return true;
                                });
 
