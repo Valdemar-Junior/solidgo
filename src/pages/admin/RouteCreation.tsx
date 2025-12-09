@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { supabase } from '../../supabase/client';
 import type { Order, DriverWithUser, Vehicle, RouteWithDetails } from '../../types/database';
 import { 
@@ -21,14 +21,78 @@ import {
   ChevronDown, 
   ChevronUp,
   MapPin,
-  Calendar
+  Calendar,
+  User,
+  RefreshCcw
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { DeliverySheetGenerator } from '../../utils/pdf/deliverySheetGenerator';
 import { PDFDocument } from 'pdf-lib';
 import { useAuthStore } from '../../stores/authStore';
 
-export default function RouteCreation() {
+// --- ERROR BOUNDARY ---
+class RouteCreationErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { hasError: boolean; error: Error | null }
+> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
+    console.error('RouteCreation Error:', error, errorInfo);
+  }
+
+  handleReset = () => {
+    try {
+      localStorage.removeItem('rc_columns_conf');
+      localStorage.removeItem('rc_showCreateModal');
+      localStorage.removeItem('rc_showRouteModal');
+      localStorage.removeItem('rc_selectedRouteId');
+      window.location.reload();
+    } catch (e) {
+      console.error('Failed to clear storage', e);
+      window.location.reload();
+    }
+  };
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50 p-4">
+          <div className="bg-white rounded-xl shadow-lg p-8 max-w-md w-full text-center">
+            <div className="mx-auto w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mb-6">
+              <AlertTriangle className="h-8 w-8 text-red-600" />
+            </div>
+            <h2 className="text-xl font-bold text-gray-900 mb-2">Ops! Algo deu errado.</h2>
+            <p className="text-gray-500 mb-6">
+              Ocorreu um erro ao carregar a tela de rotas. Isso geralmente acontece devido a uma configuração antiga salva no navegador.
+            </p>
+            <div className="bg-red-50 p-3 rounded-lg text-left text-xs font-mono text-red-700 mb-6 overflow-auto max-h-32">
+              {this.state.error?.message || 'Erro desconhecido'}
+            </div>
+            <button
+              onClick={this.handleReset}
+              className="w-full flex items-center justify-center px-4 py-3 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 transition-colors shadow-sm"
+            >
+              <RefreshCcw className="h-4 w-4 mr-2" />
+              Limpar Configurações e Recarregar
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    return this.props.children;
+  }
+}
+
+function RouteCreationContent() {
   // --- STATE ---
   const [orders, setOrders] = useState<Order[]>([]);
   const [drivers, setDrivers] = useState<DriverWithUser[]>([]);
@@ -227,6 +291,17 @@ export default function RouteCreation() {
   }, [clientOptions, clientQuery]);
 
   // --- HELPERS ---
+  const formatDate = (dateStr: string | null | undefined) => {
+    if (!dateStr) return '-';
+    try {
+      const d = new Date(dateStr);
+      if (isNaN(d.getTime())) return '-';
+      return d.toLocaleDateString('pt-BR');
+    } catch {
+      return '-';
+    }
+  };
+
   const getOrderLocations = (o:any) => {
     const itemsLocs = Array.isArray(o.items_json) ? o.items_json.map((it:any)=> String(it?.location||'').trim()).filter(Boolean) : [];
     const rawLocs = Array.isArray(o.raw_json?.produtos_locais) ? o.raw_json.produtos_locais.map((p:any)=> String(p?.local_estocagem||'').trim()).filter(Boolean) : [];
@@ -764,9 +839,9 @@ export default function RouteCreation() {
                                      const addr = o.address_json || {};
                                      
                                      // Values mapping
-                                     const values: any = {
-                                         data: new Date(o.created_at).toLocaleDateString('pt-BR'),
-                                         pedido: o.order_id_erp || raw.lancamento_venda || '-',
+                                    const values: any = {
+                                        data: formatDate(o.created_at),
+                                        pedido: o.order_id_erp || raw.lancamento_venda || '-',
                                          cliente: o.customer_name,
                                          telefone: o.phone,
                                          cidade: addr.city || raw.destinatario_cidade,
@@ -853,7 +928,7 @@ export default function RouteCreation() {
                                             <h3 className="font-bold text-gray-900 text-lg group-hover:text-blue-600 transition-colors">{route.name}</h3>
                                             <p className="text-xs text-gray-500 mt-1 flex items-center">
                                                 <Calendar className="h-3 w-3 mr-1" />
-                                                {new Date(route.created_at).toLocaleDateString('pt-BR')}
+                                                {formatDate(route.created_at)}
                                             </p>
                                         </div>
                                         <span className={`px-2.5 py-1 rounded-full text-xs font-bold border ${statusColors[route.status] || 'bg-gray-100'}`}>
@@ -1787,5 +1862,13 @@ export default function RouteCreation() {
       )}
 
     </div>
+  );
+}
+
+export default function RouteCreation() {
+  return (
+    <RouteCreationErrorBoundary>
+      <RouteCreationContent />
+    </RouteCreationErrorBoundary>
   );
 }
