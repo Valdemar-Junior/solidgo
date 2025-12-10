@@ -1195,6 +1195,7 @@ export default function AssemblyManagement() {
                     setEditRouteName(routeDetails.route.name);
                     setEditRouteDeadline(routeDetails.route.deadline ? routeDetails.route.deadline.substring(0, 10) : '');
                     setEditRouteObservations(routeDetails.route.observations || '');
+                    setShowRouteDetailsModal(false);
                     setShowRouteEditModal(true);
                   }}
                   className="inline-flex items-center px-3 py-2 border border-transparent text-sm font-medium rounded-lg text-blue-700 bg-blue-50 hover:bg-blue-100"
@@ -1207,6 +1208,7 @@ export default function AssemblyManagement() {
                     setRouteBeingManaged(routeDetails.route);
                     setSelectedToRemove([]);
                     setSelectedToAdd([]);
+                    setShowRouteDetailsModal(false);
                     setShowRouteManageModal(true);
                   }}
                   className="inline-flex items-center px-3 py-2 border border-transparent text-sm font-medium rounded-lg text-purple-700 bg-purple-50 hover:bg-purple-100"
