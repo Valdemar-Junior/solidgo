@@ -568,25 +568,36 @@ function RouteCreationContent() {
       } catch {}
 
       // Drivers Logic: ensure mapping from users(role=driver) exists, then load join
-      const { data: existingDrivers } = await supabase
-        .from('drivers')
-        .select('id, user_id, name, active, user:users!user_id(id,name,email)');
-      const { data: driverUsers } = await supabase
-        .from('users')
-        .select('id,name,email')
-        .eq('role', 'driver');
-      const mappedUserIds = new Set<string>((existingDrivers || []).map((d: any)=> String(d.user_id || '')));
-      const toCreate = (driverUsers || []).filter((u: any)=> !mappedUserIds.has(String(u.id)));
-      if (toCreate.length > 0) {
-        const rows = toCreate.map((u: any)=> ({ user_id: u.id, name: u.name || u.email || 'Motorista', active: true }));
-        try {
-          await supabase.from('drivers').insert(rows);
-        } catch {}
+      // Try RPC first (respects RLS via stored procedure), then fallback to table
+      let driverList: any[] = [];
+      try {
+        const { data: rpcDrivers } = await supabase.rpc('list_drivers');
+        if (Array.isArray(rpcDrivers) && rpcDrivers.length > 0) {
+          driverList = rpcDrivers.map((d: any) => ({ id: String(d.driver_id), user: { id: String(d.user_id || ''), name: String(d.name || '') }, active: true }));
+        }
+      } catch {}
+      if (driverList.length === 0) {
+        const { data: directDrivers } = await supabase
+          .from('drivers')
+          .select('id, user_id, name, active, user:users!user_id(id,name,email)');
+        driverList = (directDrivers || []) as any[];
+        // If still empty, attempt to map from users(role=driver) and insert missing
+        if (driverList.length === 0) {
+          const { data: driverUsers } = await supabase
+            .from('users')
+            .select('id,name,email')
+            .eq('role', 'driver');
+          if (Array.isArray(driverUsers) && driverUsers.length > 0) {
+            const rows = driverUsers.map((u: any)=> ({ user_id: u.id, name: u.name || u.email || 'Motorista', active: true }));
+            try { await supabase.from('drivers').insert(rows); } catch {}
+            const { data: directDrivers2 } = await supabase
+              .from('drivers')
+              .select('id, user_id, name, active, user:users!user_id(id,name,email)');
+            driverList = (directDrivers2 || []) as any[];
+          }
+        }
       }
-      const { data: directDrivers } = await supabase
-        .from('drivers')
-        .select('id, user_id, name, active, user:users!user_id(id,name,email)');
-      setDrivers(((directDrivers || []) as any[]));
+      setDrivers(driverList as any[]);
       
       if (vehiclesData) setVehicles(vehiclesData as Vehicle[]);
 
