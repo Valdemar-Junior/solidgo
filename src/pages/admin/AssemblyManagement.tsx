@@ -393,17 +393,8 @@ export default function AssemblyManagement() {
         .delete()
         .eq('id', routeIdToDelete)
         .select();
-      if (error || !deletedRows || deletedRows.length === 0) {
-        // Fallback: cancelar se DELETE não permitido por RLS
-        const { error: updateErr } = await supabase
-          .from('assembly_routes')
-          .update({ status: 'cancelled' })
-          .eq('id', routeIdToDelete);
-        if (updateErr) throw updateErr;
-        toast.warning('Romaneio sem permissão para excluir — marcado como cancelado');
-      } else {
-        toast.success('Romaneio excluído com sucesso');
-      }
+      if (error) throw error;
+      toast.success('Romaneio excluído com sucesso');
     } catch (e) {
       console.error(e);
       toast.error('Não foi possível excluir/cancelar o romaneio');
