@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Package, MapPin, User as UserIcon, Calendar, Camera, CheckCircle, Clock, AlertCircle, Plus } from 'lucide-react';
+import { Package, MapPin, User as UserIcon, Calendar, Camera, CheckCircle, Clock, AlertCircle } from 'lucide-react';
 import { toast } from 'sonner';
 import { supabase } from '../../supabase/client';
 import { AssemblyProductWithDetails } from '../../types/database';
@@ -8,7 +8,6 @@ import { useAuthStore } from '../../stores/authStore';
 
 export default function AssemblyDashboard() {
   const [assemblyProducts, setAssemblyProducts] = useState<AssemblyProductWithDetails[]>([]);
-  const [pendingProducts, setPendingProducts] = useState<AssemblyProductWithDetails[]>([]);
   const [myProducts, setMyProducts] = useState<AssemblyProductWithDetails[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedProduct, setSelectedProduct] = useState<AssemblyProductWithDetails | null>(null);
@@ -34,21 +33,7 @@ export default function AssemblyDashboard() {
         `)
         .order('created_at', { ascending: false });
 
-      // Buscar produtos pendentes (que ainda não foram atribuídos)
-      const { data: pendingData } = await supabase
-        .from('assembly_products')
-        .select(`
-          *,
-          order:order_id (*),
-          installer:installer_id (*),
-          route:assembly_route_id (*)
-        `)
-        .is('installer_id', null)
-        .eq('status', 'pending')
-        .order('created_at', { ascending: false });
-
       setAssemblyProducts(productsData || []);
-      setPendingProducts(pendingData || []);
       
       // Filtrar produtos atribuídos ao usuário atual
       const { data: { user } } = await supabase.auth.getUser();
@@ -286,7 +271,7 @@ export default function AssemblyDashboard() {
             </div>
             <div className="ml-4">
               <p className="text-sm font-medium text-gray-500">Total Montagens</p>
-              <p className="text-2xl font-semibold text-gray-900">{assemblyProducts.length}</p>
+              <p className="text-2xl font-semibold text-gray-900">{myProducts.length}</p>
             </div>
           </div>
         </div>
@@ -299,7 +284,7 @@ export default function AssemblyDashboard() {
             <div className="ml-4">
               <p className="text-sm font-medium text-gray-500">Pendentes</p>
               <p className="text-2xl font-semibold text-gray-900">
-                {assemblyProducts.filter(p => p.status === 'pending').length}
+                {myProducts.filter(p => p.status === 'pending').length}
               </p>
             </div>
           </div>
@@ -313,7 +298,7 @@ export default function AssemblyDashboard() {
             <div className="ml-4">
               <p className="text-sm font-medium text-gray-500">Em Andamento</p>
               <p className="text-2xl font-semibold text-gray-900">
-                {assemblyProducts.filter(p => p.status === 'in_progress').length}
+                {myProducts.filter(p => p.status === 'in_progress').length}
               </p>
             </div>
           </div>
@@ -327,111 +312,14 @@ export default function AssemblyDashboard() {
             <div className="ml-4">
               <p className="text-sm font-medium text-gray-500">Concluídas</p>
               <p className="text-2xl font-semibold text-gray-900">
-                {assemblyProducts.filter(p => p.status === 'completed').length}
+                {myProducts.filter(p => p.status === 'completed').length}
               </p>
             </div>
           </div>
         </div>
       </div>
 
-      {/* Lista de Produtos Pendentes */}
-      {pendingProducts.length > 0 && (
-        <div className="bg-white rounded-lg shadow">
-          <div className="px-6 py-4 border-b border-gray-200">
-            <div className="flex items-center justify-between">
-              <div>
-                <h2 className="text-lg font-semibold text-gray-900 text-yellow-600">Produtos Pendentes para Atribuição</h2>
-                <p className="text-sm text-gray-600">Estes produtos precisam ser atribuídos a montadores</p>
-              </div>
-              <button
-                onClick={() => window.open('/admin/montagem', '_blank')}
-                className="inline-flex items-center px-3 py-1 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-              >
-                <Plus className="h-4 w-4 mr-1" />
-                Criar Rota
-              </button>
-            </div>
-          </div>
-          
-          <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Produto</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Nº Pedido</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Nº Lançamento</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Cliente</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Endereço</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Cidade</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Bairro</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Data Venda</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Data Entrega</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Motorista</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Observações</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Obs. Internas</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
-                </tr>
-              </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
-                {pendingProducts.map((product) => {
-                  const info = getOrderCompleteInfo(product);
-                  return (
-                    <tr key={product.id} className="hover:bg-gray-50">
-                      <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
-                        {product.product_name}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        {info.orderId}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        {info.numeroLancamento}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        {info.cliente}
-                      </td>
-                      <td className="px-6 py-4 text-sm text-gray-500 max-w-xs">
-                        <div className="max-h-12 overflow-y-auto" title={info.enderecoCompleto}>
-                          {info.enderecoCompleto}
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        {info.cidade}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        {info.bairro}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        {info.dataVenda}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        {info.dataEntrega}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        {info.motoristaEntrega}
-                      </td>
-                      <td className="px-6 py-4 text-sm text-gray-500 max-w-xs">
-                        <div className="max-h-12 overflow-y-auto" title={info.observacoes}>
-                          {info.observacoes}
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 text-sm text-gray-500 max-w-xs">
-                        <div className="max-h-12 overflow-y-auto" title={info.observacoesInternas}>
-                          {info.observacoesInternas}
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getStatusColor(product.status)}`}>
-                          {getStatusLabel(product.status)}
-                        </span>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
+      {/* Tela do montador não exibe pendentes nem opção de criar rota */}
 
       {/* Lista de Montagens */}
       <div className="bg-white rounded-lg shadow">

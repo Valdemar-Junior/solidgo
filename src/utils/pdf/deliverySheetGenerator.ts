@@ -8,6 +8,9 @@ export interface DeliverySheetData {
   vehicle?: Vehicle;
   orders: Order[];
   generatedAt: string;
+  assemblyInstallerName?: string;
+  assemblyVehicleModel?: string;
+  assemblyVehiclePlate?: string;
 }
 
 export class DeliverySheetGenerator {
@@ -86,11 +89,13 @@ export class DeliverySheetGenerator {
     this.drawText(page, ``, margin + 260, gridY - 14, { font: helveticaFont, size: 11, color: { r: 0, g: 0, b: 0 } });
     this.drawText(page, `Ajudante`, margin + 360, gridY, { font: helveticaBoldFont, size: 10, color: { r: 0, g: 0, b: 0 } });
     this.drawText(page, ``, margin + 360, gridY - 14, { font: helveticaFont, size: 11, color: { r: 0, g: 0, b: 0 } });
-    this.drawText(page, `Transportador`, margin, gridY - 32, { font: helveticaBoldFont, size: 10, color: { r: 0, g: 0, b: 0 } });
+    this.drawText(page, isAssemblySheet ? `Montador` : `Transportador`, margin, gridY - 32, { font: helveticaBoldFont, size: 10, color: { r: 0, g: 0, b: 0 } });
     this.drawText(page, `Veículo`, margin + 260, gridY - 32, { font: helveticaBoldFont, size: 10, color: { r: 0, g: 0, b: 0 } });
     this.drawText(page, `Placa`, margin + 420, gridY - 32, { font: helveticaBoldFont, size: 10, color: { r: 0, g: 0, b: 0 } });
-    const vehicleText = data.vehicle ? `${data.vehicle.model}` : '';
-    const plateText = data.vehicle ? `${data.vehicle.plate}` : '';
+    const vehicleText = isAssemblySheet ? (data.assemblyVehicleModel || '') : (data.vehicle ? `${data.vehicle.model}` : '');
+    const plateText = isAssemblySheet ? (data.assemblyVehiclePlate || '') : (data.vehicle ? `${data.vehicle.plate}` : '');
+    const installerText = isAssemblySheet ? (data.assemblyInstallerName || '') : '';
+    this.drawText(page, installerText, margin, gridY - 46, { font: helveticaFont, size: 11, color: { r: 0, g: 0, b: 0 } });
     this.drawText(page, vehicleText, margin + 260, gridY - 46, { font: helveticaFont, size: 11, color: { r: 0, g: 0, b: 0 } });
     this.drawText(page, plateText, margin + 420, gridY - 46, { font: helveticaFont, size: 11, color: { r: 0, g: 0, b: 0 } });
     y = gridY - 60;

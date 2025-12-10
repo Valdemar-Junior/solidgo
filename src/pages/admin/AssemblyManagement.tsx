@@ -24,7 +24,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { supabase } from '../../supabase/client';
-import { AssemblyRoute, AssemblyProductWithDetails, User } from '../../types/database';
+import { AssemblyRoute, AssemblyProductWithDetails, User, Vehicle } from '../../types/database';
 import { DeliverySheetGenerator, type DeliverySheetData } from '../../utils/pdf/deliverySheetGenerator';
 
 export default function AssemblyManagement() {
@@ -33,6 +33,7 @@ export default function AssemblyManagement() {
   const [assemblyRoutes, setAssemblyRoutes] = useState<AssemblyRoute[]>([]);
   const [assemblyProducts, setAssemblyProducts] = useState<AssemblyProductWithDetails[]>([]);
   const [montadores, setMontadores] = useState<User[]>([]);
+  const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [loading, setLoading] = useState(true);
   
   // Modals
@@ -46,6 +47,8 @@ export default function AssemblyManagement() {
   const [newRouteName, setNewRouteName] = useState('');
   const [newRouteDeadline, setNewRouteDeadline] = useState('');
   const [newRouteObservations, setNewRouteObservations] = useState('');
+  const [selectedMontadorId, setSelectedMontadorId] = useState<string>('');
+  const [selectedVehicleId, setSelectedVehicleId] = useState<string>('');
   
   // Edit Data
   const [routeBeingEdited, setRouteBeingEdited] = useState<AssemblyRoute | null>(null);
@@ -108,6 +111,11 @@ export default function AssemblyManagement() {
         .from('users')
         .select('*')
         .eq('role', 'montador');
+
+      const { data: vehiclesData } = await supabase
+        .from('vehicles')
+        .select('*')
+        .eq('active', true);
       
       // Produtos pendentes e sem romaneio (assembly_route_id nulo)
       const pendingUnrouted = (productsData || []).filter((p: any) => p.status === 'pending' && !p.assembly_route_id);
@@ -170,6 +178,7 @@ export default function AssemblyManagement() {
       setAssemblyRoutes(routesData || []);
       setAssemblyProducts(productsData || []);
       setMontadores(montadoresData || []);
+      setVehicles(vehiclesData || []);
       setAvailableProducts(pendingUnrouted || []);
       setGroupedProducts(groupedByLancamento);
       setDeliveryInfo(deliveryByOrderId);
@@ -221,12 +230,18 @@ export default function AssemblyManagement() {
     }
 
     try {
+      const vehiclePlate = vehicles.find(v => v.id === selectedVehicleId)?.plate;
+      const observationsJoined = [newRouteObservations?.trim() || '', vehiclePlate ? `Veículo: ${vehiclePlate}` : '']
+        .filter(Boolean)
+        .join('\n') || null;
       const { data: routeData, error: routeError } = await supabase
         .from('assembly_routes')
         .insert({
           name: newRouteName,
           deadline: newRouteDeadline || null,
-          observations: newRouteObservations || null,
+          observations: observationsJoined,
+          assembler_id: selectedMontadorId || null,
+          vehicle_id: selectedVehicleId || null,
           status: 'pending'
         })
         .select()
@@ -234,10 +249,19 @@ export default function AssemblyManagement() {
 
       if (routeError) throw routeError;
 
-      const { error: updateError } = await supabase
-        .from('assembly_products')
-        .update({ assembly_route_id: routeData.id })
-        .in('id', selectedProducts);
+      if (selectedMontadorId) {
+        const { error: updateError } = await supabase
+          .from('assembly_products')
+          .update({ assembly_route_id: routeData.id, installer_id: selectedMontadorId })
+          .in('id', selectedProducts);
+        if (updateError) throw updateError;
+      } else {
+        const { error: updateError } = await supabase
+          .from('assembly_products')
+          .update({ assembly_route_id: routeData.id })
+          .in('id', selectedProducts);
+        if (updateError) throw updateError;
+      }
 
       if (updateError) throw updateError;
 
@@ -258,6 +282,8 @@ export default function AssemblyManagement() {
       setNewRouteName('');
       setNewRouteDeadline('');
       setNewRouteObservations('');
+      setSelectedMontadorId('');
+      setSelectedVehicleId('');
       setSelectedProducts([]);
       setSelectedLancamentos([]);
       fetchData();
@@ -372,6 +398,13 @@ export default function AssemblyManagement() {
         updated_at: route.updated_at,
       };
 
+      // Derivar montador e veículo (placa) para o romaneio de montagem
+      const installerNames = Array.from(new Set(products.map(p => (p as any)?.installer?.name).filter(Boolean))) as string[];
+      const assemblyInstallerName = installerNames.length === 1 ? installerNames[0] : (installerNames.length > 1 ? 'Vários' : '—');
+      const obsStr = String(route.observations || '');
+      const plateMatch = obsStr.match(/Placa\s*:\s*([A-Za-z0-9-]+)/i) || obsStr.match(/Ve[ií]culo\s*:\s*([A-Za-z0-9-]+)/i);
+      const assemblyVehiclePlate = plateMatch ? plateMatch[1] : '';
+      const vehicleModel = assemblyVehiclePlate ? (vehicles.find(v => String(v.plate).toUpperCase() === String(assemblyVehiclePlate).toUpperCase())?.model || '') : '';
       const data: DeliverySheetData = {
         route: routeData,
         routeOrders: routeOrders as any,
@@ -379,6 +412,9 @@ export default function AssemblyManagement() {
         vehicle: undefined,
         orders: orders as any,
         generatedAt: new Date().toISOString(),
+        assemblyInstallerName,
+        assemblyVehicleModel: vehicleModel,
+        assemblyVehiclePlate,
       };
 
       const pdfBytes = await DeliverySheetGenerator.generateDeliverySheet(data, 'Romaneio de Montagem');
@@ -715,6 +751,21 @@ export default function AssemblyManagement() {
                   assemblyRoutes.map(route => {
                     const productsInRoute = assemblyProducts.filter(p => p.assembly_route_id === route.id);
                     const pendingCount = productsInRoute.filter(p => p.status === 'pending').length;
+                    const installerNames = Array.from(new Set(productsInRoute.map(p => (p as any)?.installer?.name).filter(Boolean))) as string[];
+                    let installerLabel = installerNames.length === 1 ? installerNames[0] : (installerNames.length > 1 ? 'Vários' : '—');
+                    if ((route as any).assembler_id) {
+                      const m = montadores.find(m => m.id === (route as any).assembler_id);
+                      installerLabel = m?.name || m?.email || installerLabel;
+                    }
+                    let plate = '';
+                    if ((route as any).vehicle_id) {
+                      const v = vehicles.find(v => v.id === (route as any).vehicle_id);
+                      plate = v?.plate || '';
+                    } else {
+                      const obsStr = String(route.observations || '');
+                      const plateMatch = obsStr.match(/Placa\s*:\s*([A-Za-z0-9-]+)/i) || obsStr.match(/Ve[ií]culo\s*:\s*([A-Za-z0-9-]+)/i);
+                      plate = plateMatch ? plateMatch[1] : '';
+                    }
                     
                     return (
                       <div key={route.id} className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 hover:shadow-md transition-shadow group">
@@ -730,13 +781,21 @@ export default function AssemblyManagement() {
                             <StatusBadge status={route.status} />
                          </div>
                          
-                         <div className="flex items-center gap-2 mb-4 text-sm text-gray-600 bg-gray-50 p-2 rounded">
+                         <div className="flex flex-wrap items-center gap-2 mb-4 text-sm text-gray-600 bg-gray-50 p-2 rounded">
                             <Package className="h-4 w-4" />
                             <span>{productsInRoute.length} produtos</span>
                             <span className="text-gray-300">|</span>
                             <span className={pendingCount > 0 ? 'text-yellow-600 font-medium' : 'text-green-600'}>
                               {pendingCount} pendentes
                             </span>
+                            <span className="text-gray-300">|</span>
+                            <UserIcon className="h-4 w-4" />
+                            <span>Montador: {installerLabel}</span>
+                            {plate && (<>
+                              <span className="text-gray-300">|</span>
+                              <Truck className="h-4 w-4" />
+                              <span>Veículo: {plate}</span>
+                            </>)}
                          </div>
 
                          <div className="grid grid-cols-2 gap-2">
@@ -811,6 +870,35 @@ export default function AssemblyManagement() {
                 />
               </div>
 
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Montador</label>
+                  <select
+                    value={selectedMontadorId}
+                    onChange={(e) => setSelectedMontadorId(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white"
+                  >
+                    <option value="">Selecionar montador</option>
+                    {montadores.map(m => (
+                      <option key={m.id} value={m.id}>{m.name || m.email}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Veículo</label>
+                  <select
+                    value={selectedVehicleId}
+                    onChange={(e) => setSelectedVehicleId(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white"
+                  >
+                    <option value="">Selecionar veículo</option>
+                    {vehicles.map(v => (
+                      <option key={v.id} value={v.id}>{v.plate} — {v.model}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
               <div className="bg-blue-50 p-3 rounded-lg flex items-center gap-3">
                  <Package className="h-5 w-5 text-blue-600" />
                  <span className="text-sm text-blue-800 font-medium">
@@ -821,7 +909,7 @@ export default function AssemblyManagement() {
 
             <div className="px-6 py-4 bg-gray-50 border-t border-gray-100 flex justify-end gap-3">
               <button
-                onClick={() => setShowCreateModal(false)}
+                onClick={() => { setShowCreateModal(false); setSelectedMontadorId(''); setSelectedVehicleId(''); }}
                 className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50"
               >
                 Cancelar
@@ -1039,6 +1127,32 @@ export default function AssemblyManagement() {
                   Criado em {formatDate(routeDetails.route.created_at)}
                   {routeDetails.route.deadline && ` • Prazo: ${formatDate(routeDetails.route.deadline)}`}
                 </p>
+                {(() => {
+                  const products = routeDetails.products || [];
+                  const installerNames = Array.from(new Set(products.map((p: any) => (p as any)?.installer?.name).filter(Boolean))) as string[];
+                  let installerLabel = installerNames.length === 1 ? installerNames[0] : (installerNames.length > 1 ? 'Vários' : '—');
+                  const assemblerId = (routeDetails.route as any).assembler_id;
+                  if (assemblerId) {
+                    const m = montadores.find(m => m.id === assemblerId);
+                    installerLabel = m?.name || m?.email || installerLabel;
+                  }
+                  let plate = '';
+                  const vehicleId = (routeDetails.route as any).vehicle_id;
+                  if (vehicleId) {
+                    const v = vehicles.find(v => v.id === vehicleId);
+                    plate = v?.plate || '';
+                  } else {
+                    const obsStr = String(routeDetails.route.observations || '');
+                    const plateMatch = obsStr.match(/Placa\s*:\s*([A-Za-z0-9-]+)/i) || obsStr.match(/Ve[ií]culo\s*:\s*([A-Za-z0-9-]+)/i);
+                    plate = plateMatch ? plateMatch[1] : '';
+                  }
+                  return (
+                    <p className="text-sm text-gray-600 mt-1 flex items-center gap-2">
+                      <UserIcon className="h-4 w-4" /> Montador: {installerLabel}
+                      {plate && (<><span className="text-gray-300">•</span><Truck className="h-4 w-4" /> Veículo: {plate}</>)}
+                    </p>
+                  );
+                })()}
               </div>
               <button onClick={() => setShowRouteDetailsModal(false)} className="text-gray-400 hover:text-gray-600 p-1">
                 <X className="h-6 w-6" />

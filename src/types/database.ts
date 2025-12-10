@@ -172,6 +172,8 @@ export interface AssemblyRoute {
   status: 'pending' | 'in_progress' | 'completed';
   deadline?: string;
   observations?: string;
+  assembler_id?: string;
+  vehicle_id?: string;
   created_at: string;
   updated_at: string;
 }
