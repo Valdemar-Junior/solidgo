@@ -42,6 +42,8 @@ export default function AssemblyManagement() {
   const [showRouteEditModal, setShowRouteEditModal] = useState(false);
   const [showRouteManageModal, setShowRouteManageModal] = useState(false);
   const [showRouteDetailsModal, setShowRouteDetailsModal] = useState(false);
+  const [showDeleteConfirmModal, setShowDeleteConfirmModal] = useState(false);
+  const [routeIdToDelete, setRouteIdToDelete] = useState<string>('');
 
   // Form Data
   const [newRouteName, setNewRouteName] = useState('');
@@ -355,6 +357,34 @@ export default function AssemblyManagement() {
     } catch (e) {
       console.error(e);
       toast.error('Erro ao remover produtos');
+    }
+  };
+
+  const deleteRoute = async () => {
+    if (!routeIdToDelete) return;
+    try {
+      const { error } = await supabase
+        .from('assembly_routes')
+        .delete()
+        .eq('id', routeIdToDelete);
+      if (error) {
+        // Fallback: cancelar se DELETE não permitido por RLS
+        const { error: updateErr } = await supabase
+          .from('assembly_routes')
+          .update({ status: 'cancelled' })
+          .eq('id', routeIdToDelete);
+        if (updateErr) throw updateErr;
+        toast.warning('Sem permissão para excluir, romaneio marcado como cancelado');
+      } else {
+        toast.success('Romaneio excluído com sucesso');
+      }
+    } catch (e) {
+      console.error(e);
+      toast.error('Não foi possível excluir/cancelar o romaneio');
+    } finally {
+      setShowDeleteConfirmModal(false);
+      setRouteIdToDelete('');
+      fetchData();
     }
   };
 
@@ -802,24 +832,32 @@ export default function AssemblyManagement() {
                             </>)}
                          </div>
 
-                         <div className="grid grid-cols-2 gap-2">
-                           <button
-                             onClick={() => {
-                               setRouteDetails({ route, products: productsInRoute });
-                               setShowRouteDetailsModal(true);
-                             }}
-                             className="w-full py-2 px-3 bg-white border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors"
-                           >
-                             Detalhes
-                           </button>
-                           <button
-                             onClick={() => generateRoutePdf(route)}
-                             className="w-full py-2 px-3 bg-blue-50 border border-blue-100 text-blue-700 text-sm font-medium rounded-lg hover:bg-blue-100 transition-colors flex items-center justify-center gap-2"
-                           >
-                             <FileText className="h-4 w-4" />
-                             PDF
-                           </button>
-                         </div>
+                        <div className="grid grid-cols-2 gap-2">
+                          <button
+                            onClick={() => {
+                              setRouteDetails({ route, products: productsInRoute });
+                              setShowRouteDetailsModal(true);
+                            }}
+                            className="w-full py-2 px-3 bg-white border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors"
+                          >
+                            Detalhes
+                          </button>
+                          <button
+                            onClick={() => generateRoutePdf(route)}
+                            className="w-full py-2 px-3 bg-blue-50 border border-blue-100 text-blue-700 text-sm font-medium rounded-lg hover:bg-blue-100 transition-colors flex items-center justify-center gap-2"
+                          >
+                            <FileText className="h-4 w-4" />
+                            PDF
+                          </button>
+                          {productsInRoute.length === 0 && (
+                            <button
+                              onClick={() => { setRouteIdToDelete(route.id); setShowDeleteConfirmModal(true); }}
+                              className="col-span-2 w-full py-2 px-3 bg-red-50 border border-red-200 text-red-700 text-sm font-medium rounded-lg hover:bg-red-100 transition-colors"
+                            >
+                              Excluir Romaneio (sem produtos)
+                            </button>
+                          )}
+                        </div>
                       </div>
                     );
                   })
@@ -1308,6 +1346,28 @@ export default function AssemblyManagement() {
                     </tbody>
                   </table>
                </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirm Modal */}
+      {showDeleteConfirmModal && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-[75]">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md overflow-hidden">
+            <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
+              <h3 className="text-lg font-bold text-gray-900">Excluir Romaneio</h3>
+              <button onClick={() => setShowDeleteConfirmModal(false)} className="text-gray-400 hover:text-gray-600">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <div className="p-6 space-y-3">
+              <p className="text-sm text-gray-700">Esta ação excluirá o romaneio (ou marcará como cancelado se a exclusão não for permitida). Deseja confirmar?</p>
+              <div className="bg-red-50 border border-red-200 text-red-700 p-3 rounded">A operação só é habilitada quando não há produtos associados.</div>
+            </div>
+            <div className="px-6 py-4 bg-gray-50 border-t border-gray-100 flex justify-end gap-3">
+              <button onClick={() => setShowDeleteConfirmModal(false)} className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50">Cancelar</button>
+              <button onClick={deleteRoute} className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700">Excluir</button>
             </div>
           </div>
         </div>
