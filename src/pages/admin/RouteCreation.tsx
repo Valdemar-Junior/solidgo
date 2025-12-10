@@ -567,10 +567,25 @@ function RouteCreationContent() {
         }
       } catch {}
 
-      // Drivers Logic: use direct table join only (stable IDs)
+      // Drivers Logic: ensure mapping from users(role=driver) exists, then load join
+      const { data: existingDrivers } = await supabase
+        .from('drivers')
+        .select('id, user_id, name, active, user:users!user_id(id,name,email)');
+      const { data: driverUsers } = await supabase
+        .from('users')
+        .select('id,name,email')
+        .eq('role', 'driver');
+      const mappedUserIds = new Set<string>((existingDrivers || []).map((d: any)=> String(d.user_id || '')));
+      const toCreate = (driverUsers || []).filter((u: any)=> !mappedUserIds.has(String(u.id)));
+      if (toCreate.length > 0) {
+        const rows = toCreate.map((u: any)=> ({ user_id: u.id, name: u.name || u.email || 'Motorista', active: true }));
+        try {
+          await supabase.from('drivers').insert(rows);
+        } catch {}
+      }
       const { data: directDrivers } = await supabase
         .from('drivers')
-        .select('id, name, active, user:users!user_id(id,name,email)')
+        .select('id, user_id, name, active, user:users!user_id(id,name,email)')
         .eq('active', true);
       setDrivers(((directDrivers || []) as any[]));
       
