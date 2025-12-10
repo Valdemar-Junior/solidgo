@@ -567,22 +567,12 @@ function RouteCreationContent() {
         }
       } catch {}
 
-      // Drivers Logic: try RPC first (existing backend), then fallback to table join
-      let driverList: any[] = [];
-      try {
-        const { data: rpcDrivers } = await supabase.rpc('list_drivers');
-        if (Array.isArray(rpcDrivers) && rpcDrivers.length > 0) {
-          driverList = rpcDrivers.map((d: any) => ({ id: String(d.driver_id), active: true, user: { id: String(d.user_id || ''), name: String(d.name || '') } }));
-        }
-      } catch {}
-      if (driverList.length === 0) {
-        const { data: directDrivers } = await supabase
-          .from('drivers')
-          .select('id, name, active, user:users!user_id(id,name,email)')
-          .eq('active', true);
-        driverList = (directDrivers || []) as any[];
-      }
-      setDrivers(driverList as any);
+      // Drivers Logic: use direct table join only (stable IDs)
+      const { data: directDrivers } = await supabase
+        .from('drivers')
+        .select('id, name, active, user:users!user_id(id,name,email)')
+        .eq('active', true);
+      setDrivers(((directDrivers || []) as any[]));
       
       if (vehiclesData) setVehicles(vehiclesData as Vehicle[]);
 
