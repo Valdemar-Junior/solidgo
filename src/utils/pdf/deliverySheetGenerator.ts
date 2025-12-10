@@ -330,7 +330,14 @@ export class DeliverySheetGenerator {
       for (let i = 0; i < declLines.length; i++) {
         this.drawText(page, declLines[i], margin, y - i * 12, { font: helveticaFont, size: 10, color: { r: 0, g: 0, b: 0 } });
       }
-      y -= (34 + Math.max(0, (declLines.length - 1) * 12));
+      if (isAssemblySheet) {
+        const dateLine = 'Data: ____/____/______';
+        const offsetY = y - (declLines.length * 12);
+        this.drawText(page, dateLine, margin, offsetY, { font: helveticaFont, size: 10, color: { r: 0, g: 0, b: 0 } });
+        y -= (34 + Math.max(0, (declLines.length) * 12));
+      } else {
+        y -= (34 + Math.max(0, (declLines.length - 1) * 12));
+      }
       const half = (width - margin * 2) / 2;
       const leftLineEnd = margin + half - 20;
       const rightLineStart = margin + half + 20;
