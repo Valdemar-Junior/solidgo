@@ -405,16 +405,6 @@ export default function AssemblyManagement() {
       const plateMatch = obsStr.match(/Placa\s*:\s*([A-Za-z0-9-]+)/i) || obsStr.match(/Ve[ií]culo\s*:\s*([A-Za-z0-9-]+)/i);
       const assemblyVehiclePlate = plateMatch ? plateMatch[1] : '';
       const vehicleModel = assemblyVehiclePlate ? (vehicles.find(v => String(v.plate).toUpperCase() === String(assemblyVehiclePlate).toUpperCase())?.model || '') : '';
-      const notesMap: Record<string, { product: string; note: string }[]> = {};
-      products.forEach(p => {
-        const note = String(p.technical_notes || '').trim();
-        if (note) {
-          const k = String(p.order_id);
-          if (!notesMap[k]) notesMap[k] = [];
-          notesMap[k].push({ product: String(p.product_name || 'Produto'), note });
-        }
-      });
-
       const data: DeliverySheetData = {
         route: routeData,
         routeOrders: routeOrders as any,
@@ -425,7 +415,6 @@ export default function AssemblyManagement() {
         assemblyInstallerName,
         assemblyVehicleModel: vehicleModel,
         assemblyVehiclePlate,
-        assemblyNotesByOrderId: notesMap,
       };
 
       const pdfBytes = await DeliverySheetGenerator.generateDeliverySheet(data, 'Romaneio de Montagem');

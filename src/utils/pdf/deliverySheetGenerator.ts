@@ -11,7 +11,6 @@ export interface DeliverySheetData {
   assemblyInstallerName?: string;
   assemblyVehicleModel?: string;
   assemblyVehiclePlate?: string;
-  assemblyNotesByOrderId?: Record<string, { product: string; note: string }[]>;
 }
 
 export class DeliverySheetGenerator {
@@ -163,18 +162,13 @@ export class DeliverySheetGenerator {
       const tableHeightPre = contentHeightPre + 14;
 
       const signaturesHeight = 34 + 36 + 10; // date line spacing + two lines + bottom separator
-      // Precompute assembly notes height (if any)
-      const notesForOrder = (data.assemblyNotesByOrderId && data.assemblyNotesByOrderId[oid]) ? data.assemblyNotesByOrderId[oid] : [];
+      // Precompute blank assembly notes area height (fixed)
       let notesHeightPre = 0;
-      if (isAssemblySheet && notesForOrder.length > 0) {
+      if (isAssemblySheet) {
         const notesHeaderH = 14;
-        notesHeightPre += notesHeaderH;
-        for (const n of notesForOrder) {
-          const line = `• ${String(n.product || '')}: ${String(n.note || '')}`;
-          const lines = this.wrapText(line, width - margin * 2, helveticaFont, 10);
-          notesHeightPre += (lines.length * 12);
-        }
-        notesHeightPre += 8; // small gap after notes
+        const linesCount = 3;
+        const perLine = 14;
+        notesHeightPre = notesHeaderH + (linesCount * perLine) + 8; // header + lines + gap
       }
       const staticTopHeights = 16 + 14 + 14; // Item/Vendedor, Romaneio/Telefone, Cliente/Pedido
       const observacaoInternaLabel = 10; // "Observação Interna:" label spacing
@@ -337,17 +331,14 @@ export class DeliverySheetGenerator {
 
       y = tableTop - tableHeight - 26; // small extra gap after table
 
-      // Observações da Montagem (se houver)
-      if (isAssemblySheet && notesForOrder.length > 0) {
+      // Observações da Montagem (campo em branco para preenchimento manual)
+      if (isAssemblySheet) {
         this.drawText(page, 'Observações da Montagem:', margin, y, { font: helveticaBoldFont, size: 10, color: { r: 0, g: 0, b: 0 } });
         y -= 14;
-        for (const n of notesForOrder) {
-          const line = `• ${String(n.product || '')}: ${String(n.note || '')}`;
-          const lines = this.wrapText(line, width - margin * 2, helveticaFont, 10);
-          for (let ii = 0; ii < lines.length; ii++) {
-            this.drawText(page, lines[ii], margin, y - ii * 12, { font: helveticaFont, size: 10, color: { r: 0, g: 0, b: 0 } });
-          }
-          y -= (lines.length * 12);
+        const linesCount = 3;
+        for (let li = 0; li < linesCount; li++) {
+          page.drawLine({ start: { x: margin, y }, end: { x: width - margin, y }, thickness: 1, color: rgb(0, 0, 0) });
+          y -= 14;
         }
         y -= 8;
       }
