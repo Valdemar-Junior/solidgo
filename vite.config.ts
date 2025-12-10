@@ -61,8 +61,18 @@ export default defineConfig({
         ]
       },
       workbox: {
-        globPatterns: ['**/*.{js,css,html,png,svg,ico}'],
+        globPatterns: ['**/*.{js,css,html,png,svg,ico,woff2}'],
+        navigateFallback: '/index.html', // garante app-shell para rotas SPA quando offline
+        cleanupOutdatedCaches: true,
         runtimeCaching: [
+          {
+            urlPattern: ({ request }) => request.mode === 'navigate',
+            handler: 'NetworkFirst',
+            options: {
+              cacheName: 'html-cache',
+              networkTimeoutSeconds: 3,
+            }
+          },
           {
             urlPattern: /^https:\/\/api\.mapbox\.com\//,
             handler: 'NetworkFirst',
