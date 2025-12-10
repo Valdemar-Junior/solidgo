@@ -363,6 +363,31 @@ export default function AssemblyManagement() {
   const deleteRoute = async () => {
     if (!routeIdToDelete) return;
     try {
+      // Regra: excluir somente quando romaneio estiver pendente e sem produtos
+      const { data: routeChk } = await supabase
+        .from('assembly_routes')
+        .select('id,status')
+        .eq('id', routeIdToDelete)
+        .single();
+      const statusOk = String(routeChk?.status || '').toLowerCase() === 'pending';
+      if (!statusOk) {
+        toast.error('Apenas romaneios pendentes podem ser excluídos');
+        setShowDeleteConfirmModal(false);
+        setRouteIdToDelete('');
+        return;
+      }
+      const { data: prodChk } = await supabase
+        .from('assembly_products')
+        .select('id')
+        .eq('assembly_route_id', routeIdToDelete)
+        .limit(1);
+      if ((prodChk || []).length > 0) {
+        toast.error('Romaneio possui produtos — remova-os antes de excluir');
+        setShowDeleteConfirmModal(false);
+        setRouteIdToDelete('');
+        return;
+      }
+
       const { error } = await supabase
         .from('assembly_routes')
         .delete()
@@ -849,7 +874,7 @@ export default function AssemblyManagement() {
                             <FileText className="h-4 w-4" />
                             PDF
                           </button>
-                          {productsInRoute.length === 0 && (
+                          {productsInRoute.length === 0 && String(route.status).toLowerCase() === 'pending' && (
                             <button
                               onClick={() => { setRouteIdToDelete(route.id); setShowDeleteConfirmModal(true); }}
                               className="col-span-2 w-full py-2 px-3 bg-red-50 border border-red-200 text-red-700 text-sm font-medium rounded-lg hover:bg-red-100 transition-colors"
