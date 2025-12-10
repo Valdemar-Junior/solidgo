@@ -34,6 +34,7 @@ export default function DriverDashboard() {
         .from('routes')
         .select('*, vehicle:vehicles!vehicle_id(*)')
         .eq('driver_id', driverData.id)
+        .eq('status', 'in_progress')
         .order('created_at', { ascending: false });
 
         if (routesData) {
