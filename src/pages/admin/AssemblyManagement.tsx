@@ -388,18 +388,19 @@ export default function AssemblyManagement() {
         return;
       }
 
-      const { error } = await supabase
+      const { data: deletedRows, error } = await supabase
         .from('assembly_routes')
         .delete()
-        .eq('id', routeIdToDelete);
-      if (error) {
+        .eq('id', routeIdToDelete)
+        .select();
+      if (error || !deletedRows || deletedRows.length === 0) {
         // Fallback: cancelar se DELETE não permitido por RLS
         const { error: updateErr } = await supabase
           .from('assembly_routes')
           .update({ status: 'cancelled' })
           .eq('id', routeIdToDelete);
         if (updateErr) throw updateErr;
-        toast.warning('Sem permissão para excluir, romaneio marcado como cancelado');
+        toast.warning('Romaneio sem permissão para excluir — marcado como cancelado');
       } else {
         toast.success('Romaneio excluído com sucesso');
       }
