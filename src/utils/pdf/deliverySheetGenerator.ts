@@ -324,10 +324,13 @@ export class DeliverySheetGenerator {
 
       // Declaration and signatures
       const declarationText = isAssemblySheet
-        ? 'Declaro que recebi a montagem do(s) produto(s) e que a instalação foi realizada em perfeitas condições na data: ____/____/______'
+        ? 'Confirmo o recebimento da montagem do(s) produto(s), realizada com sucesso e sem pendências.'
         : 'Declaro que recebi o produto em perfeitas condições na data: ____/____/______';
-      this.drawText(page, declarationText, margin, y, { font: helveticaFont, size: 10, color: { r: 0, g: 0, b: 0 } });
-      y -= 34;
+      const declLines = DeliverySheetGenerator.wrapText(declarationText, width - margin * 2, helveticaFont, 10);
+      for (let i = 0; i < declLines.length; i++) {
+        this.drawText(page, declLines[i], margin, y - i * 12, { font: helveticaFont, size: 10, color: { r: 0, g: 0, b: 0 } });
+      }
+      y -= (34 + Math.max(0, (declLines.length - 1) * 12));
       const half = (width - margin * 2) / 2;
       const leftLineEnd = margin + half - 20;
       const rightLineStart = margin + half + 20;
