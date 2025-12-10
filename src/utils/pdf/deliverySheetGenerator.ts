@@ -323,7 +323,10 @@ export class DeliverySheetGenerator {
       y = tableTop - tableHeight - 26; // small extra gap after table
 
       // Declaration and signatures
-      this.drawText(page, 'Declaro que recebi o produto em perfeitas condições na data: ____/____/______', margin, y, { font: helveticaFont, size: 10, color: { r: 0, g: 0, b: 0 } });
+      const declarationText = isAssemblySheet
+        ? 'Declaro que recebi a montagem do(s) produto(s) e que a instalação foi realizada em perfeitas condições na data: ____/____/______'
+        : 'Declaro que recebi o produto em perfeitas condições na data: ____/____/______';
+      this.drawText(page, declarationText, margin, y, { font: helveticaFont, size: 10, color: { r: 0, g: 0, b: 0 } });
       y -= 34;
       const half = (width - margin * 2) / 2;
       const leftLineEnd = margin + half - 20;
