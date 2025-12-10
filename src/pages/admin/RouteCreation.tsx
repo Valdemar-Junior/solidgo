@@ -646,12 +646,25 @@ function RouteCreationContent() {
         // Driver enrichment: use bulk fetch and also preloaded driverList
         const driverIds = Array.from(new Set(enriched.map(r => r.driver_id).filter(Boolean)));
         if (driverIds.length > 0) {
-             const { data: drvBulk } = await supabase.from('drivers').select('id, active, user:users!user_id(id,name,email)').in('id', driverIds);
+             const { data: drvBulk } = await supabase.from('drivers').select('id, active, user:users!user_id(id,name,email), name').in('id', driverIds);
              const combined = [...(drvBulk || []), ...(Array.isArray(drivers) ? drivers : [])];
              const mapDrv = new Map<string, any>(combined.map((d: any) => [String(d.id), d]));
              for (const r of enriched) {
                  const d = mapDrv.get(String(r.driver_id));
-                 if (d) r.driver = d;
+                 if (d) {
+                   (r as any).driver = d;
+                   (r as any).driver_name = d?.user?.name || d?.name || '';
+                 }
+             }
+        } else {
+             // Fallback: attempt to derive driver_name from preloaded list
+             const mapDrv = new Map<string, any>((Array.isArray(drivers) ? drivers : []).map((d: any) => [String(d.id), d]));
+             for (const r of enriched) {
+                 const d = mapDrv.get(String(r.driver_id));
+                 if (d) {
+                   (r as any).driver = d;
+                   (r as any).driver_name = d?.user?.name || d?.name || '';
+                 }
              }
         }
 
@@ -1291,14 +1304,7 @@ function RouteCreationContent() {
                                     <div className="space-y-3 mb-6">
                                         <div className="flex items-center text-sm text-gray-600">
                                             <User className="h-4 w-4 mr-2 text-gray-400" />
-                                            {(() => {
-                                              const nameFromJoin = (route as any)?.driver?.user?.name || (route as any)?.driver?.name;
-                                              if (nameFromJoin) return nameFromJoin;
-                                              try {
-                                                const d = (drivers || []).find((x:any)=> String(x.id) === String((route as any)?.driver_id));
-                                                return d?.user?.name || d?.name || 'Sem motorista';
-                                              } catch { return 'Sem motorista'; }
-                                            })()}
+                                            { (route as any)?.driver_name || (route as any)?.driver?.user?.name || (route as any)?.driver?.name || 'Sem motorista' }
                                         </div>
                                         <div className="flex items-center text-sm text-gray-600">
                                             <ClipboardList className="h-4 w-4 mr-2 text-gray-400" />
