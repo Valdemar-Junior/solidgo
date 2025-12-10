@@ -585,8 +585,7 @@ function RouteCreationContent() {
       }
       const { data: directDrivers } = await supabase
         .from('drivers')
-        .select('id, user_id, name, active, user:users!user_id(id,name,email)')
-        .eq('active', true);
+        .select('id, user_id, name, active, user:users!user_id(id,name,email)');
       setDrivers(((directDrivers || []) as any[]));
       
       if (vehiclesData) setVehicles(vehiclesData as Vehicle[]);
