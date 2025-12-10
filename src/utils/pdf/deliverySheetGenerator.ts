@@ -22,6 +22,13 @@ export class DeliverySheetGenerator {
     // Load fonts
     const helveticaFont = await pdfDoc.embedFont(StandardFonts.Helvetica);
     const helveticaBoldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+    const isAssemblySheet = String(title || '').toLowerCase().includes('montagem');
+    const isAssemblyItem = (it: any): boolean => {
+      const v1 = String(it?.has_assembly ?? '').toLowerCase();
+      const v2 = String(it?.possui_montagem ?? '').toLowerCase();
+      const v3 = String((it as any)?.raw_json?.tem_montagem ?? '').toLowerCase();
+      return v1 === 'true' || v1 === 'sim' || v2 === 'true' || v2 === 'sim' || v3 === 'true' || v3 === 'sim';
+    };
 
     // Header brand and title
     const envLogo = (import.meta as any).env?.VITE_PDF_LOGO_URL as string | undefined;
@@ -117,7 +124,8 @@ export class DeliverySheetGenerator {
       // Table config & height estimation
       const headersPre = ['Código', 'Produto', 'Local', 'Data', 'Qtde', 'Marca'];
       const colsPre = [38, 240, 92, 58, 24, 79];
-      const itemsPre = Array.isArray(order.items_json) && order.items_json.length > 0 ? order.items_json : [];
+      const itemsAll = Array.isArray(order.items_json) && order.items_json.length > 0 ? order.items_json : [];
+      const itemsPre = isAssemblySheet ? itemsAll.filter(isAssemblyItem) : itemsAll;
       let contentHeightPre = 16; // header row height
       const normPre = (s: any) => String(s ?? '').toLowerCase().trim();
       const prodLocPre = (order as any).raw_json?.produtos_locais;
