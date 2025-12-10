@@ -1,4 +1,4 @@
-import { create } from 'zustand';
+﻿import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { supabase } from '../supabase/client';
 import { toLoginEmailFromName } from '../lib/utils';
@@ -35,26 +35,25 @@ export const useAuthStore = create<AuthState>()(
             const { data: byName } = await supabase.from('users').select('email').eq('name', identifier).maybeSingle();
             if (byName?.email) loginEmail = byName.email;
           }
-          let { data, error } = await supabase.auth.signInWithPassword({ email: loginEmail, password });
+          const { data, error } = await supabase.auth.signInWithPassword({ email: loginEmail, password });
 
           console.log('Supabase auth result:', { data, error });
 
-          // Tratativa para e-mail não confirmado
+          // Tratativa para e-mail nao confirmado
           if (error && error.message && error.message.toLowerCase().includes('email')) {
-            throw new Error('E-mail não confirmado. Verifique sua caixa de entrada.');
+            throw new Error('E-mail nao confirmado. Verifique sua caixa de entrada.');
           }
 
           if (error) {
             const msg = String(error.message || '').toLowerCase();
             if (msg.includes('invalid') || msg.includes('credentials')) {
-              throw new Error('Credenciais inválidas');
+              throw new Error('Credenciais invalidas');
             }
             throw error;
           }
 
           if (data.user) {
             console.log('User authenticated, fetching profile...');
-            // Fetch user profile with role
             const { data: profile, error: profileError } = await supabase
               .from('users')
               .select('*')
@@ -71,9 +70,9 @@ export const useAuthStore = create<AuthState>()(
                 email: data.user.email,
                 name: fallbackName,
                 role: roleDefault,
-                must_change_password: true, // Forçar mudança de senha no primeiro acesso
+                must_change_password: true,
               });
-              if (insertErr) throw new Error('Perfil de usuário não encontrado');
+              if (insertErr) throw new Error('Perfil de Usuario nao encontrado');
               const { data: newProfile } = await supabase
                 .from('users')
                 .select('*')
@@ -105,7 +104,7 @@ export const useAuthStore = create<AuthState>()(
               console.log('Login process completed successfully');
             }
           } else {
-            throw new Error('Usuário não autenticado');
+            throw new Error('Usuario nao autenticado');
           }
         } catch (error: any) {
           console.error('Login process error:', error);
@@ -123,7 +122,6 @@ export const useAuthStore = create<AuthState>()(
           try { localStorage.setItem('auth_lock','1'); } catch {}
           await supabase.auth.signOut({ scope: 'local' });
         } catch (error: any) {
-          // ignorar 403 de scope global/local e seguir limpando estado
           console.warn('Logout warning:', error?.message || error);
         } finally {
           set({ user: null, isAuthenticated: false, isLoading: false, error: null });
@@ -137,14 +135,27 @@ export const useAuthStore = create<AuthState>()(
       checkAuth: async () => {
         console.log('Starting checkAuth...');
         set({ isLoading: true });
+        const isOffline = typeof navigator !== 'undefined' && navigator.onLine === false;
+        const cachedUser = get().user;
+
+        if (isOffline && cachedUser) {
+          console.log('Offline, mantendo Usuario em cache');
+          set({ isAuthenticated: true, isLoading: false, error: null });
+          return;
+        }
         
         try {
-          const { data: { session } } = await supabase.auth.getSession();
-          console.log('Session check result:', session);
+          const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+          console.log('Session check result:', session, sessionError);
+          
+          if (!session?.user && cachedUser && isOffline) {
+            console.log('Sem session da API mas offline com cache: mantendo login');
+            set({ isAuthenticated: true, isLoading: false, error: null });
+            return;
+          }
           
           if (session?.user) {
             console.log('User session found, fetching profile...');
-            // Fetch user profile with role
             const { data: profile, error: profileError } = await supabase
               .from('users')
               .select('*')
@@ -168,11 +179,11 @@ export const useAuthStore = create<AuthState>()(
                 user,
                 isAuthenticated: true,
                 isLoading: false,
+                error: null,
               });
               console.log('User authenticated successfully:', user);
             } else {
-              // criar perfil mínimo para o próprio usuário
-              const defaultName = (session.user.email || 'Usuário');
+              const defaultName = (session.user.email || 'Usuario');
               const { error: insertErr } = await supabase.from('users').insert({
                 id: session.user.id,
                 email: session.user.email,
@@ -198,11 +209,12 @@ export const useAuthStore = create<AuthState>()(
                     },
                     isAuthenticated: true,
                     isLoading: false,
+                    error: null,
                   });
                   return;
                 }
               }
-              set({ user: null, isAuthenticated: false, isLoading: false });
+              set({ user: null, isAuthenticated: false, isLoading: false, error: null });
             }
           } else {
             console.log('No user session found');
@@ -210,13 +222,20 @@ export const useAuthStore = create<AuthState>()(
               user: null,
               isAuthenticated: false,
               isLoading: false,
+              error: null,
             });
           }
         } catch (error: any) {
+          const isOfflineNow = typeof navigator !== 'undefined' && navigator.onLine === false;
+          if (isOfflineNow && cachedUser) {
+            console.warn('Erro em checkAuth offline, mantendo Usuario em cache');
+            set({ isAuthenticated: true, isLoading: false, error: null });
+            return;
+          }
           console.error('CheckAuth error:', error);
           set({
             isLoading: false,
-            error: error.message || 'Erro ao verificar autenticação',
+            error: error.message || 'Erro ao verificar autenticacao',
           });
         }
       },
@@ -233,8 +252,7 @@ export const useAuthStore = create<AuthState>()(
   )
 );
 
-// Subscribe to auth changes
-supabase.auth.onAuthStateChange(async (event, session) => {
+supabase.auth.onAuthStateChange(async (event) => {
   const suppress = typeof window !== 'undefined' && localStorage.getItem('auth_lock') === '1';
   if (suppress && (event === 'SIGNED_IN' || event === 'SIGNED_OUT' || event === 'TOKEN_REFRESHED')) {
     return;
@@ -245,3 +263,8 @@ supabase.auth.onAuthStateChange(async (event, session) => {
     useAuthStore.getState().checkAuth();
   }
 });
+
+
+
+
+

@@ -9,12 +9,13 @@ interface ProtectedRouteProps {
 
 export default function ProtectedRoute({ children, allowedRoles }: ProtectedRouteProps) {
   const { user, isAuthenticated, isLoading, checkAuth } = useAuthStore();
+  const isOffline = typeof navigator !== 'undefined' && navigator.onLine === false;
 
   useEffect(() => {
-    if (!isAuthenticated && !isLoading) {
+    if (!isAuthenticated && !isLoading && !isOffline) {
       checkAuth();
     }
-  }, [isAuthenticated, isLoading, checkAuth]);
+  }, [isAuthenticated, isLoading, isOffline, checkAuth]);
 
   if (isLoading) {
     return (
@@ -28,6 +29,10 @@ export default function ProtectedRoute({ children, allowedRoles }: ProtectedRout
   }
 
   if (!isAuthenticated) {
+    // Offline com usuário em cache: manter na tela
+    if (isOffline && user) {
+      return <>{children}</>;
+    }
     return <Navigate to="/login" replace />;
   }
 
