@@ -1277,6 +1277,10 @@ function RouteCreationContent() {
                                             {(route.driver as any)?.user?.name || route.driver?.name || 'Sem motorista'}
                                         </div>
                                         <div className="flex items-center text-sm text-gray-600">
+                                            <ClipboardList className="h-4 w-4 mr-2 text-gray-400" />
+                                            {String((route as any)?.conferente || '').trim() || 'Sem conferente'}
+                                        </div>
+                                        <div className="flex items-center text-sm text-gray-600">
                                             <Truck className="h-4 w-4 mr-2 text-gray-400" />
                                             {route.vehicle ? `${route.vehicle.model} (${route.vehicle.plate})` : 'Sem veículo'}
                                         </div>
