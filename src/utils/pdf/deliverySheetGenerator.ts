@@ -72,7 +72,7 @@ export class DeliverySheetGenerator {
     if (!logoOk) {
       this.drawText(page, 'Lojão dos Móveis', margin, y, { font: helveticaBoldFont, size: 16, color: { r: 0, g: 0, b: 0 } });
     }
-    y -= drawnLogoHeight ? drawnLogoHeight + 6 : 24;
+    y -= drawnLogoHeight ? drawnLogoHeight + 18 : 36;
     this.drawText(page, title, margin, y, { font: helveticaBoldFont, size: 14, color: { r: 0, g: 0, b: 0 } });
     this.drawText(page, `Data e Hora da impressão: ${new Date(data.generatedAt).toLocaleString('pt-BR')}`, margin, y - 16, { font: helveticaFont, size: 9, color: { r: 0, g: 0, b: 0 } });
     y -= 26;
@@ -83,21 +83,15 @@ export class DeliverySheetGenerator {
     const gridY = y;
     this.drawText(page, `Nº do Romaneio`, margin, gridY, { font: helveticaBoldFont, size: 10, color: { r: 0, g: 0, b: 0 } });
     this.drawText(page, String(data.route.name || data.route.id), margin, gridY - 14, { font: helveticaFont, size: 11, color: { r: 0, g: 0, b: 0 } });
-    this.drawText(page, `KM Inicial`, margin + 150, gridY, { font: helveticaBoldFont, size: 10, color: { r: 0, g: 0, b: 0 } });
-    this.drawText(page, ``, margin + 150, gridY - 14, { font: helveticaFont, size: 11, color: { r: 0, g: 0, b: 0 } });
-    this.drawText(page, `KM Final`, margin + 260, gridY, { font: helveticaBoldFont, size: 10, color: { r: 0, g: 0, b: 0 } });
-    this.drawText(page, ``, margin + 260, gridY - 14, { font: helveticaFont, size: 11, color: { r: 0, g: 0, b: 0 } });
-    this.drawText(page, `Ajudante`, margin + 360, gridY, { font: helveticaBoldFont, size: 10, color: { r: 0, g: 0, b: 0 } });
-    this.drawText(page, ``, margin + 360, gridY - 14, { font: helveticaFont, size: 11, color: { r: 0, g: 0, b: 0 } });
     this.drawText(page, isAssemblySheet ? `Montador` : `Transportador`, margin, gridY - 32, { font: helveticaBoldFont, size: 10, color: { r: 0, g: 0, b: 0 } });
-    this.drawText(page, `Veículo`, margin + 260, gridY - 32, { font: helveticaBoldFont, size: 10, color: { r: 0, g: 0, b: 0 } });
-    this.drawText(page, `Placa`, margin + 420, gridY - 32, { font: helveticaBoldFont, size: 10, color: { r: 0, g: 0, b: 0 } });
+    this.drawText(page, `Veículo`, margin + 300, gridY - 32, { font: helveticaBoldFont, size: 10, color: { r: 0, g: 0, b: 0 } });
+    this.drawText(page, `Placa`, margin + 460, gridY - 32, { font: helveticaBoldFont, size: 10, color: { r: 0, g: 0, b: 0 } });
     const vehicleText = isAssemblySheet ? (data.assemblyVehicleModel || '') : (data.vehicle ? `${data.vehicle.model}` : '');
     const plateText = isAssemblySheet ? (data.assemblyVehiclePlate || '') : (data.vehicle ? `${data.vehicle.plate}` : '');
     const installerText = isAssemblySheet ? (data.assemblyInstallerName || '') : '';
     this.drawText(page, installerText, margin, gridY - 46, { font: helveticaFont, size: 11, color: { r: 0, g: 0, b: 0 } });
-    this.drawText(page, vehicleText, margin + 260, gridY - 46, { font: helveticaFont, size: 11, color: { r: 0, g: 0, b: 0 } });
-    this.drawText(page, plateText, margin + 420, gridY - 46, { font: helveticaFont, size: 11, color: { r: 0, g: 0, b: 0 } });
+    this.drawText(page, vehicleText, margin + 300, gridY - 46, { font: helveticaFont, size: 11, color: { r: 0, g: 0, b: 0 } });
+    this.drawText(page, plateText, margin + 460, gridY - 46, { font: helveticaFont, size: 11, color: { r: 0, g: 0, b: 0 } });
     y = gridY - 60;
     page.drawLine({ start: { x: margin, y }, end: { x: width - margin, y }, thickness: 1, color: rgb(0, 0, 0) });
     y -= 10;
