@@ -1241,34 +1241,34 @@ function RouteCreationContent() {
                         return (
                             <div key={route.id} className="bg-white rounded-xl shadow-sm border border-gray-200 hover:shadow-md transition-shadow group flex flex-col">
                                 <div className="p-5 flex-1">
-                                    <div className="flex justify-between items-start mb-4">
-                                        <div>
+                                    <div className="flex flex-col items-center gap-2 mb-4">
+                                        <div className="text-center">
                                             <h3 className="font-bold text-gray-900 text-lg group-hover:text-blue-600 transition-colors">{route.name}</h3>
-                                            <p className="text-xs text-gray-500 mt-1 flex items-center">
+                                            <p className="text-xs text-gray-500 mt-1 flex items-center justify-center">
                                                 <Calendar className="h-3 w-3 mr-1" />
                                                 {formatDate(route.created_at)}
                                             </p>
                                         </div>
-                        <div className="flex items-center gap-2">
-                          <span className={`px-2.5 py-1 rounded-full text-xs font-bold border ${statusColors[route.status] || 'bg-gray-100'}`}>
-                              {statusLabel[route.status] || route.status}
-                          </span>
-                          {(() => {
-                            const conf: any = (route as any).conference;
-                            const cStatus = String(conf?.status || '').toLowerCase();
-                            const ok = conf?.result_ok === true || cStatus === 'completed';
-                            const badgeClass = ok
-                              ? 'bg-green-50 text-green-700 border-green-200'
-                              : (cStatus === 'in_progress' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-yellow-50 text-yellow-700 border-yellow-200');
-                            const label = ok ? 'Conferência: Finalizada' : (cStatus === 'in_progress' ? 'Conferência: Em curso' : 'Conferência: Aguardando');
-                            return (
-                              <span className={`px-2.5 py-1 rounded-full text-xs font-bold border inline-flex items-center gap-1 ${badgeClass}`} title="Status de conferência">
-                                {ok ? <ClipboardCheck className="h-3.5 w-3.5"/> : <ClipboardList className="h-3.5 w-3.5"/>}
-                                {label}
-                              </span>
-                            );
-                          })()}
-                        </div>
+                                        <div className="flex items-center gap-2">
+                                          <span className={`px-2 py-0.5 rounded-full text-[11px] font-semibold border ${statusColors[route.status] || 'bg-gray-100'}`}>
+                                              {statusLabel[route.status] || route.status}
+                                          </span>
+                                          {(() => {
+                                            const conf: any = (route as any).conference;
+                                            const cStatus = String(conf?.status || '').toLowerCase();
+                                            const ok = conf?.result_ok === true || cStatus === 'completed';
+                                            const badgeClass = ok
+                                              ? 'bg-green-50 text-green-700 border-green-200'
+                                              : (cStatus === 'in_progress' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-yellow-50 text-yellow-700 border-yellow-200');
+                                            const label = ok ? 'Conferência: Finalizada' : (cStatus === 'in_progress' ? 'Conferência: Em curso' : 'Conferência: Aguardando');
+                                            return (
+                                              <span className={`px-2 py-0.5 rounded-full text-[11px] font-semibold border inline-flex items-center gap-1 ${badgeClass}`} title="Status de conferência">
+                                                {ok ? <ClipboardCheck className="h-3 w-3"/> : <ClipboardList className="h-3 w-3"/>}
+                                                {label}
+                                              </span>
+                                            );
+                                          })()}
+                                        </div>
                                     </div>
                                     
                                     <div className="space-y-3 mb-6">
