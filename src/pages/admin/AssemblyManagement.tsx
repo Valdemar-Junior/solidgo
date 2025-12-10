@@ -263,7 +263,7 @@ export default function AssemblyManagement() {
         if (updateError) throw updateError;
       }
 
-      if (updateError) throw updateError;
+      
 
       try {
         const userId = (await supabase.auth.getUser()).data.user?.id || '';
