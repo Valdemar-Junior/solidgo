@@ -570,9 +570,10 @@ function RouteCreationContent() {
       // Drivers Logic (always from table to ensure IDs consistent)
       const { data: directDrivers } = await supabase
         .from('drivers')
-        .select('id, active, user:users!user_id(id,name,email)')
-        .eq('active', true);
-      setDrivers((directDrivers || []) as any);
+        .select('id, name, active, user:users!user_id(id,name,email)');
+      let list = (directDrivers || []) as any[];
+      const activeList = list.filter((d:any)=> d.active === true);
+      setDrivers((activeList.length > 0 ? activeList : list) as any);
       
       if (vehiclesData) setVehicles(vehiclesData as Vehicle[]);
 
