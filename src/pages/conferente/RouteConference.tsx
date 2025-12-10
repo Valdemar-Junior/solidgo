@@ -84,7 +84,9 @@ export default function RouteConference() {
             items.forEach((it: any) => {
               const qty = Number(it?.quantity || 0);
               const skuRaw = String(it?.sku || '').trim();
-              const skuNorm = skuRaw.toLowerCase();
+              const skuLower = skuRaw.toLowerCase();
+              // Remover sufixo numérico de impressão (ex.: 2021-3 -> 2021)
+              const skuNorm = skuLower.replace(/-\d+$/, '');
               if (qty > 0 && skuRaw) {
                 for (let i = 1; i <= qty; i++) {
                   const disp = `${i}/${qty}-${skuRaw}`;
