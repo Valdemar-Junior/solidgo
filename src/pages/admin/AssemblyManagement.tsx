@@ -73,6 +73,7 @@ export default function AssemblyManagement() {
   const [filterCidade, setFilterCidade] = useState('');
   const [filterBairro, setFilterBairro] = useState('');
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
+  const [filterPrazo, setFilterPrazo] = useState<'all'|'within'|'out'>('all');
 
   // Derived Data
   const [availableProducts, setAvailableProducts] = useState<any[]>([]);
@@ -88,6 +89,25 @@ export default function AssemblyManagement() {
     } catch {
       return '-';
     }
+  };
+
+  const parseDateSafe = (input: any): Date | null => {
+    if (!input) return null;
+    try { const d = new Date(String(input)); return isNaN(d.getTime()) ? null : d; } catch { return null; }
+  };
+
+  const getPrevisaoEntrega = (order: any): Date | null => {
+    const raw = order?.raw_json || {};
+    const prev = order?.previsao_entrega || raw?.previsao_entrega || raw?.data_prevista_entrega || '';
+    return parseDateSafe(prev);
+  };
+
+  const getPrazoStatus = (ap: any): 'within'|'out'|'none' => {
+    const prev = getPrevisaoEntrega(ap.order);
+    if (!prev) return 'none';
+    const cmp = ap.status === 'completed' ? parseDateSafe(ap.completion_date) : new Date();
+    if (!cmp) return 'none';
+    return cmp.getTime() <= prev.getTime() ? 'within' : 'out';
   };
 
   const fetchData = async () => {
@@ -486,7 +506,9 @@ export default function AssemblyManagement() {
         const bairro = (addr.neighborhood || '').toLowerCase();
         const matchCidade = filterCidade ? city.includes(filterCidade.toLowerCase()) : true;
         const matchBairro = filterBairro ? bairro.includes(filterBairro.toLowerCase()) : true;
-        return matchCidade && matchBairro;
+        const prazo = getPrazoStatus(ap);
+        const matchPrazo = filterPrazo === 'all' ? true : filterPrazo === prazo;
+        return matchCidade && matchBairro && matchPrazo;
       });
       if (filteredList.length > 0) {
         filtered[lancamento] = filteredList;
@@ -545,6 +567,17 @@ export default function AssemblyManagement() {
 
     return (
       <span className={`px-2.5 py-0.5 rounded-full text-xs font-medium border ${style}`}>
+        {label}
+      </span>
+    );
+  };
+
+  const DeadlineBadge = ({ status }: { status: 'within'|'out'|'none' }) => {
+    const cls = status === 'within' ? 'bg-green-100 text-green-800 border-green-200' : status === 'out' ? 'bg-red-100 text-red-800 border-red-200' : 'bg-gray-100 text-gray-700 border-gray-200';
+    const label = status === 'within' ? 'Dentro do prazo' : status === 'out' ? 'Fora do prazo' : 'Sem previsão';
+    return (
+      <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium border ${cls}`}>
+        <Calendar className="h-3 w-3" />
         {label}
       </span>
     );
@@ -655,7 +688,7 @@ export default function AssemblyManagement() {
                 </span>
               </div>
               
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                 <div className="relative">
                   <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
                   <select
@@ -676,6 +709,18 @@ export default function AssemblyManagement() {
                   >
                     <option value="">Todos os Bairros</option>
                     {uniqueBairros.map(b => <option key={b} value={b}>{b}</option>)}
+                  </select>
+                </div>
+                <div className="relative">
+                  <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+                  <select
+                    value={filterPrazo}
+                    onChange={(e)=> setFilterPrazo(e.target.value as any)}
+                    className="w-full pl-9 pr-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white"
+                  >
+                    <option value="all">Todos os Prazos</option>
+                    <option value="within">Dentro do prazo</option>
+                    <option value="out">Fora do prazo</option>
                   </select>
                 </div>
               </div>
@@ -759,12 +804,14 @@ export default function AssemblyManagement() {
                                     <MapPin className="h-3 w-3 text-gray-400" />
                                     <span className="truncate">{addr.city} - {addr.neighborhood}</span>
                                   </div>
-                                  <div className="flex items-center gap-1">
+                                  <div className="flex items-center gap-2">
                                     <Calendar className="h-3 w-3 text-gray-400" />
                                     <span>
                                       Entrega: {formatDate(deliveryInfo[ap.order_id]?.date || order.previsao_entrega)}
                                     </span>
+                                    <DeadlineBadge status={getPrazoStatus(ap)} />
                                   </div>
+                
                                 </div>
                               </div>
                             </div>
@@ -1347,7 +1394,10 @@ export default function AssemblyManagement() {
                                  </div>
                               </td>
                               <td className="px-6 py-4">
-                                 <StatusBadge status={ap.status} />
+                                <div className="flex items-center gap-2">
+                                  <StatusBadge status={ap.status} />
+                                  <DeadlineBadge status={getPrazoStatus(ap)} />
+                                </div>
                               </td>
                               <td className="px-6 py-4 text-right">
                                  <button

@@ -154,6 +154,7 @@ function RouteCreationContent() {
   const [filterSaleDate, setFilterSaleDate] = useState<string>('');
   const [strictLocal, setStrictLocal] = useState<boolean>(false);
   const [filterBrand, setFilterBrand] = useState<string>('');
+  const [filterDeadline, setFilterDeadline] = useState<'all'|'within'|'out'>('all');
 
   // Logic specific
   const [selectedExistingRouteId, setSelectedExistingRouteId] = useState<string>('');
@@ -387,6 +388,28 @@ function RouteCreationContent() {
     const itemsLocs = Array.isArray(o.items_json) ? o.items_json.map((it:any)=> String(it?.location||'').trim()).filter(Boolean) : [];
     const rawLocs = Array.isArray(o.raw_json?.produtos_locais) ? o.raw_json.produtos_locais.map((p:any)=> String(p?.local_estocagem||'').trim()).filter(Boolean) : [];
     return Array.from(new Set([...(itemsLocs||[]), ...(rawLocs||[])].filter(Boolean)));
+  };
+
+  const parseDateSafe = (input: any): Date | null => {
+    if (!input) return null;
+    try {
+      const s = String(input);
+      const d = new Date(s);
+      return isNaN(d.getTime()) ? null : d;
+    } catch { return null; }
+  };
+
+  const getPrevisaoEntrega = (o: any): Date | null => {
+    const raw: any = o?.raw_json || {};
+    const prev = o?.previsao_entrega || raw?.previsao_entrega || raw?.data_prevista_entrega || '';
+    return parseDateSafe(prev);
+  };
+
+  const getPrazoStatusForOrder = (o: any): 'within' | 'out' | 'none' => {
+    const prev = getPrevisaoEntrega(o);
+    if (!prev) return 'none';
+    const today = new Date();
+    return today.getTime() <= prev.getTime() ? 'within' : 'out';
   };
 
   const selectedMixedOrders = useMemo(()=>{
@@ -975,6 +998,14 @@ function RouteCreationContent() {
                         </select>
                     </div>
                     <div className="space-y-1">
+                        <label className="text-xs font-semibold text-gray-500 uppercase">Prazo</label>
+                        <select value={filterDeadline} onChange={(e)=> setFilterDeadline(e.target.value as any)} className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all">
+                            <option value="all">Todos</option>
+                            <option value="within">Dentro do prazo</option>
+                            <option value="out">Fora do prazo</option>
+                        </select>
+                    </div>
+                    <div className="space-y-1">
                         <label className="text-xs font-semibold text-gray-500 uppercase">Operação</label>
                         <select value={filterOperation} onChange={(e)=>setFilterOperation(e.target.value)} className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all">
                             <option value="">Todas</option>
@@ -1112,6 +1143,11 @@ function RouteCreationContent() {
                                  if (filterFilialVenda && filial !== filterFilialVenda.toLowerCase()) return false;
                                  if (filterSeller && !seller.includes(filterSeller.toLowerCase())) return false;
                                  if (filterSaleDate && saleDateStr !== filterSaleDate) return false;
+                                 if (filterDeadline !== 'all') {
+                                   const st = getPrazoStatusForOrder(o);
+                                   if (filterDeadline === 'within' && st !== 'within') return false;
+                                   if (filterDeadline === 'out' && st !== 'out') return false;
+                                 }
                                  return true;
                                });
 
@@ -1210,6 +1246,17 @@ function RouteCreationContent() {
                                                     Full
                                                   </span>
                                                 )}
+                                                {(() => {
+                                                  const st = getPrazoStatusForOrder(o);
+                                                  const cls = st === 'within' ? 'bg-green-100 text-green-800 border-green-200' : st === 'out' ? 'bg-red-100 text-red-800 border-red-200' : 'bg-gray-100 text-gray-700 border-gray-200';
+                                                  const label = st === 'within' ? 'Dentro do prazo' : st === 'out' ? 'Fora do prazo' : 'Sem previsão';
+                                                  return (
+                                                    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold border ${cls}`} title="Prazo vs previsão">
+                                                      <Calendar className="h-3.5 w-3.5" />
+                                                      {label}
+                                                    </span>
+                                                  );
+                                                })()}
                                               </div>
                                             ) : c.id === 'produto' ? (
                                               <div className="flex items-center gap-2">
