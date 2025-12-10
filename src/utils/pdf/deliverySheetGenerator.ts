@@ -332,9 +332,10 @@ export class DeliverySheetGenerator {
       }
       if (isAssemblySheet) {
         const dateLine = 'Data: ____/____/______';
-        const offsetY = y - (declLines.length * 12);
+        const gap = 10;
+        const offsetY = y - (declLines.length * 12) - gap;
         this.drawText(page, dateLine, margin, offsetY, { font: helveticaFont, size: 10, color: { r: 0, g: 0, b: 0 } });
-        y -= (34 + Math.max(0, (declLines.length) * 12));
+        y -= (34 + Math.max(0, (declLines.length) * 12) + gap);
       } else {
         y -= (34 + Math.max(0, (declLines.length - 1) * 12));
       }
