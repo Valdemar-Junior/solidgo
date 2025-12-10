@@ -97,11 +97,17 @@ export class DeliverySheetGenerator {
     page.drawLine({ start: { x: margin, y }, end: { x: width - margin, y }, thickness: 1, color: rgb(0, 0, 0) });
     y -= 10;
 
-    // Per-item blocks following the provided structure
+    // Per-order blocks (deduplicated by order_id)
+    const printedOrderIds = new Set<string>();
+    let itemIndex = 0;
     for (let i = 0; i < data.routeOrders.length; i++) {
       const ro = data.routeOrders[i];
-      const order = data.orders.find(o => o.id === ro.order_id);
+      const oid = String(ro.order_id);
+      if (printedOrderIds.has(oid)) continue;
+      printedOrderIds.add(oid);
+      const order = data.orders.find(o => String(o.id) === oid);
       if (!order) continue;
+      itemIndex++;
       
       // Precompute dynamic heights to ensure the whole block fits including signatures
       const addr = order.address_json || { street: '', neighborhood: '', city: '', zip: '', complement: '' };
@@ -176,7 +182,7 @@ export class DeliverySheetGenerator {
         y -= 18; // extra breathing between header line and first item
       }
 
-      this.drawText(page, `Item: ${i + 1}`, margin, y, { font: helveticaBoldFont, size: 10, color: { r: 0, g: 0, b: 0 } });
+      this.drawText(page, `Item: ${itemIndex}`, margin, y, { font: helveticaBoldFont, size: 10, color: { r: 0, g: 0, b: 0 } });
       const vendedorNome = String((order as any).vendedor_nome || (order as any).raw_json?.nome_vendedor || (order as any).raw_json?.vendedor || (order as any).raw_json?.vendedor_nome || '').trim();
       const rightColX = margin + 280;
       const vendLabel = 'Vendedor: ';
