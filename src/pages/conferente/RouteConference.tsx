@@ -85,8 +85,8 @@ export default function RouteConference() {
               const qty = Number(it?.quantity || 0);
               const skuRaw = String(it?.sku || '').trim();
               const skuLower = skuRaw.toLowerCase();
-              // Remover sufixo numérico de impressão (ex.: 2021-3 -> 2021)
-              const skuNorm = skuLower.replace(/-\d+$/, '');
+              // Mantém o sufixo conforme etiqueta impressa (variação/cor)
+              const skuNorm = skuLower;
               if (qty > 0 && skuRaw) {
                 for (let i = 1; i <= qty; i++) {
                   const disp = `${i}/${qty}-${skuRaw}`;
