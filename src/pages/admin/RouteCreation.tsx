@@ -522,17 +522,6 @@ function RouteCreationContent() {
         .eq('status', 'pending')
         .order('created_at', { ascending: false });
 
-      // Prefer RPC
-      let driversData: any[] | null = null;
-      try {
-        const { data: rpcDrivers } = await supabase.rpc('list_drivers');
-        if (rpcDrivers) {
-          driversData = rpcDrivers.map((d: any) => ({ id: d.driver_id, active: true, user: { id: null, name: d.name } }));
-        }
-      } catch (e) {
-        driversData = null;
-      }
-
       // Load active vehicles
       const { data: vehiclesData } = await supabase
         .from('vehicles')
@@ -578,21 +567,12 @@ function RouteCreationContent() {
         }
       } catch {}
 
-      // Drivers Logic
-      if (driversData && driversData.length > 0) {
-        setDrivers(driversData as DriverWithUser[]);
-      } else {
-        const { data: directDrivers } = await supabase
-          .from('drivers')
-          .select('id, active, user:users!user_id(id,name,email)')
-          .eq('active', true);
-        if (directDrivers && directDrivers.length > 0) {
-          setDrivers(directDrivers as any);
-        } else {
-            // ...fallback creation logic from original...
-            setDrivers([]); 
-        }
-      }
+      // Drivers Logic (always from table to ensure IDs consistent)
+      const { data: directDrivers } = await supabase
+        .from('drivers')
+        .select('id, active, user:users!user_id(id,name,email)')
+        .eq('active', true);
+      setDrivers((directDrivers || []) as any);
       
       if (vehiclesData) setVehicles(vehiclesData as Vehicle[]);
 
@@ -1285,7 +1265,7 @@ function RouteCreationContent() {
                                     <div className="space-y-3 mb-6">
                                         <div className="flex items-center text-sm text-gray-600">
                                             <User className="h-4 w-4 mr-2 text-gray-400" />
-                                            {(route.driver as any)?.user?.name || route.driver?.name || 'Sem motorista'}
+                                            {((route.driver as any)?.user?.name) || (route.driver as any)?.name || 'Sem motorista'}
                                         </div>
                                         <div className="flex items-center text-sm text-gray-600">
                                             <ClipboardList className="h-4 w-4 mr-2 text-gray-400" />
@@ -1384,7 +1364,7 @@ function RouteCreationContent() {
                                         className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all"
                                       >
                                           <option value="">Selecione...</option>
-                                          {drivers.map(d => <option key={d.id} value={d.id}>{d.name || d.user?.name}</option>)}
+                                          {drivers.map(d => <option key={d.id} value={d.id}>{d.user?.name || d.name || d.id}</option>)}
                                       </select>
                                   </div>
                                   <div>
