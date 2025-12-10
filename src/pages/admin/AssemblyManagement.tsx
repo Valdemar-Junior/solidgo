@@ -55,6 +55,8 @@ export default function AssemblyManagement() {
   const [editRouteName, setEditRouteName] = useState('');
   const [editRouteDeadline, setEditRouteDeadline] = useState('');
   const [editRouteObservations, setEditRouteObservations] = useState('');
+  const [editAssemblerId, setEditAssemblerId] = useState('');
+  const [editVehicleId, setEditVehicleId] = useState('');
   
   // Selection & Management
   const [selectedProducts, setSelectedProducts] = useState<string[]>([]);
@@ -324,7 +326,9 @@ export default function AssemblyManagement() {
         .update({
           name: editRouteName,
           deadline: editRouteDeadline || null,
-          observations: editRouteObservations || null
+          observations: editRouteObservations || null,
+          assembler_id: editAssemblerId || null,
+          vehicle_id: editVehicleId || null
         })
         .eq('id', routeBeingEdited.id);
       if (error) throw error;
@@ -1022,6 +1026,34 @@ export default function AssemblyManagement() {
                 <label className="block text-sm font-medium text-gray-700 mb-1">Observações</label>
                 <textarea value={editRouteObservations} onChange={(e) => setEditRouteObservations(e.target.value)} rows={3} className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500" />
               </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Montador</label>
+                  <select
+                    value={editAssemblerId}
+                    onChange={(e) => setEditAssemblerId(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 bg-white"
+                  >
+                    <option value="">Selecionar montador</option>
+                    {montadores.map(m => (
+                      <option key={m.id} value={m.id}>{m.name || m.email}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Veículo</label>
+                  <select
+                    value={editVehicleId}
+                    onChange={(e) => setEditVehicleId(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 bg-white"
+                  >
+                    <option value="">Selecionar veículo</option>
+                    {vehicles.map(v => (
+                      <option key={v.id} value={v.id}>{v.plate} — {v.model}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
             </div>
             <div className="px-6 py-4 bg-gray-50 border-t border-gray-100 flex justify-end gap-3">
               <button onClick={() => setShowRouteEditModal(false)} className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50">Cancelar</button>
@@ -1195,6 +1227,8 @@ export default function AssemblyManagement() {
                     setEditRouteName(routeDetails.route.name);
                     setEditRouteDeadline(routeDetails.route.deadline ? routeDetails.route.deadline.substring(0, 10) : '');
                     setEditRouteObservations(routeDetails.route.observations || '');
+                    setEditAssemblerId((routeDetails.route as any).assembler_id || '');
+                    setEditVehicleId((routeDetails.route as any).vehicle_id || '');
                     setShowRouteDetailsModal(false);
                     setShowRouteEditModal(true);
                   }}
