@@ -740,6 +740,17 @@ function RouteCreationContent() {
         if (routeError) throw routeError;
         targetRouteId = routeData.id;
       }
+      // If adding to existing route, persist assignments if provided
+      if (selectedExistingRouteId) {
+        const updatePayload: any = {};
+        if (selectedDriver) updatePayload.driver_id = selectedDriver;
+        if (selectedVehicle) updatePayload.vehicle_id = selectedVehicle;
+        if (conferente) updatePayload.conferente = conferente.trim();
+        if (Object.keys(updatePayload).length > 0) {
+          const { error: updErr } = await supabase.from('routes').update(updatePayload).eq('id', targetRouteId);
+          if (updErr) throw updErr;
+        }
+      }
 
       const { data: existingRO } = await supabase
         .from('route_orders')
