@@ -731,8 +731,8 @@ function RouteCreationContent() {
     setSelectedOrders(newSelected);
   };
 
-  const createRoute = async () => {
-    if (openMixedConfirm('create')) return;
+  const createRoute = async (forceProceed: boolean = false) => {
+    if (!forceProceed && openMixedConfirm('create')) return;
     if (!selectedExistingRouteId) {
       if (!routeName.trim()) { toast.error('Por favor, informe um nome para a rota'); return; }
       if (!selectedDriver) { toast.error('Por favor, selecione um motorista'); return; }
@@ -1440,7 +1440,7 @@ function RouteCreationContent() {
                   <div className="px-6 py-4 border-t border-gray-100 bg-gray-50 flex justify-end gap-3">
                       <button onClick={()=>setShowCreateModal(false)} className="px-6 py-2.5 rounded-xl border border-gray-300 text-gray-700 font-medium hover:bg-white transition-colors">Cancelar</button>
                       <button 
-                        onClick={createRoute}
+                        onClick={()=>createRoute()}
                         disabled={saving || (!selectedExistingRouteId && (!routeName || !selectedDriver))}
                         className="px-6 py-2.5 rounded-xl bg-blue-600 text-white font-bold hover:bg-blue-700 shadow-lg shadow-blue-200 disabled:opacity-50 disabled:shadow-none transition-all transform active:scale-95"
                       >
@@ -2226,7 +2226,7 @@ function RouteCreationContent() {
                   <div className="flex justify-end gap-3">
                       <button onClick={()=>setMixedConfirmOpen(false)} className="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50">Cancelar</button>
                       <button 
-                        onClick={()=>{ setMixedConfirmOpen(false); if (mixedConfirmAction==='create') createRoute(); }}
+                        onClick={()=>{ setMixedConfirmOpen(false); if (mixedConfirmAction==='create') createRoute(true); }}
                         className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
                       >
                           Sim, Continuar
