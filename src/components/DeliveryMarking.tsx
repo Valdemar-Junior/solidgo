@@ -117,15 +117,14 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
     try {
       // Tenta cache primeiro para funcionar offline
       const cached = await OfflineStorage.getItem('return_reasons');
-      if (cached) {
+      if (cached && cached.length) {
         setReturnReasons(cached);
+      } else {
+        setReturnReasons(FALLBACK_RETURN_REASONS);
+        await OfflineStorage.setItem('return_reasons', FALLBACK_RETURN_REASONS);
       }
 
       if (!NetworkStatus.isOnline()) {
-        if (!cached) {
-          setReturnReasons(FALLBACK_RETURN_REASONS);
-          await OfflineStorage.setItem('return_reasons', FALLBACK_RETURN_REASONS);
-        }
         return;
       }
 
@@ -136,14 +135,17 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
         .order('reason_text', { ascending: true });
 
       if (error) throw error;
-      if (data) {
+      if (data && data.length > 0) {
         setReturnReasons(data as ReturnReason[]);
         await OfflineStorage.setItem('return_reasons', data);
+      } else {
+        setReturnReasons(FALLBACK_RETURN_REASONS);
+        await OfflineStorage.setItem('return_reasons', FALLBACK_RETURN_REASONS);
       }
     } catch (error) {
       console.error('Error loading return reasons:', error);
       const cached = await OfflineStorage.getItem('return_reasons');
-      if (cached) {
+      if (cached && cached.length) {
         setReturnReasons(cached);
       } else {
         setReturnReasons(FALLBACK_RETURN_REASONS);
@@ -151,6 +153,15 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
       }
     }
   };
+
+  // Se carregou lista e nada selecionado, pré-seleciona a primeira opção para evitar botão desabilitado
+  useEffect(() => {
+    if (!returnReason && returnReasons.length > 0) {
+      const first = returnReasons[0];
+      const value = (first as any).reason || (first as any).reason_text || first.id || '';
+      if (value) setReturnReason(String(value));
+    }
+  }, [returnReasons, returnReason]);
 
   const openOrderInMaps = async (routeOrder: RouteOrderWithDetails) => {
     const o = routeOrder.order as any;
@@ -524,8 +535,8 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
                         >
                           <option value="">Selecione um motivo</option>
                           {returnReasons.map((reason) => {
-                            const label = (reason as any).reason_text || reason.reason;
-                            const value = reason.reason || (reason as any).reason_text || reason.id;
+                            const label = (reason as any).reason_text || (reason as any).reason || reason.id;
+                            const value = (reason as any).reason || (reason as any).reason_text || reason.id;
                             return (
                               <option key={reason.id || value} value={value}>
                                 {label}
@@ -536,14 +547,14 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
                       </div>
                       <div>
                         <label className="block text-sm font-medium text-gray-700 mb-1">
-                          Observacoes {returnReason === 'other' ? '(obrigatorio para "Outro")' : ''}
+                          Observações {returnReason === 'other' ? '(obrigatório para "Outro")' : ''}
                         </label>
                         <input
                           type="text"
                           value={returnObservations}
                           onChange={(e) => setReturnObservations(e.target.value)}
                           className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                          placeholder="Observacoes adicionais..."
+                          placeholder="Observações adicionais..."
                         />
                       </div>
                     </div>
