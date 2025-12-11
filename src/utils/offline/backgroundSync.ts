@@ -122,7 +122,11 @@ export class BackgroundSyncService {
 
     const updateData: any = { status: action };
     if (action === 'delivered') updateData.delivered_at = local_timestamp;
-    if (action === 'returned') updateData.returned_at = local_timestamp;
+    if (action === 'returned') {
+      updateData.returned_at = local_timestamp;
+      if (data.return_reason) updateData.return_reason = data.return_reason;
+      if (data.observations) updateData.return_observations = data.observations;
+    }
     if (signature) updateData.signature_url = signature;
 
     const { error } = await supabase

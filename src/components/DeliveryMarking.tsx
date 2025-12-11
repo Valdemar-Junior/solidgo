@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+﻿import { useState, useEffect } from 'react';
 import { supabase } from '../supabase/client';
 import { OfflineStorage, SyncQueue, NetworkStatus } from '../utils/offline/storage';
 import { backgroundSync } from '../utils/offline/backgroundSync';
@@ -6,6 +6,14 @@ import type { RouteOrderWithDetails, Order, ReturnReason } from '../types/databa
 import { Package, CheckCircle, XCircle, Clock, MapPin } from 'lucide-react';
 import { buildFullAddress, geocodeAddress, openWazeWithLL } from '../utils/maps';
 import { toast } from 'sonner';
+
+const FALLBACK_RETURN_REASONS: ReturnReason[] = [
+  { id: 'customer-absent', reason: 'Cliente ausente' },
+  { id: 'address-issue', reason: 'EndereÃ§o incorreto ou incompleto' },
+  { id: 'payment-issue', reason: 'Problema com pagamento' },
+  { id: 'refused', reason: 'Cliente recusou entrega' },
+  { id: 'other', reason: 'Outro (digitar abaixo)' },
+];
 
 interface DeliveryMarkingProps {
   routeId: string;
@@ -70,8 +78,8 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
           await OfflineStorage.setItem(`route_orders_${routeId}`, data);
           try {
             /* 
-            Removido auto-geocoding no load para evitar lentidão e redundância.
-            As coordenadas devem vir da importação ou serem buscadas sob demanda.
+            Removido auto-geocoding no load para evitar lentidÃ£o e redundÃ¢ncia.
+            As coordenadas devem vir da importaÃ§Ã£o ou serem buscadas sob demanda.
             
             const missing = (data as any[]).filter(r => {
               const a = typeof r.order?.address_json === 'string' ? JSON.parse(r.order.address_json) : (r.order?.address_json || {})
@@ -107,6 +115,20 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
 
   const loadReturnReasons = async () => {
     try {
+      // Tenta cache primeiro para funcionar offline
+      const cached = await OfflineStorage.getItem('return_reasons');
+      if (cached) {
+        setReturnReasons(cached);
+      }
+
+      if (!NetworkStatus.isOnline()) {
+        if (!cached) {
+          setReturnReasons(FALLBACK_RETURN_REASONS);
+          await OfflineStorage.setItem('return_reasons', FALLBACK_RETURN_REASONS);
+        }
+        return;
+      }
+
       const { data, error } = await supabase
         .from('return_reasons')
         .select('*')
@@ -116,15 +138,16 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
       if (error) throw error;
       if (data) {
         setReturnReasons(data as ReturnReason[]);
-        // Cache offline
         await OfflineStorage.setItem('return_reasons', data);
       }
     } catch (error) {
       console.error('Error loading return reasons:', error);
-      // Try to load from cache
       const cached = await OfflineStorage.getItem('return_reasons');
       if (cached) {
         setReturnReasons(cached);
+      } else {
+        setReturnReasons(FALLBACK_RETURN_REASONS);
+        await OfflineStorage.setItem('return_reasons', FALLBACK_RETURN_REASONS);
       }
     }
   };
@@ -149,7 +172,7 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
       return;
     }
     
-    // Se não tiver lat/lng, avisa e tenta buscar (mas só se o usuário clicar, não automático no load)
+    // Se nÃ£o tiver lat/lng, avisa e tenta buscar (mas sÃ³ se o usuÃ¡rio clicar, nÃ£o automÃ¡tico no load)
     toast.info('Buscando coordenadas...');
     
     try {
@@ -161,7 +184,7 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
           openWazeWithLL(js.lat, js.lng)
           return
         }
-        if (js && js.text) toast.warning('Endereço sem coordenadas, tentando cliente')
+        if (js && js.text) toast.warning('EndereÃ§o sem coordenadas, tentando cliente')
       }
       const coords = await geocodeAddress(enriched);
       if (coords) {
@@ -173,7 +196,7 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
         return;
       }
     } catch {}
-    toast.error('Não foi possível obter coordenadas para este endereço. Ajuste o endereço no admin e tente novamente.');
+    toast.error('NÃ£o foi possÃ­vel obter coordenadas para este endereÃ§o. Ajuste o endereÃ§o no admin e tente novamente.');
   };
 
   const markAsDelivered = async (order: RouteOrderWithDetails) => {
@@ -222,7 +245,7 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
                 customer_name: orderData.customer_name,
                 customer_phone: orderData.phone,
                 installation_address: orderData.address_json,
-                status: 'pending', // Mantém como pending para o admin atribuir
+                status: 'pending', // MantÃ©m como pending para o admin atribuir
                 created_at: new Date().toISOString(),
                 updated_at: new Date().toISOString()
               }));
@@ -303,6 +326,13 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
       return;
     }
 
+    const isOther = returnReason === 'other';
+    const reasonValue = isOther ? returnObservations.trim() : returnReason;
+    if (isOther && !reasonValue) {
+      toast.error('Informe o motivo no campo Observacoes ao escolher "Outro"');
+      return;
+    }
+
     try {
       if (processingIds.has(order.id)) return;
       const next = new Set(processingIds); next.add(order.id); setProcessingIds(next);
@@ -310,7 +340,7 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
         order_id: order.order_id,
         route_id: routeId,
         action: 'returned' as const,
-        return_reason: returnReason,
+        return_reason: reasonValue,
         observations: returnObservations,
         local_timestamp: new Date().toISOString(),
         user_id: (await supabase.auth.getUser()).data.user?.id || '',
@@ -322,6 +352,8 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
           .update({
             status: 'returned',
             returned_at: confirmation.local_timestamp,
+            return_reason: confirmation.return_reason,
+            return_observations: confirmation.observations || null,
           })
           .eq('id', order.id);
 
@@ -354,7 +386,7 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
         });
 
         // Update local state
-        const returnReasonObj = returnReasons.find(r => r.reason === returnReason);
+        const returnReasonObj = returnReasons.find(r => r.reason === returnReason || r.reason === reasonValue);
         const updatedOrders = routeOrders.map(ro => 
           ro.id === order.id 
             ? { ...ro, status: 'returned' as const, returned_at: confirmation.local_timestamp, return_reason: returnReasonObj || null }
@@ -491,23 +523,27 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
                           className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                         >
                           <option value="">Selecione um motivo</option>
-                          {returnReasons.map((reason) => (
-                            <option key={reason.id} value={reason.reason}>
-                              {reason.reason}
-                            </option>
-                          ))}
+                          {returnReasons.map((reason) => {
+                            const label = (reason as any).reason_text || reason.reason;
+                            const value = reason.reason || (reason as any).reason_text || reason.id;
+                            return (
+                              <option key={reason.id || value} value={value}>
+                                {label}
+                              </option>
+                            );
+                          })}
                         </select>
                       </div>
                       <div>
                         <label className="block text-sm font-medium text-gray-700 mb-1">
-                          Observações
+                          Observacoes {returnReason === 'other' ? '(obrigatorio para "Outro")' : ''}
                         </label>
                         <input
                           type="text"
                           value={returnObservations}
                           onChange={(e) => setReturnObservations(e.target.value)}
                           className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                          placeholder="Observações adicionais..."
+                          placeholder="Observacoes adicionais..."
                         />
                       </div>
                     </div>
@@ -557,3 +593,10 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
     </div>
   );
 }
+
+
+
+
+
+
+
