@@ -364,7 +364,7 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
             status: 'returned',
             returned_at: confirmation.local_timestamp,
             return_reason: confirmation.return_reason,
-            return_observations: confirmation.observations || null,
+            return_notes: confirmation.observations || null,
           })
           .eq('id', order.id);
 

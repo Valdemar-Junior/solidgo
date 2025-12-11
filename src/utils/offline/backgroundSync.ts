@@ -125,7 +125,7 @@ export class BackgroundSyncService {
     if (action === 'returned') {
       updateData.returned_at = local_timestamp;
       if (data.return_reason) updateData.return_reason = data.return_reason;
-      if (data.observations) updateData.return_observations = data.observations;
+      if (data.observations) updateData.return_notes = data.observations;
     }
     if (signature) updateData.signature_url = signature;
 
