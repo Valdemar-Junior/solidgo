@@ -419,6 +419,7 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
 
       // Toast com opção de desfazer
       toast.success('Retorno registrado', {
+        duration: 6000,
         action: {
           label: 'Desfazer',
           onClick: () => undoReturn(order.id),
@@ -618,6 +619,19 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
                         />
                       </div>
                     </div>
+                  </div>
+                )}
+
+                {/* Undo for returned */}
+                {routeOrder.status === 'returned' && (
+                  <div className="mt-3">
+                    <button
+                      onClick={() => undoReturn(routeOrder.id)}
+                      disabled={processingIds.has(routeOrder.id)}
+                      className="inline-flex items-center px-3 py-2 bg-gray-200 text-gray-800 rounded-md hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+                    >
+                      Desfazer retorno
+                    </button>
                   </div>
                 )}
               </div>
