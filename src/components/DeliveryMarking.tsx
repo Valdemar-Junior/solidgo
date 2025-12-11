@@ -414,12 +414,64 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
       // Reset return form
       setReturnReason('');
       setReturnObservations('');
-      
+
+      // Toast com opção de desfazer
+      toast.success('Retorno registrado', {
+        action: {
+          label: 'Desfazer',
+          onClick: () => undoReturn(order.id),
+        },
+      });
+
     } catch (error) {
       console.error('Error marking as returned:', error);
       toast.error('Erro ao marcar pedido como retornado');
     } finally {
       const next2 = new Set(processingIds); next2.delete(order.id); setProcessingIds(next2);
+    }
+  };
+
+  const undoReturn = async (routeOrderId: string) => {
+    const current = routeOrders.find(ro => ro.id === routeOrderId);
+    if (!current) return;
+
+    try {
+      if (processingIds.has(routeOrderId)) return;
+      const next = new Set(processingIds); next.add(routeOrderId); setProcessingIds(next);
+
+      if (isOnline) {
+        const { error } = await supabase
+          .from('route_orders')
+          .update({
+            status: 'pending',
+            returned_at: null,
+            return_reason: null,
+            return_notes: null,
+          })
+          .eq('id', routeOrderId);
+        if (error) throw error;
+
+        await supabase.from('orders').update({ status: 'pending' }).eq('id', current.order_id);
+
+        const updated = routeOrders.map(ro => ro.id === routeOrderId ? { ...ro, status: 'pending', returned_at: null, return_reason: null } : ro);
+        setRouteOrders(updated);
+        await OfflineStorage.setItem(`route_orders_${routeId}`, updated);
+        toast.success('Retorno desfeito');
+      } else {
+        await SyncQueue.addItem({
+          type: 'return_revert',
+          data: { order_id: current.order_id, route_id: routeId },
+        });
+        const updated = routeOrders.map(ro => ro.id === routeOrderId ? { ...ro, status: 'pending', returned_at: null, return_reason: null } : ro);
+        setRouteOrders(updated);
+        await OfflineStorage.setItem(`route_orders_${routeId}`, updated);
+        toast.success('Retorno desfeito (offline)');
+      }
+    } catch (error) {
+      console.error('Error undoing return:', error);
+      toast.error('Erro ao desfazer retorno');
+    } finally {
+      const next2 = new Set(processingIds); next2.delete(routeOrderId); setProcessingIds(next2);
     }
   };
 
@@ -511,7 +563,7 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
                     return <div>Valor: R$ {v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>;
                   })()}
                   {(() => {
-                    const obs = (order as any).observacoes_publicas || (order as any).raw_json?.observacoes || '';
+                    const obs = (order as any).Observacoes_publicas || (order as any).raw_json?.Observacoes || '';
                     return obs ? (
                       <div className="text-yellow-600">
                         <strong>Obs:</strong> {obs}
@@ -547,14 +599,14 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
                       </div>
                       <div>
                         <label className="block text-sm font-medium text-gray-700 mb-1">
-                          Observações {returnReason === 'other' ? '(obrigatório para "Outro")' : ''}
+                          Observacoes {returnReason === 'other' ? '(obrigatorio para "Outro")' : ''}
                         </label>
                         <input
                           type="text"
                           value={returnObservations}
                           onChange={(e) => setReturnObservations(e.target.value)}
                           className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                          placeholder="Observações adicionais..."
+                          placeholder="Observacoes adicionais..."
                         />
                       </div>
                     </div>
@@ -604,6 +656,9 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
     </div>
   );
 }
+
+
+
 
 
 

@@ -109,6 +109,9 @@ export class BackgroundSyncService {
       case 'delivery_confirmation':
         await this.syncDeliveryConfirmation(item.data);
         break;
+      case 'return_revert':
+        await this.syncReturnRevert(item.data);
+        break;
       case 'order_update':
         await this.syncOrderUpdate(item.data);
         break;
@@ -154,6 +157,32 @@ export class BackgroundSyncService {
     }
 
     await this.logSyncAction('delivery_confirmation', order_id, action, user_id);
+  }
+
+  private async syncReturnRevert(data: any): Promise<void> {
+    const { order_id, route_id } = data;
+    const { error } = await supabase
+      .from('route_orders')
+      .update({
+        status: 'pending',
+        returned_at: null,
+        return_reason: null,
+        return_notes: null,
+      })
+      .eq('order_id', order_id)
+      .eq('route_id', route_id);
+
+    if (error) {
+      throw new Error(`Failed to revert return: ${error.message}`);
+    }
+
+    const { error: orderError } = await supabase
+      .from('orders')
+      .update({ status: 'pending' })
+      .eq('id', order_id);
+    if (orderError) console.warn('Failed to update order status on revert:', orderError);
+
+    await this.logSyncAction('return_revert', order_id, 'pending', data.user_id || null);
   }
 
   private async syncOrderUpdate(data: any): Promise<void> {
