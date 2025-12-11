@@ -26,9 +26,9 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
   const [loading, setLoading] = useState(true);
   const [isOnline, setIsOnline] = useState(NetworkStatus.isOnline());
   const [processingIds, setProcessingIds] = useState<Set<string>>(new Set());
-  
-  const [returnReason, setReturnReason] = useState<string>('');
-  const [returnObservations, setReturnObservations] = useState<string>('');
+  // Seleção por pedido para evitar pré-seleção global
+  const [returnReasonByOrder, setReturnReasonByOrder] = useState<Record<string, string>>({});
+  const [returnObservationsByOrder, setReturnObservationsByOrder] = useState<Record<string, string>>({});
 
   useEffect(() => {
     loadRouteOrders();
@@ -153,15 +153,6 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
       }
     }
   };
-
-  // Se carregou lista e nada selecionado, pré-seleciona a primeira opção para evitar botão desabilitado
-  useEffect(() => {
-    if (!returnReason && returnReasons.length > 0) {
-      const first = returnReasons[0];
-      const value = (first as any).reason || (first as any).reason_text || first.id || '';
-      if (value) setReturnReason(String(value));
-    }
-  }, [returnReasons, returnReason]);
 
   const openOrderInMaps = async (routeOrder: RouteOrderWithDetails) => {
     const o = routeOrder.order as any;
@@ -332,13 +323,16 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
 
 
   const markAsReturned = async (order: RouteOrderWithDetails) => {
-    if (!returnReason) {
+    const currentReason = returnReasonByOrder[order.id] || '';
+    const currentObs = returnObservationsByOrder[order.id] || '';
+
+    if (!currentReason) {
       toast.error('Por favor, selecione um motivo para o retorno');
       return;
     }
 
-    const isOther = returnReason === 'other';
-    const reasonValue = isOther ? returnObservations.trim() : returnReason;
+    const isOther = currentReason === 'other';
+    const reasonValue = isOther ? currentObs.trim() : currentReason;
     if (isOther && !reasonValue) {
       toast.error('Informe o motivo no campo Observacoes ao escolher "Outro"');
       return;
@@ -352,7 +346,7 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
         route_id: routeId,
         action: 'returned' as const,
         return_reason: reasonValue,
-        observations: returnObservations,
+        observations: currentObs,
         local_timestamp: new Date().toISOString(),
         user_id: (await supabase.auth.getUser()).data.user?.id || '',
       };
@@ -371,7 +365,7 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
         if (error) throw error;
 
         toast.success('Pedido marcado como retornado!');
-        setRouteOrders(prev => prev.map(ro => ro.id === order.id ? { ...ro, status: 'returned', returned_at: confirmation.local_timestamp } : ro));
+        setRouteOrders(prev => prev.map(ro => ro.id === order.id ? { ...ro, status: 'returned', returned_at: confirmation.local_timestamp, return_reason: { reason: reasonValue } as any, return_notes: currentObs } : ro));
         try {
           const { data } = await supabase
             .from('route_orders')
@@ -397,10 +391,10 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
         });
 
         // Update local state
-        const returnReasonObj = returnReasons.find(r => r.reason === returnReason || r.reason === reasonValue);
+        const returnReasonObj = returnReasons.find(r => r.reason === currentReason || r.reason === reasonValue);
         const updatedOrders = routeOrders.map(ro => 
           ro.id === order.id 
-            ? { ...ro, status: 'returned' as const, returned_at: confirmation.local_timestamp, return_reason: returnReasonObj || null }
+            ? { ...ro, status: 'returned' as const, returned_at: confirmation.local_timestamp, return_reason: returnReasonObj || null, return_notes: currentObs }
             : ro
         );
         setRouteOrders(updatedOrders);
@@ -412,8 +406,16 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
       }
 
       // Reset return form
-      setReturnReason('');
-      setReturnObservations('');
+      setReturnReasonByOrder(prev => {
+        const copy = { ...prev };
+        delete copy[order.id];
+        return copy;
+      });
+      setReturnObservationsByOrder(prev => {
+        const copy = { ...prev };
+        delete copy[order.id];
+        return copy;
+      });
 
       // Toast com opção de desfazer
       toast.success('Retorno registrado', {
@@ -456,15 +458,19 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
         const updated = routeOrders.map(ro => ro.id === routeOrderId ? { ...ro, status: 'pending', returned_at: null, return_reason: null } : ro);
         setRouteOrders(updated);
         await OfflineStorage.setItem(`route_orders_${routeId}`, updated);
+        setReturnReasonByOrder(prev => { const copy = { ...prev }; delete copy[routeOrderId]; return copy; });
+        setReturnObservationsByOrder(prev => { const copy = { ...prev }; delete copy[routeOrderId]; return copy; });
         toast.success('Retorno desfeito');
       } else {
         await SyncQueue.addItem({
           type: 'return_revert',
-          data: { order_id: current.order_id, route_id: routeId },
+          data: { order_id: current.order_id, route_id: routeId, user_id: current.route_id },
         });
         const updated = routeOrders.map(ro => ro.id === routeOrderId ? { ...ro, status: 'pending', returned_at: null, return_reason: null } : ro);
         setRouteOrders(updated);
         await OfflineStorage.setItem(`route_orders_${routeId}`, updated);
+        setReturnReasonByOrder(prev => { const copy = { ...prev }; delete copy[routeOrderId]; return copy; });
+        setReturnObservationsByOrder(prev => { const copy = { ...prev }; delete copy[routeOrderId]; return copy; });
         toast.success('Retorno desfeito (offline)');
       }
     } catch (error) {
@@ -520,6 +526,8 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
       {routeOrders.map((routeOrder) => {
         const order = routeOrder.order;
         if (!order) return null;
+        const selectedReason = returnReasonByOrder[routeOrder.id] || '';
+        const selectedObs = returnObservationsByOrder[routeOrder.id] || '';
 
         return (
           <div key={routeOrder.id} className="bg-white rounded-lg shadow p-4">
@@ -581,8 +589,8 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
                           Motivo do Retorno
                         </label>
                         <select
-                          value={returnReason}
-                          onChange={(e) => setReturnReason(e.target.value)}
+                          value={selectedReason}
+                          onChange={(e) => setReturnReasonByOrder(prev => ({ ...prev, [routeOrder.id]: e.target.value }))}
                           className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                         >
                           <option value="">Selecione um motivo</option>
@@ -599,12 +607,12 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
                       </div>
                       <div>
                         <label className="block text-sm font-medium text-gray-700 mb-1">
-                          Observacoes {returnReason === 'other' ? '(obrigatorio para "Outro")' : ''}
+                          Observacoes {selectedReason === 'other' ? '(obrigatorio para "Outro")' : ''}
                         </label>
                         <input
                           type="text"
-                          value={returnObservations}
-                          onChange={(e) => setReturnObservations(e.target.value)}
+                          value={selectedObs}
+                          onChange={(e) => setReturnObservationsByOrder(prev => ({ ...prev, [routeOrder.id]: e.target.value }))}
                           className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                           placeholder="Observacoes adicionais..."
                         />
@@ -636,7 +644,7 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
                     
                     <button
                       onClick={() => markAsReturned(routeOrder)}
-                      disabled={!returnReason || processingIds.has(routeOrder.id)}
+                      disabled={!selectedReason || processingIds.has(routeOrder.id)}
                       className="flex items-center px-3 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm"
                     >
                       <XCircle className="h-4 w-4 mr-1" />
@@ -656,6 +664,9 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
     </div>
   );
 }
+
+
+
 
 
 
