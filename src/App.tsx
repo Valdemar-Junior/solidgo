@@ -18,6 +18,7 @@ import ConferenteRouteConference from './pages/conferente/RouteConference';
 import OrdersImport from './pages/admin/OrdersImport';
 import RouteCreation from './pages/admin/RouteCreation';
 import AssemblyManagement from './pages/admin/AssemblyManagement';
+import OrderLookup from './pages/admin/OrderLookup';
 import AssemblyDashboard from './pages/montador/AssemblyDashboard';
 import TesteImportacao from './pages/teste-importacao';
 import DiagnosticoOrders from './pages/diagnostico-orders';
@@ -110,6 +111,14 @@ function App() {
             element={
               <ProtectedRoute allowedRoles={['admin']}>
                 <AssemblyManagement />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/order-lookup"
+            element={
+              <ProtectedRoute allowedRoles={['admin']}>
+                <OrderLookup />
               </ProtectedRoute>
             }
           />

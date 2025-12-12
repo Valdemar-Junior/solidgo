@@ -15,7 +15,8 @@ import {
   TrendingUp,
   AlertTriangle,
   CheckCircle2,
-  Bell
+  Bell,
+  Search
 } from 'lucide-react';
 
 export default function AdminDashboard() {
@@ -89,6 +90,14 @@ export default function AdminDashboard() {
       href: '/admin/orders',
       color: 'bg-blue-600',
       gradient: 'from-blue-500 to-blue-600',
+    },
+    {
+      title: 'Consulta de Pedido',
+      description: 'Pesquisar pedido e acompanhar status',
+      icon: Search,
+      href: '/admin/order-lookup',
+      color: 'bg-indigo-600',
+      gradient: 'from-indigo-500 to-indigo-600',
     },
     {
       title: 'Gestão de Entregas',
