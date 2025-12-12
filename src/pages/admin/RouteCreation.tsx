@@ -194,6 +194,17 @@ function RouteCreationContent() {
   const [viewMode, setViewMode] = useState<'products'|'orders'>('products');
   const ordersSectionRef = useRef<HTMLDivElement>(null);
   const routesSectionRef = useRef<HTMLDivElement>(null);
+
+  const WhatsAppIcon = ({ className }: { className?: string }) => (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 32 32"
+      fill="currentColor"
+      className={className}
+    >
+      <path d="M16.01 2C8.83 2 2.99 7.75 2.99 14.92c0 2.51.76 4.84 2.08 6.79L3 29.03l7.54-1.97c1.84 1 3.95 1.55 6.16 1.55 7.18 0 13.01-5.75 13.01-12.92C29.71 7.75 23.19 2 16.01 2Zm0 22.57c-1.96 0-3.83-.53-5.45-1.54l-.39-.23-4.48 1.17 1.2-4.35-.26-.41a10.76 10.76 0 0 1-1.66-5.74c0-5.93 4.9-10.76 10.93-10.76 5.95 0 10.79 4.83 10.79 10.76 0 5.93-4.84 10.77-10.79 10.77Zm6.02-8.1c-.33-.16-1.94-.96-2.24-1.07-.3-.11-.52-.16-.74.16-.22.33-.85 1.07-1.05 1.29-.19.22-.39.25-.72.09-.33-.16-1.39-.54-2.65-1.73-.98-.91-1.64-2.04-1.83-2.38-.19-.33-.02-.5.14-.66.14-.14.33-.38.5-.57.17-.2.22-.33.33-.55.11-.22.05-.41-.03-.57-.09-.16-.72-1.73-.99-2.37-.26-.63-.52-.54-.72-.55l-.61-.01c-.2 0-.52.08-.8.37-.27.3-1.04 1.02-1.04 2.5s1.07 2.9 1.22 3.1c.16.21 2.11 3.22 5.1 4.51.71.31 1.26.49 1.69.63.71.23 1.35.2 1.86.12.57-.08 1.75-.72 2-1.41.25-.69.25-1.27.18-1.4-.07-.14-.29-.23-.62-.39Z" />
+    </svg>
+  );
   
   // Drag logic
   const productsScrollRef = useRef<HTMLDivElement>(null);
@@ -1913,7 +1924,7 @@ function RouteCreationContent() {
                         <Clock className="h-4 w-4 mr-2" /> Iniciar Rota
                      </button>
 
-                     {/* WhatsApp Button */}
+                     {/* WhatsApp Button (cliente) */}
                      <button
                         onClick={async () => {
                             if (!selectedRoute) return;
@@ -1960,9 +1971,9 @@ function RouteCreationContent() {
                             }
                         }}
                         disabled={waSending}
-                        className="flex items-center justify-center px-4 py-2 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 rounded-lg font-medium text-sm transition-colors border border-indigo-200 disabled:opacity-50"
+                        className="flex items-center justify-center px-4 py-2 bg-green-50 text-green-700 hover:bg-green-100 rounded-lg font-medium text-sm transition-colors border border-green-200 disabled:opacity-50"
                      >
-                         <MessageSquare className="h-4 w-4 mr-2" /> {waSending ? 'Enviando...' : 'WhatsApp'}
+                         <WhatsAppIcon className="h-4 w-4 mr-2" /> {waSending ? 'Enviando...' : 'Enviar cliente'}
                      </button>
 
                      {/* Group Button */}
@@ -2030,9 +2041,9 @@ function RouteCreationContent() {
                             }
                         }}
                         disabled={groupSending}
-                        className="flex items-center justify-center px-4 py-2 bg-purple-50 text-purple-700 hover:bg-purple-100 rounded-lg font-medium text-sm transition-colors border border-purple-200 disabled:opacity-50"
+                        className="flex items-center justify-center px-4 py-2 bg-green-50 text-green-700 hover:bg-green-100 rounded-lg font-medium text-sm transition-colors border border-green-200 disabled:opacity-50"
                      >
-                         <MessageSquare className="h-4 w-4 mr-2" /> {groupSending ? 'Enviando...' : 'Grupo'}
+                         <WhatsAppIcon className="h-4 w-4 mr-2" /> {groupSending ? 'Enviando...' : 'Enviar grupo'}
                      </button>
 
                      {/* PDF Romaneio Button */}
@@ -2423,5 +2434,3 @@ export default function RouteCreation() {
     </RouteCreationErrorBoundary>
   );
 }
-
-

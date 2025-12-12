@@ -14,7 +14,7 @@ export interface DeliverySheetData {
 }
 
 export class DeliverySheetGenerator {
-  static async generateDeliverySheet(data: DeliverySheetData, title: string = 'Romaneio de Separação'): Promise<Uint8Array> {
+  static async generateDeliverySheet(data: DeliverySheetData, title: string = 'Romaneio de Entrega'): Promise<Uint8Array> {
     const pdfDoc = await PDFDocument.create();
     let page = pdfDoc.addPage([595.28, 841.89]);
     const { width, height } = page.getSize();

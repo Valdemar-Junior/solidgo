@@ -10,14 +10,10 @@ import {
   CheckCircle, 
   Clock, 
   AlertCircle,
-  Search,
   Filter,
   FileText,
-  MoreVertical,
   Truck,
   X,
-  ChevronDown,
-  ChevronUp,
   Edit,
   Trash2,
   Settings
@@ -62,7 +58,6 @@ export default function AssemblyManagement() {
   
   // Selection & Management
   const [selectedProducts, setSelectedProducts] = useState<string[]>([]);
-  const [selectedLancamentos, setSelectedLancamentos] = useState<string[]>([]);
   const [routeBeingManaged, setRouteBeingManaged] = useState<AssemblyRoute | null>(null);
   const [selectedToRemove, setSelectedToRemove] = useState<string[]>([]);
   const [selectedToAdd, setSelectedToAdd] = useState<string[]>([]);
@@ -72,11 +67,9 @@ export default function AssemblyManagement() {
   // Filters
   const [filterCidade, setFilterCidade] = useState('');
   const [filterBairro, setFilterBairro] = useState('');
-  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
   const [filterPrazo, setFilterPrazo] = useState<'all'|'within'|'out'>('all');
 
   // Derived Data
-  const [availableProducts, setAvailableProducts] = useState<any[]>([]);
   const [groupedProducts, setGroupedProducts] = useState<Record<string, any[]>>({});
   const [deliveryInfo, setDeliveryInfo] = useState<Record<string, { date?: string; driver?: string }>>({});
 
@@ -211,7 +204,6 @@ export default function AssemblyManagement() {
       setAssemblyProducts(productsData || []);
       setMontadores(montadoresData || []);
       setVehicles(vehiclesData || []);
-      setAvailableProducts(pendingUnrouted || []);
       setGroupedProducts(groupedByOrder);
       setDeliveryInfo(deliveryByOrderId);
     } catch (error) {
@@ -311,7 +303,6 @@ export default function AssemblyManagement() {
       setSelectedMontadorId('');
       setSelectedVehicleId('');
       setSelectedProducts([]);
-      setSelectedLancamentos([]);
       fetchData();
       
     } catch (error) {
@@ -325,10 +316,8 @@ export default function AssemblyManagement() {
     const productIds = productsInGroup.map((p: any) => p.id);
     if (checked) {
       setSelectedProducts(prev => [...new Set([...prev, ...productIds])]);
-      setSelectedLancamentos(prev => [...new Set([...prev, orderId])]);
     } else {
       setSelectedProducts(prev => prev.filter(id => !productIds.includes(id)));
-      setSelectedLancamentos(prev => prev.filter(l => l !== orderId));
     }
   };
 
@@ -507,7 +496,7 @@ export default function AssemblyManagement() {
       }
     });
     return filtered;
-  }, [groupedProducts, filterCidade, filterBairro]);
+  }, [groupedProducts, filterCidade, filterBairro, filterPrazo]);
 
   const uniqueCidades = useMemo(() => {
     const cidades = new Set<string>();
@@ -530,10 +519,6 @@ export default function AssemblyManagement() {
     });
     return Array.from(bairros).sort();
   }, [groupedProducts]);
-
-  const toggleGroup = (group: string) => {
-    setExpandedGroups(prev => ({ ...prev, [group]: !prev[group] }));
-  };
 
   // Render Helpers
   const StatusBadge = ({ status }: { status: string }) => {
@@ -719,113 +704,85 @@ export default function AssemblyManagement() {
             </div>
 
             {/* Products List */}
-            <div className="flex-1 overflow-y-auto p-2 space-y-2 bg-gray-50">
-              {Object.keys(filteredProducts).length === 0 ? (
-                <div className="flex flex-col items-center justify-center h-full text-gray-400">
-                  <Package className="h-16 w-16 mb-4 opacity-20" />
-                  <p className="font-medium">Nenhum produto encontrado</p>
-                  <p className="text-sm opacity-70">Ajuste os filtros ou aguarde novos pedidos</p>
-                </div>
-              ) : (
-                Object.entries(filteredProducts).map(([lancamento, products]) => (
-                  <div key={lancamento} className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
-                    {/* Group Header */}
-                    <div 
-                      className="px-4 py-3 bg-white border-b border-gray-100 flex items-center justify-between cursor-pointer hover:bg-gray-50 transition-colors"
-                      onClick={() => toggleGroup(lancamento)}
-                    >
-                      <div className="flex items-center gap-3">
-                        <div 
-                          className="p-1 hover:bg-gray-200 rounded"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={selectedLancamentos.includes(lancamento)}
-                            onChange={(e) => handleLancamentoSelection(lancamento, e.target.checked)}
-                            className="h-4 w-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
-                          />
-                        </div>
-                        <div>
-                          {(() => {
-                            const first = products[0] || {};
-                            const order = first.order || {};
-                            const pedido = order.order_id_erp || order.id || lancamento;
-                            const cliente = order.customer_name || '';
-                            return (
-                              <>
-                                <p className="text-sm font-bold text-gray-900">Pedido: {pedido}</p>
-                                <p className="text-xs text-gray-500">
-                                  {cliente ? `${cliente} · ` : ''}{products.length} {products.length === 1 ? 'produto' : 'produtos'}
-                                </p>
-                              </>
-                            );
-                          })()}
-                        </div>
-                      </div>
-                      <button className="text-gray-400">
-                        {expandedGroups[lancamento] ? <ChevronUp className="h-5 w-5" /> : <ChevronDown className="h-5 w-5" />}
-                      </button>
-                    </div>
-
-                    {/* Group Items */}
-                    {expandedGroups[lancamento] && (
-                      <div className="divide-y divide-gray-100">
-                        {products.map((ap: any) => {
-                          const order = ap.order || {};
-                          const addr = order.address_json || {};
-                          return (
-                            <div key={ap.id} className="p-4 hover:bg-blue-50/30 transition-colors flex gap-3 group">
-                              <div className="pt-1">
-                                <input
-                                  type="checkbox"
-                                  checked={selectedProducts.includes(ap.id)}
-                                  onChange={(e) => handleProductSelection(ap.id, e.target.checked)}
-                                  className="h-4 w-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
-                                />
-                              </div>
-                              <div className="flex-1 min-w-0">
-                                <div className="flex justify-between items-start">
-                                  <div>
-                                    <h4 className="text-sm font-semibold text-gray-900 truncate pr-2">
-                                      {ap.product_name}
-                                    </h4>
-                                    <div className="flex items-center gap-1 text-xs text-gray-500 mt-0.5">
-                                      <UserIcon className="h-3 w-3" />
-                                      <span className="truncate max-w-[150px]">{ap.customer_name}</span>
-                                    </div>
-                                  </div>
-                                  <button 
-                                    onClick={() => { setDetailsItem(ap); setShowDetailsModal(true); }}
-                                    className="text-gray-400 hover:text-blue-600 opacity-0 group-hover:opacity-100 transition-opacity"
-                                  >
-                                    <FileText className="h-4 w-4" />
-                                  </button>
-                                </div>
-
-                                <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-gray-600 bg-gray-50 p-2 rounded border border-gray-100">
-                                  <div className="flex items-center gap-1">
-                                    <MapPin className="h-3 w-3 text-gray-400" />
-                                    <span className="truncate">{addr.city} - {addr.neighborhood}</span>
-                                  </div>
-                                  <div className="flex items-center gap-2">
-                                    <Calendar className="h-3 w-3 text-gray-400" />
-                                    <span>
-                                      Entrega: {formatDate(deliveryInfo[ap.order_id]?.date || order.previsao_entrega)}
-                                    </span>
-                                    <DeadlineBadge status={getPrazoStatus(ap)} />
-                                  </div>
-                
-                                </div>
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
+            <div className="flex-1 overflow-y-auto bg-gray-50">
+              <div className="bg-white">
+                <div className="px-4 py-2 border-b border-gray-200">
+                  <div className="grid grid-cols-[40px,120px,120px,150px,150px,160px,1fr,150px,120px] items-center text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                    <span></span>
+                    <span>Data Venda</span>
+                    <span>Entrega</span>
+                    <span>Previsão</span>
+                    <span>Pedido</span>
+                    <span>Cliente</span>
+                    <span>Telefone</span>
+                    <span>Cidade/Bairro</span>
+                    <span>Produtos</span>
                   </div>
-                ))
-              )}
+                </div>
+                <div className="divide-y divide-gray-100">
+                  {Object.keys(filteredProducts).length === 0 ? (
+                    <div className="flex flex-col items-center justify-center h-48 text-gray-400">
+                      <Package className="h-16 w-16 mb-4 opacity-20" />
+                      <p className="font-medium">Nenhum pedido encontrado</p>
+                      <p className="text-sm opacity-70">Ajuste os filtros ou aguarde novos pedidos</p>
+                    </div>
+                  ) : (
+                    Object.entries(filteredProducts).map(([orderId, products]) => {
+                      const first = products[0] || {};
+                      const order = first.order || {};
+                      const pedido = order.order_id_erp || order.id || orderId;
+                      const cliente = order.customer_name || '';
+                      const phone = order.phone || '';
+                      const addr = order.address_json || {};
+                      const previsao = order.previsao_entrega || order.raw_json?.previsao_entrega || order.raw_json?.data_prevista_entrega;
+                      const entrega = deliveryInfo[orderId]?.date;
+                      const statusPrazo = getPrazoStatus(first);
+                      const dataVenda = order.data_venda || order.created_at;
+
+                      return (
+                        <div key={orderId} className="grid grid-cols-[40px,120px,120px,150px,150px,160px,1fr,150px,120px] items-center px-4 py-3 hover:bg-blue-50/40 transition-colors">
+                          <div className="flex items-center justify-center">
+                            <input
+                              type="checkbox"
+                              checked={products.length > 0 && products.every((p: any) => selectedProducts.includes(p.id))}
+                              onChange={(e) => handleGroupSelection(orderId, e.target.checked)}
+                              className="h-4 w-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
+                            />
+                          </div>
+                          <div className="text-sm text-gray-700 truncate">{formatDate(dataVenda)}</div>
+                          <div className="text-sm text-gray-700 truncate">{formatDate(entrega)}</div>
+                          <div className="text-sm text-gray-700 truncate">{formatDate(previsao)}</div>
+                          <div className="text-sm font-semibold text-gray-900">{pedido}</div>
+                          <div className="text-sm text-gray-800 truncate">{cliente || '-'}</div>
+                          <div className="text-sm text-gray-700 flex items-center gap-2">
+                            {phone && (
+                              <a
+                                href={`https://wa.me/${String(phone).replace(/\\D/g,'')}`}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-green-600 hover:text-green-700"
+                              >
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M20.52 3.48A11.84 11.84 0 0 0 12.04 0C5.48 0 .16 5.32.16 11.88c0 2.08.56 4.08 1.6 5.84L0 24l6.48-1.68a11.66 11.66 0 0 0 5.56 1.44h.04c6.56 0 11.88-5.32 11.88-11.88 0-3.2-1.24-6.2-3.52-8.4ZM12.08 21.2h-.04a9.7 9.7 0 0 1-4.96-1.36l-.36-.2-3.84 1L3.96 16l-.24-.4A9.86 9.86 0 0 1 2 11.88c0-5.52 4.52-10.04 10.08-10.04 2.68 0 5.2 1.04 7.08 2.92a9.9 9.9 0 0 1 2.96 7.12c0 5.56-4.52 10.32-10.04 10.32Zm5.76-7.44c-.32-.2-1.88-.92-2.16-1.04-.28-.12-.48-.2-.68.12-.2.32-.8 1.04-.98 1.24-.2.2-.36.24-.68.08-.32-.16-1.36-.5-2.6-1.6-.96-.84-1.6-1.88-1.8-2.2-.2-.32 0-.52.16-.68.16-.16.32-.4.48-.6.16-.2.2-.36.32-.6.12-.24.08-.44-.04-.64-.12-.2-.68-1.64-.92-2.2-.24-.56-.48-.48-.68-.48h-.56c-.2 0-.52.08-.8.4-.28.32-1.08 1.08-1.08 2.64s1.12 3.08 1.28 3.3c.16.2 2.24 3.42 5.4 4.72.76.32 1.36.52 1.82.66.76.24 1.44.2 1.98.12.6-.1 1.88-.76 2.14-1.5.26-.74.26-1.36.18-1.5-.08-.14-.28-.22-.6-.4Z"/></svg>
+                              </a>
+                            )}
+                            <span className="truncate">{phone || '-'}</span>
+                          </div>
+                          <div className="text-sm text-gray-700 flex items-center gap-2">
+                            <MapPin className="h-4 w-4 text-gray-400" />
+                            <span className="truncate">{addr.city || '-'} {addr.neighborhood ? `- ${addr.neighborhood}` : ''}</span>
+                          </div>
+                          <div className="text-sm text-gray-700 flex items-center gap-2">
+                            <DeadlineBadge status={statusPrazo} />
+                            <span className="px-2 py-0.5 rounded-full border bg-gray-50 text-gray-700 text-xs">
+                              {products.length} {products.length === 1 ? 'produto' : 'produtos'}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
             </div>
           </div>
         </div>

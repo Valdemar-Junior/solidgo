@@ -37,11 +37,14 @@ export interface Order {
   customer_cpf?: string;
   address_json: Address;
    items_json: OrderItem[];
-   status: 'pending' | 'imported' | 'assigned' | 'delivered' | 'returned';
+  status: 'pending' | 'imported' | 'assigned' | 'delivered' | 'returned';
   danfe_base64?: string;
   danfe_gerada_em?: string;
   xml_documento?: string;
   raw_json?: any;
+  return_flag?: boolean;
+  last_return_reason?: string | null;
+  last_return_notes?: string | null;
   created_at: string;
   updated_at: string;
   
@@ -113,6 +116,8 @@ export interface RouteOrder {
   status: 'pending' | 'delivered' | 'returned';
   delivery_observations?: string;
   return_reason_id?: string;
+  return_reason?: string | ReturnReason | null;
+  return_notes?: string | null;
   signature_url?: string;
   delivered_at?: string;
   returned_at?: string;
@@ -122,7 +127,7 @@ export interface RouteOrder {
 
 export interface RouteOrderWithDetails extends RouteOrder {
   order: Order;
-  return_reason?: ReturnReason;
+  return_reason?: ReturnReason | string | null;
 }
 
 export interface ReturnReason {
