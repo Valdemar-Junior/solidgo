@@ -155,6 +155,7 @@ function RouteCreationContent() {
   const [strictLocal, setStrictLocal] = useState<boolean>(false);
   const [filterBrand, setFilterBrand] = useState<string>('');
   const [filterDeadline, setFilterDeadline] = useState<'all'|'within'|'out'>('all');
+  const [filterReturnedOnly, setFilterReturnedOnly] = useState<boolean>(false);
 
   // Logic specific
   const [selectedExistingRouteId, setSelectedExistingRouteId] = useState<string>('');
@@ -236,10 +237,6 @@ function RouteCreationContent() {
   const onProductsScroll = () => {
     try { if (productsScrollRef.current) localStorage.setItem('rc_productsScrollLeft', String(productsScrollRef.current.scrollLeft || 0)); } catch {}
   };
-
-  useEffect(() => {
-    loadData();
-  }, []);
 
   useEffect(() => {
     try {
@@ -501,6 +498,7 @@ function RouteCreationContent() {
         const client = String(o.customer_name || '').toLowerCase();
         const filial = String(o.filial_venda || raw.filial_venda || '').toLowerCase();
         const seller = String(o.vendedor_nome || raw.vendedor || '').toLowerCase();
+        const isReturnedFlag = Boolean((o as any).return_flag) || String(o.status) === 'returned';
         if (filterCity && !city.includes(filterCity.toLowerCase())) return false;
         if (filterNeighborhood && !nb.includes(filterNeighborhood.toLowerCase())) return false;
         if (clientQuery && !client.includes(clientQuery.toLowerCase())) return false;
@@ -508,6 +506,7 @@ function RouteCreationContent() {
         if (filterOperation && !String(raw.operacoes || '').toLowerCase().includes(filterOperation.toLowerCase())) return false;
         if (filterFilialVenda && filial !== filterFilialVenda.toLowerCase()) return false;
         if (filterSeller && !seller.includes(filterSeller.toLowerCase())) return false;
+        if (filterReturnedOnly && !isReturnedFlag) return false;
         return true;
       });
       // Apply per-item filters
@@ -538,11 +537,11 @@ function RouteCreationContent() {
     try {
       if (!silent && !showRouteModal && !showCreateModal) setLoading(true);
 
-      // Load available orders (pending status)
+      // Load available orders (pending or returned)
       const { data: ordersData } = await supabase
         .from('orders')
         .select('*')
-        .eq('status', 'pending')
+        .in('status', ['pending', 'returned'])
         .order('created_at', { ascending: false });
 
       // Load active vehicles
@@ -551,7 +550,15 @@ function RouteCreationContent() {
         .select('*')
         .eq('active', true);
 
-      if (ordersData) setOrders(ordersData as Order[]);
+      if (ordersData) {
+        const normalized = (ordersData as Order[]).map((o: any) => {
+          if (String(o.status) === 'returned' && !o.return_flag) {
+            return { ...o, return_flag: true };
+          }
+          return o;
+        });
+        setOrders(normalized as Order[]);
+      }
       
       // Update item logic (same as original)
       try {
@@ -590,36 +597,45 @@ function RouteCreationContent() {
         }
       } catch {}
 
-      // Drivers Logic: ensure mapping from users(role=driver) exists, then load join
-      // Try RPC first (respects RLS via stored procedure), then fallback to table
+      // Drivers: busca direto sem join para evitar erros de relação; enriquece nomes via users role=driver
       let driverList: any[] = [];
-      try {
-        const { data: rpcDrivers } = await supabase.rpc('list_drivers');
-        if (Array.isArray(rpcDrivers) && rpcDrivers.length > 0) {
-          driverList = rpcDrivers.map((d: any) => ({ id: String(d.driver_id), user: { id: String(d.user_id || ''), name: String(d.name || '') }, active: true }));
+      const { data: directDrivers } = await supabase
+        .from('drivers')
+        .select('id, user_id, active')
+        .eq('active', true);
+      driverList = (directDrivers || []) as any[];
+
+      if (driverList.length > 0) {
+        const uids = Array.from(new Set(driverList.map((d:any)=> String(d.user_id)).filter(Boolean)));
+        if (uids.length > 0) {
+          const { data: usersData } = await supabase.from('users').select('id,name,email,role').in('id', uids);
+          const mapU = new Map<string, any>((usersData || []).map((u:any)=> [String(u.id), u]));
+          driverList = driverList.map((d:any)=> ({ ...d, user: mapU.get(String(d.user_id)) || null }));
         }
-      } catch {}
-      if (driverList.length === 0) {
-        const { data: directDrivers } = await supabase
-          .from('drivers')
-          .select('id, user_id, name, active, user:users!user_id(id,name,email)');
-        driverList = (directDrivers || []) as any[];
-        // If still empty, attempt to map from users(role=driver) and insert missing
-        if (driverList.length === 0) {
-          const { data: driverUsers } = await supabase
-            .from('users')
-            .select('id,name,email')
-            .eq('role', 'driver');
-          if (Array.isArray(driverUsers) && driverUsers.length > 0) {
-            const rows = driverUsers.map((u: any)=> ({ user_id: u.id, name: u.name || u.email || 'Motorista', active: true }));
-            try { await supabase.from('drivers').insert(rows); } catch {}
-            const { data: directDrivers2 } = await supabase
-              .from('drivers')
-              .select('id, user_id, name, active, user:users!user_id(id,name,email)');
-            driverList = (directDrivers2 || []) as any[];
+      } else {
+        // criar drivers para users com role=driver se não houver nenhum
+        const { data: driverUsers } = await supabase
+          .from('users')
+          .select('id,name,email')
+          .eq('role', 'driver');
+        if (Array.isArray(driverUsers) && driverUsers.length > 0) {
+          const rows = driverUsers.map((u: any)=> ({ user_id: u.id, name: u.name || u.email || 'Motorista', active: true }));
+          try { await supabase.from('drivers').insert(rows); } catch {}
+          const { data: directDrivers2 } = await supabase
+            .from('drivers')
+            .select('id, user_id, active')
+            .eq('active', true);
+          driverList = (directDrivers2 || []) as any[];
+          const uids = Array.from(new Set(driverList.map((d:any)=> String(d.user_id)).filter(Boolean)));
+          if (uids.length > 0) {
+            const { data: usersData } = await supabase.from('users').select('id,name,email,role').in('id', uids);
+            const mapU = new Map<string, any>((usersData || []).map((u:any)=> [String(u.id), u]));
+            driverList = driverList.map((d:any)=> ({ ...d, user: mapU.get(String(d.user_id)) || null }));
           }
         }
       }
+
+      driverList = (driverList || []).filter((d: any) => String(d?.user?.role || '').toLowerCase() === 'driver');
       setDrivers(driverList as any[]);
       
       if (vehiclesData) setVehicles(vehiclesData as Vehicle[]);
@@ -633,7 +649,7 @@ function RouteCreationContent() {
       try {
         const res = await supabase
           .from('routes')
-          .select('*, driver:drivers!driver_id(id,active,user:users!user_id(id,name,email)), vehicle:vehicles!vehicle_id(id,model,plate), route_orders:route_orders(*, order:orders!order_id(*)), conferences:route_conferences!route_id(id,route_id,status,result_ok,finished_at,created_at,resolved_at,resolved_by,resolution,summary)')
+          .select('*, vehicle:vehicles!vehicle_id(id,model,plate), route_orders:route_orders(*, order:orders!order_id(*)), conferences:route_conferences!route_id(id,route_id,status,result_ok,finished_at,created_at,resolved_at,resolved_by,resolution,summary)')
           .order('created_at', { ascending: false })
           .limit(50);
         routesData = res.data || null;
@@ -668,9 +684,23 @@ function RouteCreationContent() {
         
         // Driver enrichment: use bulk fetch and also preloaded driverList
         const driverIds = Array.from(new Set(enriched.map(r => r.driver_id).filter(Boolean)));
+        let driversBulk: any[] = [];
         if (driverIds.length > 0) {
-             const { data: drvBulk } = await supabase.from('drivers').select('id, active, user:users!user_id(id,name,email), name').in('id', driverIds);
-             const combined = [...(drvBulk || []), ...(Array.isArray(drivers) ? drivers : [])];
+             const { data: drvBulk } = await supabase.from('drivers').select('id, user_id, active').in('id', driverIds);
+             driversBulk = drvBulk || [];
+             // Se driversBulk não tem user, buscar usuários manualmente
+             if (driversBulk.length > 0) {
+               const userIds = Array.from(new Set(driversBulk.map((d:any)=> String(d.user_id)).filter(Boolean)));
+               if (userIds.length > 0) {
+                 const { data: usersData } = await supabase.from('users').select('id,name,email,role').in('id', userIds);
+                 const mapU = new Map<string, any>((usersData || []).map((u:any)=> [String(u.id), u]));
+                 driversBulk = driversBulk.map((d:any)=> ({ ...d, user: mapU.get(String(d.user_id)) || null }));
+               }
+             }
+             const combined = [
+               ...(driversBulk || []),
+               ...(Array.isArray(driverList) ? driverList : []),
+             ];
              const mapDrv = new Map<string, any>(combined.map((d: any) => [String(d.id), d]));
              for (const r of enriched) {
                  const d = mapDrv.get(String(r.driver_id));
@@ -681,7 +711,7 @@ function RouteCreationContent() {
              }
         } else {
              // Fallback: attempt to derive driver_name from preloaded list
-             const mapDrv = new Map<string, any>((Array.isArray(drivers) ? drivers : []).map((d: any) => [String(d.id), d]));
+             const mapDrv = new Map<string, any>((Array.isArray(driverList) ? driverList : []).map((d: any) => [String(d.id), d]));
              for (const r of enriched) {
                  const d = mapDrv.get(String(r.driver_id));
                  if (d) {
@@ -716,6 +746,13 @@ function RouteCreationContent() {
                      }
                  }
              }
+        }
+
+        // Ensure driver_name fallback if relation came in the main select
+        for (const r of enriched) {
+          if (!(r as any).driver_name && (r as any).driver) {
+            (r as any).driver_name = (r as any).driver?.user?.name || (r as any).driver?.name || '';
+          }
         }
 
         setRoutesList(enriched as RouteWithDetails[]);
@@ -1026,11 +1063,18 @@ function RouteCreationContent() {
                             <label htmlFor="fmont" className="text-sm text-gray-700">Apenas produtos com Montagem</label>
                         </div>
                     </div>
+                    <div className="space-y-1">
+                        <label className="text-xs font-semibold text-gray-500 uppercase">Retorno</label>
+                        <div className="flex items-center gap-2 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg">
+                            <input id="freturned" type="checkbox" className="h-4 w-4" checked={filterReturnedOnly} onChange={(e)=> setFilterReturnedOnly(e.target.checked)} />
+                            <label htmlFor="freturned" className="text-sm text-gray-700">Apenas pedidos retornados</label>
+                        </div>
+                    </div>
                 </div>
                 
                 <div className="flex justify-end mt-4 pt-4 border-t border-gray-100">
                      <button 
-                        onClick={()=>{setFilterCity('');setFilterNeighborhood('');setFilterFilialVenda('');setFilterLocalEstocagem('');setStrictLocal(false);setFilterSeller('');setFilterClient('');setClientQuery('');setFilterFreightFull('');setFilterOperation('');setFilterDepartment('');setFilterHasAssembly(false);setFilterSaleDate('');setFilterBrand('');}} 
+                        onClick={()=>{setFilterCity('');setFilterNeighborhood('');setFilterFilialVenda('');setFilterLocalEstocagem('');setStrictLocal(false);setFilterSeller('');setFilterClient('');setClientQuery('');setFilterFreightFull('');setFilterOperation('');setFilterDepartment('');setFilterHasAssembly(false);setFilterSaleDate('');setFilterBrand('');setFilterReturnedOnly(false);}} 
                         className="text-sm text-red-600 hover:text-red-800 font-medium flex items-center"
                      >
                         <X className="h-3 w-3 mr-1" /> Limpar filtros
@@ -1103,8 +1147,8 @@ function RouteCreationContent() {
                         <div className="bg-gray-50 p-4 rounded-full mb-4">
                             <Package className="h-8 w-8 text-gray-400" />
                         </div>
-                        <h3 className="text-lg font-medium text-gray-900">Nenhum pedido pendente</h3>
-                        <p className="text-gray-500 mt-1 max-w-sm">Todos os pedidos já foram roteirizados ou não há importações recentes.</p>
+                        <h3 className="text-lg font-medium text-gray-900">Nenhum pedido disponível</h3>
+                        <p className="text-gray-500 mt-1 max-w-sm">Todos os pedidos já foram roteirizados ou não há retornos/importações recentes.</p>
                     </div>
                 ) : (
                     <table className="min-w-max w-full text-sm divide-y divide-gray-100">
@@ -1135,6 +1179,7 @@ function RouteCreationContent() {
                                  const seller = String(o.vendedor_nome || raw.vendedor || '').toLowerCase();
                                  const saleDateISO = (o.data_venda || raw.data_venda || '') as string;
                                  const saleDateStr = saleDateISO ? new Date(saleDateISO).toISOString().slice(0,10) : '';
+                                 const isReturnedFlag = Boolean(o.return_flag) || String(o.status) === 'returned';
                                  if (filterCity && !city.includes(filterCity.toLowerCase())) return false;
                                  if (filterNeighborhood && !nb.includes(filterNeighborhood.toLowerCase())) return false;
                                  if (clientQuery && !client.includes(clientQuery.toLowerCase())) return false;
@@ -1143,6 +1188,7 @@ function RouteCreationContent() {
                                  if (filterFilialVenda && filial !== filterFilialVenda.toLowerCase()) return false;
                                  if (filterSeller && !seller.includes(filterSeller.toLowerCase())) return false;
                                  if (filterSaleDate && saleDateStr !== filterSaleDate) return false;
+                                 if (filterReturnedOnly && !isReturnedFlag) return false;
                                  if (filterDeadline !== 'all') {
                                    const st = getPrazoStatusForOrder(o);
                                    if (filterDeadline === 'within' && st !== 'within') return false;
@@ -1181,6 +1227,10 @@ function RouteCreationContent() {
                                  const addr: any = o.address_json || {};
                                  const temFreteFull = isTrue(o.tem_frete_full) || isTrue(raw?.tem_frete_full);
                                  const hasAssembly = isTrue(it?.has_assembly);
+                                 const isReturned = Boolean(o.return_flag) || String(o.status) === 'returned';
+                                 const returnReason = (o.last_return_reason || (raw as any).return_reason || '') as string;
+                                 const returnNotes = (o.last_return_notes || (raw as any).return_notes || '') as string;
+                                 const returnTitle = [returnReason, returnNotes].filter(Boolean).join(' • ');
                                  const waLink = (() => {
                                    const p = String(o.phone || '').replace(/\D/g, '');
                                    const e164 = p ? (p.startsWith('55') ? p : '55' + p) : '';
@@ -1203,7 +1253,15 @@ function RouteCreationContent() {
                                    filialVenda: o.filial_venda || raw.filial_venda || '-',
                                    operacao: raw.operacoes || '-',
                                    vendedor: o.vendedor_nome || raw.vendedor || raw.vendedor_nome || '-',
-                                   situacao: o.status === 'pending' ? 'Pendente' : o.status === 'assigned' ? 'Atribuído' : o.status,
+                                   situacao: o.status === 'pending'
+                                     ? 'Pendente'
+                                     : o.status === 'assigned'
+                                       ? 'Atribuido'
+                                       : o.status === 'delivered'
+                                         ? 'Entregue'
+                                         : o.status === 'returned'
+                                           ? 'Retornado'
+                                           : o.status,
                                    obsPublicas: o.observacoes_publicas || raw.observacoes || '-',
                                    obsInternas: o.observacoes_internas || raw.observacoes_internas || '-',
                                    endereco: [addr.street, addr.number, addr.complement].filter(Boolean).join(', ') || raw.destinatario_endereco || '-',
@@ -1234,6 +1292,13 @@ function RouteCreationContent() {
                                               </div>
                                             ) : c.id === 'flags' ? (
                                               <div className="flex items-center gap-2">
+                                                {isReturned && (
+                                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-red-100 text-red-800 border border-red-200" title={returnTitle || 'Pedido retornado'}>
+                                                    <AlertTriangle className="h-3.5 w-3.5" />
+                                                    Retornado
+                                                    {returnReason ? ` · ${returnReason}` : ''}
+                                                  </span>
+                                                )}
                                                 {hasAssembly && (
                                                   <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-orange-100 text-orange-700 border border-orange-200" title="Produto com montagem">
                                                     <Hammer className="h-3.5 w-3.5" />
@@ -1303,6 +1368,7 @@ function RouteCreationContent() {
                         const total = route.route_orders?.length || 0;
                         const pending = route.route_orders?.filter(r => r.status === 'pending').length || 0;
                         const delivered = route.route_orders?.filter(r => r.status === 'delivered').length || 0;
+                        const returned = route.route_orders?.filter(r => r.status === 'returned').length || 0;
                         
                         const statusColors = {
                             pending: 'bg-yellow-50 text-yellow-700 border-yellow-200',
@@ -1364,7 +1430,7 @@ function RouteCreationContent() {
                                     </div>
 
                                     {/* Mini Stats */}
-                                    <div className="grid grid-cols-3 gap-2 mb-2">
+                                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-2">
                                         <div className="bg-gray-50 rounded-lg p-2 text-center">
                                             <span className="block text-lg font-bold text-gray-900">{total}</span>
                                             <span className="text-[10px] uppercase text-gray-500 font-bold">Total</span>
@@ -1376,6 +1442,10 @@ function RouteCreationContent() {
                                         <div className="bg-yellow-50 rounded-lg p-2 text-center">
                                             <span className="block text-lg font-bold text-yellow-700">{pending}</span>
                                             <span className="text-[10px] uppercase text-yellow-600 font-bold">Pendentes</span>
+                                        </div>
+                                        <div className="bg-red-50 rounded-lg p-2 text-center">
+                                            <span className="block text-lg font-bold text-red-700">{returned}</span>
+                                            <span className="text-[10px] uppercase text-red-600 font-bold">Retornados</span>
                                         </div>
                                     </div>
                                 </div>
@@ -2132,19 +2202,30 @@ function RouteCreationContent() {
                                  </tr>
                              </thead>
                              <tbody className="divide-y divide-gray-100">
-                                 {selectedRoute.route_orders?.map(ro => (
+                                 {selectedRoute.route_orders?.map(ro => {
+                                   const returnReason = (ro as any)?.return_reason?.reason || (ro as any)?.return_reason || (ro as any)?.order?.last_return_reason || '';
+                                   const returnNotes = (ro as any)?.return_notes || (ro as any)?.order?.last_return_notes || '';
+                                   const returnInfo = [returnReason, returnNotes].filter(Boolean).join(' • ');
+                                   return (
                                      <tr key={ro.id} className="hover:bg-gray-50">
                                          <td className="px-4 py-3">{ro.sequence}</td>
                                          <td className="px-4 py-3 font-medium">{ro.order?.order_id_erp || '—'}</td>
                                          <td className="px-4 py-3">{ro.order?.customer_name || '—'}</td>
                                          <td className="px-4 py-3">
-                                             <span className={`px-2 py-1 rounded text-xs font-bold ${
-                                                 ro.status === 'delivered' ? 'bg-green-100 text-green-700' : 
-                                                 ro.status === 'returned' ? 'bg-red-100 text-red-700' : 
-                                                 'bg-yellow-100 text-yellow-700'
-                                             }`}>
-                                                 {ro.status === 'delivered' ? 'Entregue' : ro.status === 'returned' ? 'Devolvido' : 'Pendente'}
-                                             </span>
+                                             <div className="flex flex-col gap-1">
+                                                 <span className={`px-2 py-1 rounded text-xs font-bold ${
+                                                     ro.status === 'delivered' ? 'bg-green-100 text-green-700' : 
+                                                     ro.status === 'returned' ? 'bg-red-100 text-red-700' : 
+                                                     'bg-yellow-100 text-yellow-700'
+                                                 }`}>
+                                                     {ro.status === 'delivered' ? 'Entregue' : ro.status === 'returned' ? 'Retornado' : 'Pendente'}
+                                                 </span>
+                                                 {ro.status === 'returned' && (returnReason || returnNotes) && (
+                                                   <span className="text-xs text-red-700" title={returnInfo}>
+                                                     {returnReason || 'Retornado'}{returnNotes ? ` · ${returnNotes}` : ''}
+                                                   </span>
+                                                 )}
+                                             </div>
                                          </td>
                                         <td className="px-4 py-3 text-right flex items-center justify-end gap-2">
                                             {selectedRoute?.status === 'pending' && (
@@ -2241,7 +2322,8 @@ function RouteCreationContent() {
                                             )}
                                         </td>
                                      </tr>
-                                 ))}
+                                   );
+                                 })}
                              </tbody>
                          </table>
                      </div>

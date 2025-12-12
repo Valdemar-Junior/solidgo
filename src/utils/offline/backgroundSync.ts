@@ -145,13 +145,18 @@ export class BackgroundSyncService {
     if (action === 'delivered') {
       const { error: orderError } = await supabase
         .from('orders')
-        .update({ status: 'delivered' })
+        .update({ status: 'delivered', return_flag: false, last_return_reason: null, last_return_notes: null })
         .eq('id', order_id);
       if (orderError) console.warn('Failed to update order status:', orderError);
     } else if (action === 'returned') {
       const { error: orderError2 } = await supabase
         .from('orders')
-        .update({ status: 'returned' })
+        .update({
+          status: 'pending',
+          return_flag: true,
+          last_return_reason: data.return_reason || null,
+          last_return_notes: data.observations || null,
+        })
         .eq('id', order_id);
       if (orderError2) console.warn('Failed to update order status:', orderError2);
     }
@@ -178,7 +183,12 @@ export class BackgroundSyncService {
 
     const { error: orderError } = await supabase
       .from('orders')
-      .update({ status: 'pending' })
+      .update({
+        status: 'pending',
+        return_flag: false,
+        last_return_reason: null,
+        last_return_notes: null,
+      })
       .eq('id', order_id);
     if (orderError) console.warn('Failed to update order status on revert:', orderError);
 

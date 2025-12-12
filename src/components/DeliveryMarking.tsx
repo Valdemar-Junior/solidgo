@@ -287,7 +287,10 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
             }
             const deliveredIds = data.filter((d: any) => d.status === 'delivered').map((d: any) => d.order_id);
             if (deliveredIds.length) {
-              await supabase.from('orders').update({ status: 'delivered' }).in('id', deliveredIds);
+              await supabase
+                .from('orders')
+                .update({ status: 'delivered', return_flag: false, last_return_reason: null, last_return_notes: null })
+                .in('id', deliveredIds);
               // Auditoria: pedidos marcados como entregues
               try {
                 const userId = (await supabase.auth.getUser()).data.user?.id || '';
@@ -364,6 +367,17 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
 
         if (error) throw error;
 
+        // Deixar o pedido roteirizavel novamente, sinalizado como retornado
+        await supabase
+          .from('orders')
+          .update({
+            status: 'pending',
+            return_flag: true,
+            last_return_reason: confirmation.return_reason,
+            last_return_notes: confirmation.observations || null,
+          })
+          .eq('id', order.order_id);
+
         toast.success('Pedido marcado como retornado!');
         setRouteOrders(prev => prev.map(ro => ro.id === order.id ? { ...ro, status: 'returned', returned_at: confirmation.local_timestamp, return_reason: { reason: reasonValue } as any, return_notes: currentObs } : ro));
         try {
@@ -378,7 +392,10 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
             }
             const returnedIds = data.filter((d: any) => d.status === 'returned').map((d: any) => d.order_id);
             if (returnedIds.length) {
-              await supabase.from('orders').update({ status: 'returned' }).in('id', returnedIds);
+              await supabase
+                .from('orders')
+                .update({ status: 'pending', return_flag: true })
+                .in('id', returnedIds);
             }
           }
         } catch {}
@@ -388,6 +405,14 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
         await SyncQueue.addItem({
           type: 'delivery_confirmation',
           data: confirmation,
+        });
+
+        // Também marcar pedido como pendente/retornado para roteirização quando offline
+        await OfflineStorage.setItem(`order_return_${order.order_id}`, {
+          status: 'pending',
+          return_flag: true,
+          last_return_reason: confirmation.return_reason,
+          last_return_notes: confirmation.observations || null,
         });
 
         // Update local state
@@ -454,7 +479,15 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
           .eq('id', routeOrderId);
         if (error) throw error;
 
-        await supabase.from('orders').update({ status: 'pending' }).eq('id', current.order_id);
+        await supabase
+          .from('orders')
+          .update({
+            status: 'pending',
+            return_flag: false,
+            last_return_reason: null,
+            last_return_notes: null,
+          })
+          .eq('id', current.order_id);
 
         const updated = routeOrders.map(ro => ro.id === routeOrderId ? { ...ro, status: 'pending', returned_at: null, return_reason: null } : ro);
         setRouteOrders(updated);
@@ -678,8 +711,6 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
     </div>
   );
 }
-
-
 
 
 
