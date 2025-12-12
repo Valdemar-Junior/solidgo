@@ -39,6 +39,11 @@ export default function OrderLookup() {
     if (!q) return [];
     try {
       const numeric = q.replace(/\D/g, '');
+      const formatCpf = (digits: string) => {
+        if (digits.length !== 11) return null;
+        return `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6, 9)}-${digits.slice(9)}`;
+      };
+      const formattedCpf = formatCpf(numeric);
       const likeTerm = `%${q}%`;
       const likeNum = numeric ? `%${numeric}%` : '';
       const filters: string[] = [
@@ -47,6 +52,8 @@ export default function OrderLookup() {
       ];
       if (numeric) {
         filters.push(`customer_cpf.ilike.${likeNum}`);
+        if (formattedCpf) filters.push(`customer_cpf.ilike.%${formattedCpf}%`);
+        filters.push(`raw_json->>destinatario_cpf.ilike.${likeNum}`);
         filters.push(`raw_json->>cliente_cpf.ilike.${likeNum}`);
         filters.push(`raw_json->>cpf.ilike.${likeNum}`);
       }
@@ -65,10 +72,25 @@ export default function OrderLookup() {
       const final = (data as Order[]).filter((o) => {
         const name = String(o.customer_name || '').toLowerCase();
         const orderId = String(o.order_id_erp || '').toLowerCase();
-        const cpfClean = String(o.customer_cpf || '').replace(/\D/g, '');
-        const rawCpf = String((o as any).raw_json?.cliente_cpf || (o as any).raw_json?.cpf || '').replace(/\D/g, '');
-        const haystack = [name, orderId, cpfClean, rawCpf].join(' ').trim();
-        return tokens.every((t) => haystack.includes(t));
+        const cpf = String(o.customer_cpf || '').toLowerCase();
+        const cpfDigits = cpf.replace(/\D/g, '');
+        const rawCpf1 = String((o as any).raw_json?.destinatario_cpf || '').toLowerCase();
+        const rawCpf2 = String((o as any).raw_json?.cliente_cpf || '').toLowerCase();
+        const rawCpf3 = String((o as any).raw_json?.cpf || '').toLowerCase();
+        const rawDigits = [rawCpf1, rawCpf2, rawCpf3].join(' ').replace(/\D/g, '');
+        const haystack = [name, orderId, cpf, rawCpf1, rawCpf2, rawCpf3].join(' ').trim();
+        return tokens.every((t) => {
+          const isNum = /^\d+$/.test(t);
+          if (isNum) {
+            return (
+              cpfDigits.includes(t) ||
+              rawDigits.includes(t) ||
+              orderId.includes(t) ||
+              cpf.includes(t)
+            );
+          }
+          return haystack.includes(t);
+        });
       });
       return final;
     } catch {
@@ -109,11 +131,80 @@ export default function OrderLookup() {
       if (!selectedOrder) return;
       try {
         setLoading(true);
-        const { data: roData } = await supabase
+        // Busca route_orders vinculados ao pedido (sem join de conference para evitar erro de schema)
+        const selectRouteOrder = '*, route:routes(*), order:orders(id, order_id_erp)';
+
+        // Primeiro tenta pelo order_id (uuid do pedido)
+        const { data: roById, error: roErrById } = await supabase
           .from('route_orders')
-          .select('*, route:routes(*), conference:route_conferences!route_id(*)')
+          .select(selectRouteOrder)
           .eq('order_id', selectedOrder.id)
           .order('created_at', { ascending: false });
+        if (roErrById) throw roErrById;
+        let roData = roById || [];
+
+        // Se não encontrar, tenta por outros pedidos com o mesmo order_id_erp
+        if ((!roData || roData.length === 0) && selectedOrder.order_id_erp) {
+          const { data: sameOrders, error: ordersErr } = await supabase
+            .from('orders')
+            .select('id')
+            .eq('order_id_erp', selectedOrder.order_id_erp);
+          if (ordersErr) throw ordersErr;
+          const ids = (sameOrders || []).map((o: any) => o.id);
+          if (ids.length) {
+            const { data: roByErp, error: roErrByErp } = await supabase
+              .from('route_orders')
+              .select(selectRouteOrder)
+              .in('order_id', ids)
+              .order('created_at', { ascending: false });
+            if (roErrByErp) throw roErrByErp;
+            roData = roByErp || [];
+          }
+        }
+
+        // Enriquecer rota com motorista/veículo
+        if (roData && roData.length > 0) {
+          const routeIds = Array.from(new Set(roData.map((r: any) => r.route_id).filter(Boolean)));
+          const { data: routesInfo } = await supabase
+            .from('routes')
+            .select('id, name, status, driver_id, vehicle_id, conferente, updated_at')
+            .in('id', routeIds);
+
+          const driverIds = Array.from(new Set((routesInfo || []).map((r: any) => r.driver_id).filter(Boolean)));
+          const { data: driversInfo } = driverIds.length
+            ? await supabase.from('drivers').select('id, name, user_id').in('id', driverIds)
+            : { data: [] as any[] };
+          const userIds = Array.from(new Set((driversInfo || []).map((d: any) => d.user_id).filter(Boolean)));
+          const { data: usersInfo } = userIds.length
+            ? await supabase.from('users').select('id, name').in('id', userIds)
+            : { data: [] as any[] };
+
+          const vehicleIds = Array.from(new Set((routesInfo || []).map((r: any) => r.vehicle_id).filter(Boolean)));
+          const { data: vehiclesInfo } = vehicleIds.length
+            ? await supabase.from('vehicles').select('id, plate, model').in('id', vehicleIds)
+            : { data: [] as any[] };
+
+          const mapRoute: Record<string, any> = {};
+          (routesInfo || []).forEach((r: any) => { mapRoute[r.id] = r; });
+          const mapDriver: Record<string, any> = {};
+          (driversInfo || []).forEach((d: any) => {
+            const user = (usersInfo || []).find((u: any) => u.id === d.user_id);
+            mapDriver[d.id] = { ...d, user };
+          });
+          const mapVehicle: Record<string, any> = {};
+          (vehiclesInfo || []).forEach((v: any) => { mapVehicle[v.id] = v; });
+
+          roData = (roData as any[]).map((r: any) => {
+            const rt = mapRoute[r.route_id] || r.route || {};
+            const drv = rt.driver_id ? mapDriver[rt.driver_id] : null;
+            const veh = rt.vehicle_id ? mapVehicle[rt.vehicle_id] : null;
+            return {
+              ...r,
+              route: { ...rt, driver: drv, vehicle: veh },
+            };
+          });
+        }
+
         setRouteOrders(roData as RouteOrderInfo[] || []);
 
         const { data: apData } = await supabase
@@ -290,9 +381,11 @@ export default function OrderLookup() {
                       <div key={ro.id} className="border border-gray-100 rounded-lg p-3">
                         <p className="text-sm font-semibold text-gray-900">{ro.route?.name || ro.route_id}</p>
                         <p className="text-xs text-gray-500 capitalize">Status rota: {statusLabelEntrega[ro.route?.status || ''] || ro.route?.status || '-'}</p>
-                        <p className="text-xs text-gray-500">Motorista: {ro.route?.driver_name || ro.route?.driver?.user?.name || ro.route?.driver?.name || '-'}</p>
-                        <p className="text-xs text-gray-500">Conferência: {ro.conference?.status || 'N/A'}</p>
-                        <p className="text-xs text-gray-500">Última atualização: {formatDate(ro.route?.updated_at)}</p>
+                        <p className="text-xs text-gray-500">Motorista: {ro.route?.driver?.user?.name || ro.route?.driver?.name || '-'}</p>
+                        <p className="text-xs text-gray-500">Veículo: {ro.route?.vehicle ? `${ro.route?.vehicle?.model || ''} ${ro.route?.vehicle?.plate || ''}`.trim() : '-'}</p>
+                        <p className="text-xs text-gray-500">Conferente: {ro.route?.conferente || '-'}</p>
+                        <p className="text-xs text-gray-500">Entregue em: {ro.delivered_at ? formatDate(ro.delivered_at) : formatDate(ro.route?.updated_at)}</p>
+                        <p className="text-xs text-gray-500">Conferência: {ro.route?.conference_status || 'N/A'}</p>
                       </div>
                     ))}
                   </div>
