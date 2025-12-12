@@ -130,6 +130,7 @@ function RouteCreationContent() {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showColumnsModal, setShowColumnsModal] = useState(false);
   const [mixedConfirmOpen, setMixedConfirmOpen] = useState(false);
+  const [requireConference, setRequireConference] = useState<boolean>(true);
   
   // Loading states for specific actions
   const [nfLoading, setNfLoading] = useState(false);
@@ -191,6 +192,8 @@ function RouteCreationContent() {
   ]);
 
   const [viewMode, setViewMode] = useState<'products'|'orders'>('products');
+  const ordersSectionRef = useRef<HTMLDivElement>(null);
+  const routesSectionRef = useRef<HTMLDivElement>(null);
   
   // Drag logic
   const productsScrollRef = useRef<HTMLDivElement>(null);
@@ -210,6 +213,12 @@ function RouteCreationContent() {
     productsScrollRef.current.scrollLeft = dragScrollLeftRef.current - dx;
   };
   const endProductsDrag = () => { setDraggingProducts(false); };
+
+  const scrollToSection = (ref: React.RefObject<HTMLElement>) => {
+    if (ref.current) {
+      ref.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  };
 
   // --- EFFECTS ---
 
@@ -549,6 +558,14 @@ function RouteCreationContent() {
         .from('vehicles')
         .select('*')
         .eq('active', true);
+      
+      const { data: confSetting } = await supabase
+        .from('app_settings')
+        .select('value')
+        .eq('key', 'require_route_conference')
+        .single();
+      const flagEnabled = (confSetting as any)?.value?.enabled;
+      setRequireConference(flagEnabled === false ? false : true);
 
       if (ordersData) {
         const normalized = (ordersData as Order[]).map((o: any) => {
@@ -938,6 +955,30 @@ function RouteCreationContent() {
       </div>
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
+
+        {/* Quick navigation */}
+        <div className="sticky top-[72px] z-10">
+          <div className="bg-white/90 backdrop-blur shadow-sm border border-gray-200 rounded-xl px-4 py-3 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2 text-sm text-gray-700">
+              <MapPin className="h-4 w-4 text-blue-500" />
+              Acesso rápido
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => scrollToSection(ordersSectionRef)}
+                className="px-3 py-2 text-sm font-medium rounded-lg border border-gray-200 bg-white hover:bg-gray-50 text-gray-700"
+              >
+                Ir para pedidos
+              </button>
+              <button
+                onClick={() => scrollToSection(routesSectionRef)}
+                className="px-3 py-2 text-sm font-medium rounded-lg border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100"
+              >
+                Ir para rotas
+              </button>
+            </div>
+          </div>
+        </div>
         
         {/* Filters Panel */}
         {showFilters && (
@@ -1084,7 +1125,7 @@ function RouteCreationContent() {
         )}
 
         {/* Orders Selection Card */}
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+        <div ref={ordersSectionRef} className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
             <div className="px-6 py-4 border-b border-gray-100 bg-gray-50/50 flex flex-col md:flex-row md:items-center justify-between gap-4">
                 <div className="flex items-center gap-2">
                     <div className="bg-blue-100 p-2 rounded-lg">
@@ -1343,7 +1384,7 @@ function RouteCreationContent() {
         </div>
 
         {/* Routes List Section */}
-        <div className="space-y-4">
+        <div ref={routesSectionRef} className="space-y-4">
              <div className="flex items-center justify-between">
                 <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
                     <Truck className="h-6 w-6 text-gray-700" />
@@ -1838,17 +1879,16 @@ function RouteCreationContent() {
                             <Plus className="h-4 w-4 mr-2" /> Adicionar Pedidos
                         </button>
                      )}
-
                     {/* Start Route Button */}
                     <button
                         onClick={async () => {
                             if (!selectedRoute) return;
                             try {
-                                if (selectedRoute.status !== 'pending') { toast.error('A rota já foi iniciada'); return; }
+                                if (selectedRoute.status !== 'pending') { toast.error('A rota ja foi iniciada'); return; }
                                 const conf: any = (selectedRoute as any).conference;
                                 const cStatus = String(conf?.status || '').toLowerCase();
                                 const ok = conf?.result_ok === true || cStatus === 'completed';
-                                if (!ok) { toast.error('Finalize a conferência para iniciar a rota'); return; }
+                                if (requireConference && !ok) { toast.error('Finalize a conferencia para iniciar a rota'); return; }
                                 const { error } = await supabase.from('routes').update({ status: 'in_progress' }).eq('id', selectedRoute.id);
                                 if (error) throw error;
                                 const updated = { ...selectedRoute, status: 'in_progress' } as any;
@@ -1859,8 +1899,15 @@ function RouteCreationContent() {
                                 toast.error('Falha ao iniciar rota');
                             }
                         }}
-                        disabled={selectedRoute.status !== 'pending' || !((selectedRoute as any)?.conference?.result_ok === true || String((selectedRoute as any)?.conference?.status || '').toLowerCase() === 'completed')}
-                        title={selectedRoute.status !== 'pending' ? 'A rota já foi iniciada' : (!((selectedRoute as any)?.conference?.result_ok === true || String((selectedRoute as any)?.conference?.status || '').toLowerCase() === 'completed') ? 'Finalize a conferência para iniciar' : '')}
+                        disabled={
+                          selectedRoute.status !== 'pending' ||
+                          (requireConference && !((selectedRoute as any)?.conference?.result_ok === true || String((selectedRoute as any)?.conference?.status || '').toLowerCase() === 'completed'))
+                        }
+                        title={
+                          selectedRoute.status !== 'pending'
+                            ? 'A rota ja foi iniciada'
+                            : ((requireConference && !((selectedRoute as any)?.conference?.result_ok === true || String((selectedRoute as any)?.conference?.status || '').toLowerCase() === 'completed')) ? 'Finalize a conferencia para iniciar' : '')
+                        }
                         className="flex items-center justify-center px-4 py-2 bg-yellow-50 text-yellow-700 hover:bg-yellow-100 rounded-lg font-medium text-sm transition-colors border border-yellow-200 disabled:opacity-50 disabled:cursor-not-allowed"
                      >
                         <Clock className="h-4 w-4 mr-2" /> Iniciar Rota
@@ -2376,3 +2423,5 @@ export default function RouteCreation() {
     </RouteCreationErrorBoundary>
   );
 }
+
+

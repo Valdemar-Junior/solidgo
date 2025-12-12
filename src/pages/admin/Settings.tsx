@@ -27,6 +27,7 @@ export default function Settings() {
   const [geraNf, setGeraNf] = useState('');
   const [enviaMensagem, setEnviaMensagem] = useState('');
   const [enviaGrupo, setEnviaGrupo] = useState('');
+  const [requireConference, setRequireConference] = useState(true);
 
   useEffect(() => { load() }, []);
 
@@ -38,16 +39,19 @@ export default function Settings() {
   const load = async () => {
     try {
       setLoading(true);
-      const [p, n, m, g] = await Promise.all([
+      const [p, n, m, g, confFlag] = await Promise.all([
         getUrl('envia_pedidos'),
         getUrl('gera_nf'),
         getUrl('envia_mensagem'),
         getUrl('envia_grupo'),
+        supabase.from('app_settings').select('value').eq('key', 'require_route_conference').single(),
       ]);
       setEnviaPedidos(p || '');
       setGeraNf(n || '');
       setEnviaMensagem(m || '');
       setEnviaGrupo(g || '');
+      const enabled = (confFlag.data as any)?.value?.enabled;
+      setRequireConference(enabled === false ? false : true);
     } catch {
       toast.error('Erro ao carregar configurações');
     } finally {
@@ -73,8 +77,14 @@ export default function Settings() {
       // Actually, let's just upsert all. If empty, it's empty.
       
       const { error } = await supabase.from('webhook_settings').upsert(rows, { onConflict: 'key' });
-      
       if (error) throw error;
+
+      const { error: flagErr } = await supabase.from('app_settings').upsert([{
+        key: 'require_route_conference',
+        value: { enabled: requireConference },
+        updated_at: new Date().toISOString()
+      }], { onConflict: 'key' });
+      if (flagErr) throw flagErr;
       
       toast.success('Configurações salvas com sucesso!');
     } catch (e: any) {
@@ -111,6 +121,32 @@ export default function Settings() {
 
       <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
         
+        {/* Operação de Rotas */}
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+          <div className="border-b border-gray-100 bg-gray-50 px-6 py-4 flex items-center gap-2">
+            <CheckCircle2 className="h-5 w-5 text-blue-600" />
+            <h2 className="font-bold text-gray-900">Rotas — Exigir Conferência</h2>
+          </div>
+          <div className="p-6 space-y-3">
+            <p className="text-sm text-gray-600">
+              Defina se o botão “Iniciar rota” só fica liberado após a conferência estar finalizada.
+              Desative temporariamente para operar sem conferência (útil enquanto as etiquetas não estão prontas).
+            </p>
+            <label className="flex items-center justify-between bg-gray-50 border border-gray-100 rounded-lg px-4 py-3">
+              <div>
+                <p className="text-sm font-semibold text-gray-900">Exigir conferência antes de iniciar</p>
+                <p className="text-xs text-gray-500">Quando ligado, mantém o bloqueio atual; desligado, permite iniciar rota sem conferência.</p>
+              </div>
+              <input
+                type="checkbox"
+                checked={requireConference}
+                onChange={(e) => setRequireConference(e.target.checked)}
+                className="h-5 w-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+              />
+            </label>
+          </div>
+        </div>
+
         {/* Webhooks Section */}
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
           <div className="border-b border-gray-100 bg-gray-50 px-6 py-4 flex items-center gap-2">

@@ -214,12 +214,6 @@ export default function AssemblyManagement() {
       setAvailableProducts(pendingUnrouted || []);
       setGroupedProducts(groupedByOrder);
       setDeliveryInfo(deliveryByOrderId);
-      
-      // Expand all groups by default
-      const initialExpanded: Record<string, boolean> = {};
-      Object.keys(groupedByOrder).forEach(key => initialExpanded[key] = true);
-      setExpandedGroups(initialExpanded);
-      
     } catch (error) {
       console.error('Erro ao carregar dados:', error);
       toast.error('Erro ao carregar dados de montagem');
@@ -326,30 +320,16 @@ export default function AssemblyManagement() {
     }
   };
 
-  const handleLancamentoSelection = (lancamento: string, checked: boolean) => {
+  const handleGroupSelection = (orderId: string, checked: boolean) => {
+    const productsInGroup = groupedProducts[orderId] || [];
+    const productIds = productsInGroup.map((p: any) => p.id);
     if (checked) {
-      const productsInLancamento = groupedProducts[lancamento] || [];
-      const productIds = productsInLancamento.map((p: any) => p.id);
       setSelectedProducts(prev => [...new Set([...prev, ...productIds])]);
-      setSelectedLancamentos(prev => [...new Set([...prev, lancamento])]);
+      setSelectedLancamentos(prev => [...new Set([...prev, orderId])]);
     } else {
-      const productsInLancamento = groupedProducts[lancamento] || [];
-      const productIds = productsInLancamento.map((p: any) => p.id);
       setSelectedProducts(prev => prev.filter(id => !productIds.includes(id)));
-      setSelectedLancamentos(prev => prev.filter(l => l !== lancamento));
+      setSelectedLancamentos(prev => prev.filter(l => l !== orderId));
     }
-  };
-
-  const handleProductSelection = (productId: string, checked: boolean) => {
-    // Seleciona sempre o pedido inteiro ao marcar um produto
-    let targetGroup: string | null = null;
-    Object.entries(groupedProducts).forEach(([group, products]) => {
-      if (products.some((p: any) => String(p.id) === String(productId))) {
-        targetGroup = group;
-      }
-    });
-    if (!targetGroup) return;
-    handleLancamentoSelection(targetGroup, checked);
   };
 
   const saveEditedRoute = async () => {
