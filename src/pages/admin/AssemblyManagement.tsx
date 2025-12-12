@@ -141,17 +141,25 @@ export default function AssemblyManagement() {
         .select('*')
         .eq('active', true);
       
-      // Produtos pendentes e sem romaneio (assembly_route_id nulo)
-      const pendingUnrouted = (productsData || []).filter((p: any) => p.status === 'pending' && !p.assembly_route_id);
+      // Agrupar por pedido e considerar somente pedidos inteiros pendentes e sem romaneio
+      const byOrder: Record<string, any[]> = {};
+      (productsData || []).forEach((ap: any) => {
+        const orderId = String(ap.order_id || ap.order?.id || ap.id);
+        if (!byOrder[orderId]) byOrder[orderId] = [];
+        byOrder[orderId].push(ap);
+      });
 
-      // Agrupar por número de lançamento do pedido (order_id_erp)
-      const groupedByLancamento = pendingUnrouted.reduce((groups: any, ap: any) => {
-        const order = ap.order || {};
-        const numLancamento = order.order_id_erp || 'Sem Número';
-        if (!groups[numLancamento]) groups[numLancamento] = [];
-        groups[numLancamento].push(ap);
-        return groups;
-      }, {});
+      const groupedByOrder: Record<string, any[]> = {};
+      Object.entries(byOrder).forEach(([orderId, list]) => {
+        const allPending = list.every((p: any) => p.status === 'pending');
+        const allUnrouted = list.every((p: any) => !p.assembly_route_id);
+        if (allPending && allUnrouted) {
+          groupedByOrder[orderId] = list;
+        }
+      });
+
+      // Lista achatada apenas dos produtos elegíveis
+      const pendingUnrouted = Object.values(groupedByOrder).flat();
 
       // Montar informações de entrega
       const orderIds = pendingUnrouted.map((ap: any) => ap.order_id);
@@ -204,12 +212,12 @@ export default function AssemblyManagement() {
       setMontadores(montadoresData || []);
       setVehicles(vehiclesData || []);
       setAvailableProducts(pendingUnrouted || []);
-      setGroupedProducts(groupedByLancamento);
+      setGroupedProducts(groupedByOrder);
       setDeliveryInfo(deliveryByOrderId);
       
       // Expand all groups by default
       const initialExpanded: Record<string, boolean> = {};
-      Object.keys(groupedByLancamento).forEach(key => initialExpanded[key] = true);
+      Object.keys(groupedByOrder).forEach(key => initialExpanded[key] = true);
       setExpandedGroups(initialExpanded);
       
     } catch (error) {
@@ -323,7 +331,7 @@ export default function AssemblyManagement() {
       const productsInLancamento = groupedProducts[lancamento] || [];
       const productIds = productsInLancamento.map((p: any) => p.id);
       setSelectedProducts(prev => [...new Set([...prev, ...productIds])]);
-      setSelectedLancamentos(prev => [...prev, lancamento]);
+      setSelectedLancamentos(prev => [...new Set([...prev, lancamento])]);
     } else {
       const productsInLancamento = groupedProducts[lancamento] || [];
       const productIds = productsInLancamento.map((p: any) => p.id);
@@ -333,11 +341,15 @@ export default function AssemblyManagement() {
   };
 
   const handleProductSelection = (productId: string, checked: boolean) => {
-    if (checked) {
-      setSelectedProducts(prev => [...prev, productId]);
-    } else {
-      setSelectedProducts(prev => prev.filter(id => id !== productId));
-    }
+    // Seleciona sempre o pedido inteiro ao marcar um produto
+    let targetGroup: string | null = null;
+    Object.entries(groupedProducts).forEach(([group, products]) => {
+      if (products.some((p: any) => String(p.id) === String(productId))) {
+        targetGroup = group;
+      }
+    });
+    if (!targetGroup) return;
+    handleLancamentoSelection(targetGroup, checked);
   };
 
   const saveEditedRoute = async () => {
@@ -755,8 +767,20 @@ export default function AssemblyManagement() {
                           />
                         </div>
                         <div>
-                          <p className="text-sm font-bold text-gray-900">Lançamento: {lancamento}</p>
-                          <p className="text-xs text-gray-500">{products.length} produtos</p>
+                          {(() => {
+                            const first = products[0] || {};
+                            const order = first.order || {};
+                            const pedido = order.order_id_erp || order.id || lancamento;
+                            const cliente = order.customer_name || '';
+                            return (
+                              <>
+                                <p className="text-sm font-bold text-gray-900">Pedido: {pedido}</p>
+                                <p className="text-xs text-gray-500">
+                                  {cliente ? `${cliente} · ` : ''}{products.length} {products.length === 1 ? 'produto' : 'produtos'}
+                                </p>
+                              </>
+                            );
+                          })()}
                         </div>
                       </div>
                       <button className="text-gray-400">
