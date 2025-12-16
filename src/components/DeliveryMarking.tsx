@@ -671,13 +671,7 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
 
               {/* Action Buttons */}
               <div className="ml-4 flex flex-col space-y-2">
-                <button
-                  onClick={() => openOrderInMaps(routeOrder)}
-                  className="flex items-center px-3 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 transition-colors text-sm"
-                >
-                  <MapPin className="h-4 w-4 mr-1" />
-                  Abrir no GPS
-                </button>
+                {/* GPS removido */}
                 {routeOrder.status === 'pending' && (
                   <>
                     <button
@@ -711,7 +705,6 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
     </div>
   );
 }
-
 
 
 
