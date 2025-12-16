@@ -1280,22 +1280,26 @@ export default function AssemblyManagement() {
                           const num = addr.number ? `, ${addr.number}` : '';
                           const endereco_completo = `${addr.street || ''}${num} - ${addr.neighborhood || ''} - ${addr.city || ''}`.trim();
                           mapByOrder.set(o.id, {
-                            pedido: String(o.order_id_erp || ''),
+                            lancamento_venda: Number(o.order_id_erp || o.id || 0),
                             cliente_nome: String(o.customer_name || ''),
                             cliente_celular: String(o.phone || o.raw_json?.cliente_celular || ''),
                             endereco_completo,
-                            produtos: [] as any[],
+                            produtos: [] as string[],
                           });
                         }
                         const entry = mapByOrder.get(o.id);
-                        entry.produtos.push({
-                          sku: String(p.sku || p.product_sku || ''),
-                          nome: String(p.product_name || p.order?.items_json?.[0]?.name || ''),
-                          quantidade: p.quantity || 1,
-                          local: p.location || '',
-                        });
+                        const sku = String(p.sku || p.product_sku || '');
+                        const nome = String(p.product_name || p.order?.items_json?.[0]?.name || '');
+                        entry.produtos.push(`${sku} - ${nome}`);
                       });
-                      const contatos = Array.from(mapByOrder.values());
+                      const contatosRaw = Array.from(mapByOrder.values());
+                      const contatos = contatosRaw.map((c: any) => ({
+                        lancamento_venda: c.lancamento_venda,
+                        cliente_nome: c.cliente_nome,
+                        cliente_celular: c.cliente_celular,
+                        endereco_completo: c.endereco_completo,
+                        produtos: (c.produtos || []).join(', '),
+                      }));
                       if (contatos.length === 0) { toast.error('Nenhum pedido para envio'); setWaSending(false); return; }
                       let webhookUrl = import.meta.env.VITE_WEBHOOK_WHATSAPP_URL as string | undefined;
                       if (!webhookUrl) {
