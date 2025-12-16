@@ -63,6 +63,8 @@ export default function AssemblyManagement() {
   const [selectedToAdd, setSelectedToAdd] = useState<string[]>([]);
   const [routeDetails, setRouteDetails] = useState<{ route: AssemblyRoute, products: any[] } | null>(null);
   const [detailsItem, setDetailsItem] = useState<any | null>(null);
+  const [waSending, setWaSending] = useState(false);
+  const [groupSending, setGroupSending] = useState(false);
 
   // Filters
   const [filterCidade, setFilterCidade] = useState('');
@@ -1256,32 +1258,142 @@ export default function AssemblyManagement() {
 
             {/* Toolbar */}
             <div className="px-6 py-3 border-b border-gray-100 flex flex-wrap gap-2 items-center bg-white">
-               <button
-                  onClick={() => {
-                    const products = routeDetails.products || [];
-                    const toAddr = (o: any) => {
-                      const a = o?.address_json || {};
-                      const n = a.number ? `, ${a.number}` : '';
-                      return `${a.street || ''}${n} - ${a.neighborhood || ''} - ${a.city || ''}`.trim();
-                    };
-                    const stops = products.map((p: any) => p.order).filter(Boolean);
-                    if (stops.length === 0) return;
-                    const waypoints = stops.slice(0, Math.max(0, stops.length - 1)).map(toAddr);
-                    const destination = toAddr(stops[stops.length - 1]);
-                    const url = `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent('Current Location')}&destination=${encodeURIComponent(destination)}&travelmode=driving${waypoints.length ? `&waypoints=${encodeURIComponent(waypoints.join('|'))}` : ''}`;
-                    window.open(url, '_blank');
-                  }}
-                  className="inline-flex items-center px-3 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-lg text-gray-700 bg-white hover:bg-gray-50"
-                >
-                  <MapPin className="h-4 w-4 mr-2 text-gray-500" />
-                  Abrir Rota GPS
-                </button>
                 <button
                   onClick={() => generateRoutePdf(routeDetails.route)}
                   className="inline-flex items-center px-3 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-lg text-gray-700 bg-white hover:bg-gray-50"
                 >
                   <FileText className="h-4 w-4 mr-2 text-gray-500" />
                   Gerar PDF
+                </button>
+                <button
+                  onClick={async () => {
+                    if (!routeDetails?.products?.length) return;
+                    setWaSending(true);
+                    try {
+                      // Agrupar por pedido
+                      const mapByOrder = new Map<string, any>();
+                      routeDetails.products.forEach((p: any) => {
+                        const o = p.order || {};
+                        if (!o.id) return;
+                        if (!mapByOrder.has(o.id)) {
+                          const addr = o.address_json || {};
+                          const num = addr.number ? `, ${addr.number}` : '';
+                          const endereco_completo = `${addr.street || ''}${num} - ${addr.neighborhood || ''} - ${addr.city || ''}`.trim();
+                          mapByOrder.set(o.id, {
+                            pedido: String(o.order_id_erp || ''),
+                            cliente_nome: String(o.customer_name || ''),
+                            cliente_celular: String(o.phone || o.raw_json?.cliente_celular || ''),
+                            endereco_completo,
+                            produtos: [] as any[],
+                          });
+                        }
+                        const entry = mapByOrder.get(o.id);
+                        entry.produtos.push({
+                          sku: String(p.sku || p.product_sku || ''),
+                          nome: String(p.product_name || p.order?.items_json?.[0]?.name || ''),
+                          quantidade: p.quantity || 1,
+                          local: p.location || '',
+                        });
+                      });
+                      const contatos = Array.from(mapByOrder.values());
+                      if (contatos.length === 0) { toast.error('Nenhum pedido para envio'); setWaSending(false); return; }
+                      let webhookUrl = import.meta.env.VITE_WEBHOOK_WHATSAPP_URL as string | undefined;
+                      if (!webhookUrl) {
+                        const { data } = await supabase.from('webhook_settings').select('url').eq('key', 'envia_mensagem').eq('active', true).single();
+                        webhookUrl = data?.url || 'https://n8n.lojaodosmoveis.shop/webhook-test/envia_mensagem';
+                      }
+                      const payload = { contatos, tipo_de_romaneio: 'montagem' };
+                      try {
+                        await fetch(String(webhookUrl), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+                      } catch {
+                        const fd = new FormData();
+                        for (const c of contatos) fd.append('contatos[]', JSON.stringify(c));
+                        fd.append('tipo_de_romaneio', 'montagem');
+                        await fetch(String(webhookUrl), { method: 'POST', body: fd });
+                      }
+                      toast.success('WhatsApp solicitado');
+                    } catch (e) {
+                      console.error(e);
+                      toast.error('Erro ao enviar WhatsApp');
+                    } finally {
+                      setWaSending(false);
+                    }
+                  }}
+                  disabled={waSending}
+                  className="inline-flex items-center px-3 py-2 border border-green-200 shadow-sm text-sm font-medium rounded-lg text-green-700 bg-green-50 hover:bg-green-100 disabled:opacity-50"
+                >
+                  Enviar cliente
+                </button>
+                <button
+                  onClick={async () => {
+                    if (!routeDetails?.route) return;
+                    setGroupSending(true);
+                    try {
+                      const route = routeDetails.route as any;
+                      const produtos = routeDetails.products || [];
+                      const documentos = Array.from(new Set(produtos.map((p: any) => String(p.order?.order_id_erp || '')).filter(Boolean)));
+                      if (documentos.length === 0) { toast.error('Nenhum número de lançamento encontrado'); setGroupSending(false); return; }
+                      const assemblerId = (route as any).assembler_id;
+                      let assemblerName = '';
+                      if (assemblerId) {
+                        const m = montadores.find(m => m.id === assemblerId);
+                        assemblerName = m?.name || m?.email || '';
+                      }
+                      let vehicle_text = '';
+                      const vehicleId = (route as any).vehicle_id;
+                      if (vehicleId) {
+                        const v = vehicles.find(v => v.id === vehicleId);
+                        if (v) vehicle_text = `${String(v.model || '')}${v.plate ? ' | ' + String(v.plate) : ''}`;
+                      }
+                      const route_name = String(route.name || '');
+                      const status = String(route.status || '');
+                      const observations = String(route.observations || '');
+                      let webhookUrl = import.meta.env.VITE_WEBHOOK_ENVIA_GRUPO_URL as string | undefined;
+                      if (!webhookUrl) {
+                        try {
+                          const { data } = await supabase.from('webhook_settings').select('url').eq('key', 'envia_grupo').eq('active', true).single();
+                          webhookUrl = data?.url || 'https://n8n.lojaodosmoveis.shop/webhook-test/envia_grupo';
+                        } catch {
+                          webhookUrl = 'https://n8n.lojaodosmoveis.shop/webhook-test/envia_grupo';
+                        }
+                      }
+                      const payload = { route_name, driver_name: assemblerName, conferente: assemblerName, documentos, status, vehicle: vehicle_text, observations, tipo_de_romaneio: 'montagem' };
+                      try {
+                        const resp = await fetch(String(webhookUrl), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+                        if (!resp.ok) {
+                          const text = await resp.text();
+                          if (resp.status === 404 && text.includes('envia_grupo')) {
+                            toast.error('Webhook de teste não está ativo.');
+                          } else {
+                            toast.error('Falha ao enviar informativo');
+                          }
+                          setGroupSending(false);
+                          return;
+                        }
+                      } catch {
+                        const fd = new FormData();
+                        fd.append('route_name', route_name);
+                        fd.append('driver_name', assemblerName);
+                        fd.append('conferente', assemblerName);
+                        fd.append('status', status);
+                        fd.append('vehicle', vehicle_text);
+                        fd.append('observations', observations);
+                        fd.append('tipo_de_romaneio', 'montagem');
+                        for (const d of documentos) fd.append('documentos[]', d);
+                        await fetch(String(webhookUrl), { method: 'POST', body: fd });
+                      }
+                      toast.success('Rota enviada ao grupo');
+                    } catch (e) {
+                      console.error(e);
+                      toast.error('Erro ao enviar rota em grupo');
+                    } finally {
+                      setGroupSending(false);
+                    }
+                  }}
+                  disabled={groupSending}
+                  className="inline-flex items-center px-3 py-2 border border-green-200 shadow-sm text-sm font-medium rounded-lg text-green-700 bg-green-50 hover:bg-green-100 disabled:opacity-50"
+                >
+                  Enviar grupo
                 </button>
                 <div className="h-6 w-px bg-gray-300 mx-2" />
                 <button

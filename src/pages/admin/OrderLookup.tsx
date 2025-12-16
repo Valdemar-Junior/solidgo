@@ -202,6 +202,10 @@ export default function OrderLookup() {
               ...r,
               route: { ...rt, driver: drv, vehicle: veh },
             };
+          }).sort((a: any, b: any) => {
+            const da = new Date(a.delivered_at || a.updated_at || a.created_at || 0).getTime();
+            const db = new Date(b.delivered_at || b.updated_at || b.created_at || 0).getTime();
+            return db - da;
           });
         }
 
@@ -380,12 +384,33 @@ export default function OrderLookup() {
                     {routeOrders.map((ro) => (
                       <div key={ro.id} className="border border-gray-100 rounded-lg p-3">
                         <p className="text-sm font-semibold text-gray-900">{ro.route?.name || ro.route_id}</p>
-                        <p className="text-xs text-gray-500 capitalize">Status rota: {statusLabelEntrega[ro.route?.status || ''] || ro.route?.status || '-'}</p>
+                        <p className="text-xs text-gray-500 capitalize">
+                          Status: {statusLabelEntrega[ro.status || ''] || statusLabelEntrega[ro.route?.status || ''] || ro.status || ro.route?.status || '-'}
+                        </p>
                         <p className="text-xs text-gray-500">Motorista: {ro.route?.driver?.user?.name || ro.route?.driver?.name || '-'}</p>
                         <p className="text-xs text-gray-500">Veículo: {ro.route?.vehicle ? `${ro.route?.vehicle?.model || ''} ${ro.route?.vehicle?.plate || ''}`.trim() : '-'}</p>
                         <p className="text-xs text-gray-500">Conferente: {ro.route?.conferente || '-'}</p>
-                        <p className="text-xs text-gray-500">Entregue em: {ro.delivered_at ? formatDate(ro.delivered_at) : formatDate(ro.route?.updated_at)}</p>
+                        <p className="text-xs text-gray-500">
+                          {ro.status === 'returned' ? 'Retornado em: ' : 'Entregue em: '}
+                          {ro.delivered_at ? formatDate(ro.delivered_at) : formatDate(ro.route?.updated_at)}
+                        </p>
                         <p className="text-xs text-gray-500">Conferência: {ro.route?.conference_status || 'N/A'}</p>
+                        <div className="mt-2 flex gap-2">
+                          <button
+                            onClick={() => {
+                              try {
+                                if (ro.route_id) {
+                                  localStorage.setItem('rc_selectedRouteId', String(ro.route_id));
+                                  localStorage.setItem('rc_showRouteModal', '1');
+                                }
+                              } catch {}
+                              window.open('/admin/routes', '_blank');
+                            }}
+                            className="text-xs px-2 py-1 rounded border border-gray-300 text-gray-700 hover:bg-gray-50 transition-colors"
+                          >
+                            Detalhes da rota
+                          </button>
+                        </div>
                       </div>
                     ))}
                   </div>

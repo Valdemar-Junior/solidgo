@@ -261,10 +261,16 @@ function RouteCreationContent() {
   useEffect(() => {
     try {
       const rid = localStorage.getItem('rc_selectedRouteId');
+      const showRoutePref = localStorage.getItem('rc_showRouteModal');
       // Do not auto-open create modal on load
       localStorage.setItem('rc_showCreateModal', '0');
       // Do NOT auto-open route modal on load; only open when user clicks
-      localStorage.setItem('rc_showRouteModal', '0');
+      if (showRoutePref !== '1') {
+        localStorage.setItem('rc_showRouteModal', '0');
+      } else if (rid) {
+        selectedRouteIdRef.current = rid;
+        showRouteModalRef.current = true;
+      }
       const cols = localStorage.getItem('rc_columns_conf');
       if (cols) {
         const parsed = JSON.parse(cols);
@@ -786,7 +792,12 @@ function RouteCreationContent() {
         setRoutesList(enriched as RouteWithDetails[]);
         if (selectedRouteIdRef.current) {
           const found = (enriched as RouteWithDetails[]).find(r => String(r.id) === String(selectedRouteIdRef.current));
-          if (found) setSelectedRoute(found);
+          if (found) {
+            setSelectedRoute(found);
+            if (showRouteModalRef.current) {
+              setShowRouteModal(true);
+            }
+          }
         }
       }
 
@@ -1955,7 +1966,7 @@ function RouteCreationContent() {
                                     const { data } = await supabase.from('webhook_settings').select('url').eq('key', 'envia_mensagem').eq('active', true).single();
                                     webhookUrl = data?.url || 'https://n8n.lojaodosmoveis.shop/webhook-test/envia_mensagem';
                                 }
-                                const payload = { contatos };
+                                const payload = { contatos, tipo_de_romaneio: 'entrega' };
                                 try {
                                     await fetch(String(webhookUrl), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
                                 } catch {
@@ -2009,7 +2020,7 @@ function RouteCreationContent() {
                                         webhookUrl = 'https://n8n.lojaodosmoveis.shop/webhook-test/envia_grupo';
                                     }
                                 }
-                                const payload = { route_name, driver_name, conferente: conferente_name, documentos, status, vehicle: vehicle_text, observations };
+                                const payload = { route_name, driver_name, conferente: conferente_name, documentos, status, vehicle: vehicle_text, observations, tipo_de_romaneio: 'entrega' };
                                 try {
                                     const resp = await fetch(String(webhookUrl), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
                                     if (!resp.ok) {

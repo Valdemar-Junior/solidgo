@@ -121,16 +121,8 @@ export default function DriverRouteDetails() {
     return Math.round((completed / routeOrders.length) * 100);
   };
 
-  const openMapsForRoute = () => {
-    const toAddr = (o: any) => buildFullAddress(o?.address_json || {});
-    const stops = routeOrders.map((ro: any) => ro.order).filter(Boolean);
-    if (stops.length === 0) return;
-    const waypoints = stops.slice(0, Math.max(0, stops.length - 1)).map(toAddr).filter(Boolean);
-    const destination = toAddr(stops[stops.length - 1]);
-    const base = `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent('Current Location')}&destination=${encodeURIComponent(destination)}&travelmode=driving`;
-    const url = waypoints.length ? `${base}&waypoints=${encodeURIComponent(waypoints.join('|'))}` : base;
-    window.open(url, '_blank');
-  };
+  // GPS opening removido (endereços imprecisos)
+  const openMapsForRoute = () => {};
 
   if (loading) {
     return (
@@ -232,11 +224,7 @@ export default function DriverRouteDetails() {
             <MapPin className="h-5 w-5 mr-2" />
             Resumo da Rota
           </h2>
-          <div className="flex justify-end mb-4">
-            <button onClick={openMapsForRoute} className="inline-flex items-center px-3 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 text-sm font-medium">
-              Abrir rota no GPS
-            </button>
-          </div>
+          <div className="flex justify-end mb-4"></div>
           
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div className="text-center">
