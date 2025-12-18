@@ -1,14 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
-import { 
-  Package, 
-  RefreshCw, 
-  Eye, 
-  Hammer, 
-  Truck, 
-  ArrowLeft, 
-  LayoutGrid, 
-  TruckIcon, 
-  UploadCloud, 
+import {
+  Package,
+  RefreshCw,
+  Eye,
+  Hammer,
+  Truck,
+  ArrowLeft,
+  LayoutGrid,
+  TruckIcon,
+  UploadCloud,
   CheckCircle2,
   AlertTriangle,
   Clock
@@ -27,7 +27,7 @@ export default function OrdersImport() {
   const selectedOrderIdRef = useRef<string | null>(null);
   const showModalRef = useRef<boolean>(false);
   const navigate = useNavigate();
-  
+
   // Stats
   const [stats, setStats] = useState({ total: 0, pending: 0, today: 0 });
 
@@ -51,16 +51,16 @@ export default function OrdersImport() {
       .select('*')
       .order('created_at', { ascending: false })
       .limit(200);
-    
+
     if (error) {
       console.error('Erro ao carregar pedidos do banco:', error);
     } else {
       setDbOrders(data || []);
-      
+
       // Calc stats
       const today = new Date().toISOString().split('T')[0];
-      const todayCount = (data || []).filter((o:any) => o.created_at.startsWith(today)).length;
-      const pending = (data || []).filter((o:any) => o.status === 'pending').length;
+      const todayCount = (data || []).filter((o: any) => o.created_at.startsWith(today)).length;
+      const pending = (data || []).filter((o: any) => o.status === 'pending').length;
       setStats({ total: data?.length || 0, pending, today: todayCount });
     }
   };
@@ -89,12 +89,12 @@ export default function OrdersImport() {
       const s = localStorage.getItem('oi_showModal');
       const id = localStorage.getItem('oi_selectedOrderId');
       if (s === '1' && id) { showModalRef.current = true; selectedOrderIdRef.current = id; }
-    } catch {}
+    } catch { }
   }, []);
 
   const importOrders = async () => {
     setLoading(true);
-    
+
     try {
       let webhookUrl = import.meta.env.VITE_WEBHOOK_URL as string | undefined;
       if (!webhookUrl) {
@@ -130,10 +130,10 @@ export default function OrdersImport() {
       const toDb = items.map((o: any) => {
         const produtos = Array.isArray(o.produtos) ? o.produtos : (Array.isArray(o.produtos_locais) ? o.produtos_locais : []);
         const xmlDanfe = o.xml_danfe_remessa || {};
-        
+
         let quantidade_volumes = 0;
         let etiquetas: string[] = [];
-        
+
         if (produtos.length > 0) {
           produtos.forEach((p: any) => {
             if (p.quantidade_volumes) quantidade_volumes += p.quantidade_volumes;
@@ -142,7 +142,7 @@ export default function OrdersImport() {
             }
           });
         }
-        
+
         return {
           order_id_erp: String(o.numero_lancamento ?? o.lancamento_venda ?? o.codigo_cliente ?? Math.random().toString(36).slice(2)),
           customer_name: String(o.nome_cliente ?? ''),
@@ -197,7 +197,7 @@ export default function OrdersImport() {
         return true;
       });
       let existentes: any[] = [];
-      
+
       if (numerosLancamento.length > 0) {
         const { data: existentesPorLancamento } = await supabase
           .from('orders')
@@ -205,9 +205,9 @@ export default function OrdersImport() {
           .in('order_id_erp', numerosLancamento);
         existentes = existentesPorLancamento || [];
       }
-      
+
       const existentesLancamentoSet = new Set<string>((existentes || []).map((e: any) => String(e.order_id_erp)).filter(Boolean));
-      
+
       const paraInserir = toDbUnique.filter((o: any) => {
         if (o.order_id_erp && existentesLancamentoSet.has(String(o.order_id_erp))) {
           return false;
@@ -219,7 +219,7 @@ export default function OrdersImport() {
       // Inserir apenas pedidos completamente novos
       let inseridos = 0;
       let errosInsercao = 0;
-      
+
       const savedOrderIds: string[] = [];
       const savedOrdersInfo: any[] = [];
 
@@ -231,7 +231,7 @@ export default function OrdersImport() {
             .insert(pedido)
             .select('id, order_id_erp, address_json')
             .single();
-          
+
           if (!insertError) {
             inseridos++;
             if (inserted?.id) {
@@ -249,7 +249,7 @@ export default function OrdersImport() {
       }
 
       const pedidosImportados = inseridos;
-      
+
       toast.success(`Importação finalizada: ${pedidosImportados} pedidos salvos! Iniciando busca de coordenadas em segundo plano...`, {
         duration: 5000,
         style: { background: '#10B981', color: 'white' }
@@ -259,51 +259,10 @@ export default function OrdersImport() {
       setLastImport(new Date());
       setLoading(false); // Libera a UI
 
-      // FASE 2: GEOCODIFICAR (Lento - Background)
-      if (savedOrdersInfo.length > 0) {
-        let geoCount = 0;
-        const totalGeo = savedOrdersInfo.length;
-        
-        const toastId = toast.loading(`Buscando GPS: 0/${totalGeo} concluídos`, { duration: Infinity });
+      // FASE 2: GEOCODIFICAR (Removido - GPS via App Motorista)
+      // O código de busca background foi removido conforme solicitação para otimizar o fluxo.
 
-        for (const order of savedOrdersInfo) {
-           try {
-              const addr = order.address_json || {};
-              const hasLat = addr.lat && !isNaN(Number(addr.lat));
-              const hasLng = addr.lng && !isNaN(Number(addr.lng));
-              
-              if (hasLat && hasLng) {
-                   // Já tem
-               } else {
-                 // Delay para LocationIQ (600ms)
-                 await new Promise(r => setTimeout(r, 600));
-                 
-                 const gRes = await fetch('/api/geocode-order', {
-                   method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ orderId: order.id, debug: true })
-                });
-                
-                if (gRes.ok) {
-                  const gJson = await gRes.json();
-                  if (gJson.ok) console.log(`Geocode OK [${order.order_id_erp}]`);
-                  else console.warn(`Geocode falhou [${order.order_id_erp}]:`, gJson);
-                }
-              }
-              
-              geoCount++;
-              if (geoCount % 5 === 0 || geoCount === totalGeo) {
-                toast.message(`Buscando GPS: ${geoCount}/${totalGeo} concluídos`, { id: toastId });
-              }
-           } catch (e) {
-             console.error('Erro geocode background:', e);
-           }
-        }
-        
-        toast.success('Busca de coordenadas finalizada!', { id: toastId, duration: 3000 });
-        await fetchImportedOrders();
-      }
-      
+
     } catch (error) {
       console.error('Error importing orders:', error);
       toast.error('Erro ao importar pedidos. Tente novamente.');
@@ -338,7 +297,7 @@ export default function OrdersImport() {
     for (const c of direct) { const s = String(c || '').trim(); if (s) return s; }
     const arrs = [raw?.produtos, raw?.produtos_locais];
     for (const arr of arrs) { if (Array.isArray(arr)) { for (const p of arr) { const s = String(p?.vendedor_nome || p?.vendedor || '').trim(); if (s) return s; } } }
-    try { for (const k of Object.keys(raw || {})) { if (k.toLowerCase().includes('vendedor')) { const s = String(raw[k] || '').trim(); if (s) return s; } } } catch {}
+    try { for (const k of Object.keys(raw || {})) { if (k.toLowerCase().includes('vendedor')) { const s = String(raw[k] || '').trim(); if (s) return s; } } } catch { }
     return '';
   };
 
@@ -349,8 +308,8 @@ export default function OrdersImport() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center py-4">
             <div className="flex items-center space-x-4">
-              <button 
-                onClick={() => navigate(-1)} 
+              <button
+                onClick={() => navigate(-1)}
                 className="p-2 -ml-2 hover:bg-gray-100 rounded-lg text-gray-600 transition-colors"
                 title="Voltar"
               >
@@ -367,10 +326,10 @@ export default function OrdersImport() {
               </div>
             </div>
             <div className="flex items-center space-x-3">
-              <button onClick={()=>navigate('/admin')} className="inline-flex items-center px-4 py-2 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50 text-sm font-medium transition-colors">
+              <button onClick={() => navigate('/admin')} className="inline-flex items-center px-4 py-2 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50 text-sm font-medium transition-colors">
                 <LayoutGrid className="h-4 w-4 mr-2" /> Dashboard
               </button>
-              <button onClick={()=>navigate('/admin/routes')} className="inline-flex items-center px-4 py-2 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50 text-sm font-medium transition-colors">
+              <button onClick={() => navigate('/admin/routes')} className="inline-flex items-center px-4 py-2 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50 text-sm font-medium transition-colors">
                 <TruckIcon className="h-4 w-4 mr-2" /> Entregas
               </button>
             </div>
@@ -379,7 +338,7 @@ export default function OrdersImport() {
       </div>
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        
+
         {/* Quick Stats */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
           <div className="bg-white rounded-xl p-5 shadow-sm border border-gray-100 flex items-center justify-between">
@@ -414,12 +373,12 @@ export default function OrdersImport() {
         {/* Import Action Area */}
         <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-8 mb-8 text-center relative overflow-hidden group">
           <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-blue-500 to-purple-500"></div>
-          
+
           <div className="max-w-xl mx-auto relative z-10">
             <div className="mx-auto w-20 h-20 bg-blue-50 rounded-full flex items-center justify-center mb-6 group-hover:scale-110 transition-transform duration-300">
               <UploadCloud className="h-10 w-10 text-blue-600" />
             </div>
-            
+
             <h2 className="text-2xl font-bold text-gray-900 mb-3">Sincronizar Pedidos</h2>
             <p className="text-gray-500 mb-8">
               Clique no botão abaixo para buscar novos pedidos do sistema ERP. O processo roda em segundo plano para não travar seu trabalho.
@@ -442,7 +401,7 @@ export default function OrdersImport() {
                 </>
               )}
             </button>
-            
+
             {lastImport && (
               <p className="text-xs text-gray-400 mt-4">
                 Última sincronização: {lastImport.toLocaleString('pt-BR')}
@@ -462,7 +421,7 @@ export default function OrdersImport() {
               Últimos 200
             </span>
           </div>
-          
+
           {dbOrders.length > 0 ? (
             <div className="overflow-x-auto">
               <table className="min-w-full divide-y divide-gray-200">
@@ -483,11 +442,11 @@ export default function OrdersImport() {
                     const docNum = String(o.order_id_erp ?? raw.lancamento_venda ?? '-');
                     const dataVenda = formatDateBR(raw.data_venda);
                     const previsao = formatDateBR(raw.previsao_entrega);
-                    
-                    const statusColor = o.status === 'delivered' ? 'bg-green-100 text-green-800' : 
-                                      o.status === 'returned' ? 'bg-red-100 text-red-800' :
-                                      o.status === 'assigned' ? 'bg-blue-100 text-blue-800' :
-                                      'bg-gray-100 text-gray-800';
+
+                    const statusColor = o.status === 'delivered' ? 'bg-green-100 text-green-800' :
+                      o.status === 'returned' ? 'bg-red-100 text-red-800' :
+                        o.status === 'assigned' ? 'bg-blue-100 text-blue-800' :
+                          'bg-gray-100 text-gray-800';
 
                     return (
                       <tr key={o.id} className="hover:bg-gray-50 transition-colors">
@@ -516,7 +475,7 @@ export default function OrdersImport() {
                         </td>
                         <td className="px-6 py-4 text-right">
                           <button
-                            onClick={() => { setSelectedOrder(o); selectedOrderIdRef.current = String(o.id); localStorage.setItem('oi_selectedOrderId', String(o.id)); showModalRef.current = true; localStorage.setItem('oi_showModal','1'); setShowModal(true); }}
+                            onClick={() => { setSelectedOrder(o); selectedOrderIdRef.current = String(o.id); localStorage.setItem('oi_selectedOrderId', String(o.id)); showModalRef.current = true; localStorage.setItem('oi_showModal', '1'); setShowModal(true); }}
                             className="text-blue-600 hover:text-blue-900 font-medium text-sm inline-flex items-center transition-colors p-2 hover:bg-blue-50 rounded-lg"
                           >
                             <Eye className="h-4 w-4 mr-1" /> Detalhes
@@ -547,71 +506,71 @@ export default function OrdersImport() {
                 <Package className="h-5 w-5 text-blue-600" />
                 Detalhes do Pedido
               </h4>
-              <button 
+              <button
                 className="p-2 hover:bg-gray-200 rounded-full transition-colors text-gray-500"
                 onClick={() => { showModalRef.current = false; localStorage.removeItem('oi_showModal'); localStorage.removeItem('oi_selectedOrderId'); setShowModal(false); }}
               >
                 ✕
               </button>
             </div>
-            
+
             <div className="p-6 overflow-y-auto custom-scrollbar">
-                {/* Info Grid */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 text-sm mb-8">
-                  <div className="space-y-4">
-                    <div>
-                        <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Cliente</label>
-                        <p className="text-base font-medium text-gray-900">{selectedOrder.customer_name}</p>
-                        <p className="text-gray-500">CPF: {selectedOrder.customer_cpf ?? '-'}</p>
-                    </div>
-                    <div>
-                        <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Contato</label>
-                        <div className="flex items-center gap-2">
-                            <span className="text-gray-900">{selectedOrder.phone}</span>
-                            {/* WhatsApp Link logic reused */}
-                            {(() => {
-                              const d = String(selectedOrder.phone || '').replace(/\D/g, '');
-                              const n = d ? (d.startsWith('55') ? d : '55' + d) : '';
-                              return n ? (
-                                <a href={`https://wa.me/${n}`} target="_blank" rel="noreferrer" className="text-green-600 hover:bg-green-50 p-1 rounded">
-                                  <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M20.52 3.48A11.84 11.84 0 0 0 12.04 0C5.48 0 .16 5.32.16 11.88c0 2.08.56 4.08 1.6 5.84L0 24l6.48-1.68a11.66 11.66 0 0 0 5.56 1.44h.04c6.56 0 11.88-5.32 11.88-11.88 0-3.2-1.24-6.2-3.52-8.4ZM12.08 21.2h-.04a9.7 9.7 0 0 1-4.96-1.36l-.36-.2-3.84 1L3.96 16l-.24-.4A9.86 9.86 0 0 1 2 11.88c0-5.52 4.52-10.04 10.08-10.04 2.68 0 5.2 1.04 7.08 2.92a9.9 9.9 0 0 1 2.96 7.12c0 5.56-4.52 10.32-10.04 10.32Zm5.76-7.44c-.32-.2-1.88-.92-2.16-1.04-.28-.12-.48-.2-.68.12-.2.32-.8 1.04-.98 1.24-.2.2-.36.24-.68.08-.32-.16-1.36-.5-2.6-1.6-.96-.84-1.6-1.88-1.8-2.2-.2-.32 0-.52.16-.68.16-.16.32-.4.48-.6.16-.2.2-.36.32-.6.12-.24.08-.44-.04-.64-.12-.2-.68-1.64-.92-2.2-.24-.56-.48-.48-.68-.48h-.56c-.2 0-.52.08-.8.4-.28.32-1.08 1.08-1.08 2.64s1.12 3.08 1.28 3.3c.16.2 2.24 3.42 5.4 4.72.76.32 1.36.52 1.82.66.76.24 1.44.2 1.98.12.6-.1 1.88-.76 2.14-1.5.26-.74.26-1.36.18-1.5-.08-.14-.28-.22-.6-.4Z" /></svg>
-                                </a>
-                              ) : null;
-                            })()}
-                        </div>
-                    </div>
+              {/* Info Grid */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 text-sm mb-8">
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Cliente</label>
+                    <p className="text-base font-medium text-gray-900">{selectedOrder.customer_name}</p>
+                    <p className="text-gray-500">CPF: {selectedOrder.customer_cpf ?? '-'}</p>
                   </div>
-                  <div className="space-y-4">
-                    <div>
-                        <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Endereço de Entrega</label>
-                        {(() => {
-                            const addr = selectedOrder.address_json || {};
-                            const raw = selectedOrder.raw_json || {};
-                            const zip = addr.zip || pickZip(raw) || '-';
-                            const street = addr.street || raw.destinatario_endereco || '';
-                            const number = addr.number || '';
-                            const city = addr.city || raw.destinatario_cidade || '';
-                            return (
-                                <>
-                                    <p className="text-base font-medium text-gray-900">{street}, {number}</p>
-                                    <p className="text-gray-600">{addr.neighborhood} - {city}</p>
-                                    <p className="text-gray-500 text-xs mt-1">CEP: {zip}</p>
-                                </>
-                            );
-                        })()}
-                    </div>
-                    <div className="flex gap-4">
-                        <div>
-                            <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Data Venda</label>
-                            <p className="font-medium">{formatDateBR(selectedOrder.raw_json?.data_venda)}</p>
-                        </div>
-                        <div>
-                            <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Previsão</label>
-                            <p className="font-medium text-blue-600">{formatDateBR(selectedOrder.raw_json?.previsao_entrega)}</p>
-                        </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Contato</label>
+                    <div className="flex items-center gap-2">
+                      <span className="text-gray-900">{selectedOrder.phone}</span>
+                      {/* WhatsApp Link logic reused */}
+                      {(() => {
+                        const d = String(selectedOrder.phone || '').replace(/\D/g, '');
+                        const n = d ? (d.startsWith('55') ? d : '55' + d) : '';
+                        return n ? (
+                          <a href={`https://wa.me/${n}`} target="_blank" rel="noreferrer" className="text-green-600 hover:bg-green-50 p-1 rounded">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M20.52 3.48A11.84 11.84 0 0 0 12.04 0C5.48 0 .16 5.32.16 11.88c0 2.08.56 4.08 1.6 5.84L0 24l6.48-1.68a11.66 11.66 0 0 0 5.56 1.44h.04c6.56 0 11.88-5.32 11.88-11.88 0-3.2-1.24-6.2-3.52-8.4ZM12.08 21.2h-.04a9.7 9.7 0 0 1-4.96-1.36l-.36-.2-3.84 1L3.96 16l-.24-.4A9.86 9.86 0 0 1 2 11.88c0-5.52 4.52-10.04 10.08-10.04 2.68 0 5.2 1.04 7.08 2.92a9.9 9.9 0 0 1 2.96 7.12c0 5.56-4.52 10.32-10.04 10.32Zm5.76-7.44c-.32-.2-1.88-.92-2.16-1.04-.28-.12-.48-.2-.68.12-.2.32-.8 1.04-.98 1.24-.2.2-.36.24-.68.08-.32-.16-1.36-.5-2.6-1.6-.96-.84-1.6-1.88-1.8-2.2-.2-.32 0-.52.16-.68.16-.16.32-.4.48-.6.16-.2.2-.36.32-.6.12-.24.08-.44-.04-.64-.12-.2-.68-1.64-.92-2.2-.24-.56-.48-.48-.68-.48h-.56c-.2 0-.52.08-.8.4-.28.32-1.08 1.08-1.08 2.64s1.12 3.08 1.28 3.3c.16.2 2.24 3.42 5.4 4.72.76.32 1.36.52 1.82.66.76.24 1.44.2 1.98.12.6-.1 1.88-.76 2.14-1.5.26-.74.26-1.36.18-1.5-.08-.14-.28-.22-.6-.4Z" /></svg>
+                          </a>
+                        ) : null;
+                      })()}
                     </div>
                   </div>
                 </div>
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Endereço de Entrega</label>
+                    {(() => {
+                      const addr = selectedOrder.address_json || {};
+                      const raw = selectedOrder.raw_json || {};
+                      const zip = addr.zip || pickZip(raw) || '-';
+                      const street = addr.street || raw.destinatario_endereco || '';
+                      const number = addr.number || '';
+                      const city = addr.city || raw.destinatario_cidade || '';
+                      return (
+                        <>
+                          <p className="text-base font-medium text-gray-900">{street}, {number}</p>
+                          <p className="text-gray-600">{addr.neighborhood} - {city}</p>
+                          <p className="text-gray-500 text-xs mt-1">CEP: {zip}</p>
+                        </>
+                      );
+                    })()}
+                  </div>
+                  <div className="flex gap-4">
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Data Venda</label>
+                      <p className="font-medium">{formatDateBR(selectedOrder.raw_json?.data_venda)}</p>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Previsão</label>
+                      <p className="font-medium text-blue-600">{formatDateBR(selectedOrder.raw_json?.previsao_entrega)}</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
 
               {Array.isArray(selectedOrder.items_json) && selectedOrder.items_json.length > 0 && (
                 <div className="bg-gray-50 rounded-xl p-4 border border-gray-100">
@@ -620,23 +579,23 @@ export default function OrdersImport() {
                     {selectedOrder.items_json.map((p: any, idx: number) => {
                       const hasAssembly = String(p?.has_assembly || '').toLowerCase().includes('sim');
                       const freteRaw = String(selectedOrder.tem_frete_full || selectedOrder.raw_json?.tem_frete_full || '').toLowerCase();
-                      const isFreteFull = ['sim','true','1','y','yes'].some(v => freteRaw.includes(v));
+                      const isFreteFull = ['sim', 'true', '1', 'y', 'yes'].some(v => freteRaw.includes(v));
                       return (
                         <li key={idx} className="flex items-start justify-between bg-white p-3 rounded-lg border border-gray-100 shadow-sm">
                           <div>
-                              <span className="font-medium text-gray-900 block">{p.name}</span>
-                              <span className="text-xs text-gray-500">SKU: {p.sku} • Qtd: {p.purchased_quantity ?? 1}</span>
+                            <span className="font-medium text-gray-900 block">{p.name}</span>
+                            <span className="text-xs text-gray-500">SKU: {p.sku} • Qtd: {p.purchased_quantity ?? 1}</span>
                           </div>
                           <div className="flex gap-2">
                             {hasAssembly && (
-                                <span className="inline-flex items-center px-2 py-1 rounded bg-orange-100 text-orange-700 text-xs font-medium" title="Requer Montagem">
+                              <span className="inline-flex items-center px-2 py-1 rounded bg-orange-100 text-orange-700 text-xs font-medium" title="Requer Montagem">
                                 <Hammer className="h-3 w-3 mr-1" /> Montagem
-                                </span>
+                              </span>
                             )}
                             {isFreteFull && (
-                                <span className="inline-flex items-center px-2 py-1 rounded bg-emerald-100 text-emerald-700 text-xs font-medium" title="Frete Full">
+                              <span className="inline-flex items-center px-2 py-1 rounded bg-emerald-100 text-emerald-700 text-xs font-medium" title="Frete Full">
                                 <Truck className="h-3 w-3 mr-1" /> Full
-                                </span>
+                              </span>
                             )}
                           </div>
                         </li>
@@ -668,14 +627,14 @@ export default function OrdersImport() {
                 ) : null;
               })()}
             </div>
-            
+
             <div className="p-4 bg-gray-50 border-t border-gray-200 flex justify-end">
-                <button 
-                    className="px-4 py-2 bg-white border border-gray-300 text-gray-700 font-medium rounded-lg hover:bg-gray-50 transition-colors"
-                    onClick={() => { showModalRef.current = false; localStorage.removeItem('oi_showModal'); localStorage.removeItem('oi_selectedOrderId'); setShowModal(false); }}
-                >
-                    Fechar
-                </button>
+              <button
+                className="px-4 py-2 bg-white border border-gray-300 text-gray-700 font-medium rounded-lg hover:bg-gray-50 transition-colors"
+                onClick={() => { showModalRef.current = false; localStorage.removeItem('oi_showModal'); localStorage.removeItem('oi_selectedOrderId'); setShowModal(false); }}
+              >
+                Fechar
+              </button>
             </div>
           </div>
         </div>
