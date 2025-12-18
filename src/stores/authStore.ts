@@ -1,4 +1,4 @@
-﻿import { create } from 'zustand';
+import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { supabase } from '../supabase/client';
 import { toLoginEmailFromName } from '../lib/utils';
@@ -134,7 +134,8 @@ export const useAuthStore = create<AuthState>()(
 
       checkAuth: async () => {
         console.log('Starting checkAuth...');
-        set({ isLoading: true });
+        const alreadyAuth = get().isAuthenticated;
+        set({ isLoading: alreadyAuth ? false : true });
         const isOffline = typeof navigator !== 'undefined' && navigator.onLine === false;
         const cachedUser = get().user;
 

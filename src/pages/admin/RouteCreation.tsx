@@ -103,6 +103,7 @@ function RouteCreationContent() {
   const navigate = useNavigate();
   // --- STATE ---
   const [orders, setOrders] = useState<Order[]>([]);
+  useEffect(() => { try { console.log('[RouteCreation] state.orders length:', orders.length); } catch {} }, [orders]);
   const [drivers, setDrivers] = useState<DriverWithUser[]>([]);
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [conferentes, setConferentes] = useState<{id:string,name:string}[]>([]);
@@ -121,6 +122,7 @@ function RouteCreationContent() {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [routesList, setRoutesList] = useState<RouteWithDetails[]>([]);
+  useEffect(() => { try { console.log('[RouteCreation] state.routesList length:', routesList.length); } catch {} }, [routesList]);
   
   // Modals
   const [showRouteModal, setShowRouteModal] = useState(false);
@@ -136,6 +138,8 @@ function RouteCreationContent() {
   const [nfLoading, setNfLoading] = useState(false);
   const [waSending, setWaSending] = useState(false);
   const [groupSending, setGroupSending] = useState(false);
+  const isLoadingRef = useRef(false);
+  const isMountedRef = useRef(true);
 
   // Filters
   const [filterCity, setFilterCity] = useState<string>('');
@@ -235,6 +239,7 @@ function RouteCreationContent() {
 
   useEffect(() => {
     loadData(true);
+    return () => { isMountedRef.current = false; };
   }, []);
 
   // Restore persisted selections and scroll position
@@ -262,14 +267,14 @@ function RouteCreationContent() {
     try {
       const rid = localStorage.getItem('rc_selectedRouteId');
       const showRoutePref = localStorage.getItem('rc_showRouteModal');
-      // Do not auto-open create modal on load
-      localStorage.setItem('rc_showCreateModal', '0');
-      // Do NOT auto-open route modal on load; only open when user clicks
-      if (showRoutePref !== '1') {
-        localStorage.setItem('rc_showRouteModal', '0');
-      } else if (rid) {
+      const showCreatePref = localStorage.getItem('rc_showCreateModal');
+      if (showCreatePref === '1') {
+        setShowCreateModal(true);
+      }
+      if (showRoutePref === '1' && rid) {
         selectedRouteIdRef.current = rid;
         showRouteModalRef.current = true;
+        setShowRouteModal(true);
       }
       const cols = localStorage.getItem('rc_columns_conf');
       if (cols) {
@@ -561,20 +566,33 @@ function RouteCreationContent() {
   // --- DATA LOADING ---
   const loadData = async (silent: boolean = true) => {
     try {
+      if (isLoadingRef.current) return;
+      isLoadingRef.current = true;
       if (!silent && !showRouteModal && !showCreateModal) setLoading(true);
+      const safety = setTimeout(() => {
+        if (isMountedRef.current && isLoadingRef.current) {
+          setLoading(false);
+          isLoadingRef.current = false;
+        }
+      }, 8000);
+      const t0 = performance.now();
 
       // Load available orders (pending or returned)
       const { data: ordersData } = await supabase
         .from('orders')
         .select('*')
-        .in('status', ['pending', 'returned'])
+        .in('status', ['pending', 'returned', 'imported'])
         .order('created_at', { ascending: false });
+      const tOrders = performance.now();
+      console.log('[RouteCreation] ordersData:', Array.isArray(ordersData) ? ordersData.length : 0, 'ms:', Math.round(tOrders - t0));
 
       // Load active vehicles
       const { data: vehiclesData } = await supabase
         .from('vehicles')
         .select('*')
         .eq('active', true);
+      const tVehicles = performance.now();
+      console.log('[RouteCreation] vehiclesData:', Array.isArray(vehiclesData) ? vehiclesData.length : 0, 'ms:', Math.round(tVehicles - tOrders));
       
       const { data: confSetting } = await supabase
         .from('app_settings')
@@ -583,6 +601,8 @@ function RouteCreationContent() {
         .single();
       const flagEnabled = (confSetting as any)?.value?.enabled;
       setRequireConference(flagEnabled === false ? false : true);
+      const tConf = performance.now();
+      console.log('[RouteCreation] app_settings flag ms:', Math.round(tConf - tVehicles));
 
       if (ordersData) {
         const normalized = (ordersData as Order[]).map((o: any) => {
@@ -591,9 +611,13 @@ function RouteCreationContent() {
           }
           return o;
         });
+        console.log('[RouteCreation] applying setOrders:', Array.isArray(normalized) ? normalized.length : 0);
         setOrders(normalized as Order[]);
+        setTimeout(() => {
+          try { setOrders(normalized as Order[]); console.log('[RouteCreation] reapply setOrders'); } catch {}
+        }, 0);
       }
-      
+
       // Update item logic (same as original)
       try {
         const toUpdate: Array<{ id: string; items_json: any[] }> = [];
@@ -624,12 +648,15 @@ function RouteCreationContent() {
           });
           if (changed) toUpdate.push({ id: String(order.id), items_json: nextItems });
         }
-        if (toUpdate.length > 0) {
+        // Executa atualização apenas em carregamentos não silenciosos para evitar ciclos em ambientes instáveis
+        if (toUpdate.length > 0 && !silent) {
           for (const row of toUpdate) {
             await supabase.from('orders').update({ items_json: row.items_json }).eq('id', row.id);
           }
         }
       } catch {}
+      const tItems = performance.now();
+      console.log('[RouteCreation] items normalization ms:', Math.round(tItems - tConf));
 
       // Drivers: busca direto sem join para evitar erros de relação; enriquece nomes via users role=driver
       let driverList: any[] = [];
@@ -638,6 +665,8 @@ function RouteCreationContent() {
         .select('id, user_id, active')
         .eq('active', true);
       driverList = (directDrivers || []) as any[];
+      const tDrivers = performance.now();
+      console.log('[RouteCreation] drivers:', Array.isArray(driverList) ? driverList.length : 0, 'ms:', Math.round(tDrivers - tItems));
 
       if (driverList.length > 0) {
         const uids = Array.from(new Set(driverList.map((d:any)=> String(d.user_id)).filter(Boolean)));
@@ -670,13 +699,19 @@ function RouteCreationContent() {
       }
 
       driverList = (driverList || []).filter((d: any) => String(d?.user?.role || '').toLowerCase() === 'driver');
-      setDrivers(driverList as any[]);
+      if (isMountedRef.current) setDrivers(driverList as any[]);
+      const tDriversEnriched = performance.now();
+      console.log('[RouteCreation] drivers enriched ms:', Math.round(tDriversEnriched - tDrivers));
       
-      if (vehiclesData) setVehicles(vehiclesData as Vehicle[]);
+      if (vehiclesData && isMountedRef.current) setVehicles(vehiclesData as Vehicle[]);
+      const tVehiclesSet = performance.now();
+      console.log('[RouteCreation] vehicles set ms:', Math.round(tVehiclesSet - tDriversEnriched));
 
       // Load conferentes
       const { data: conferentesData } = await supabase.from('users').select('id,name,role').eq('role', 'conferente');
-      setConferentes((conferentesData || []).map((u: any) => ({ id: String(u.id), name: String(u.name || u.id) })));
+      if (isMountedRef.current) setConferentes((conferentesData || []).map((u: any) => ({ id: String(u.id), name: String(u.name || u.id) })));
+      const tConferentes = performance.now();
+      console.log('[RouteCreation] conferentes:', Array.isArray(conferentesData) ? conferentesData.length : 0, 'ms:', Math.round(tConferentes - tVehiclesSet));
 
       // Routes
       let routesData: any[] | null = null;
@@ -688,11 +723,14 @@ function RouteCreationContent() {
           .limit(50);
         routesData = res.data || null;
       } catch {}
-      
+      const tRoutesTry = performance.now();
+
       if (!routesData) {
         const fallback = await supabase.from('routes').select('*').order('created_at', { ascending: false }).limit(50);
         routesData = fallback.data || [];
       }
+      const tRoutes = performance.now();
+      console.log('[RouteCreation] routesData:', Array.isArray(routesData) ? routesData.length : 0, 'ms:', Math.round(tRoutes - tConferentes));
       
       if (routesData) {
         const enriched = [...(routesData as any[])];
@@ -715,6 +753,8 @@ function RouteCreationContent() {
                 }
             }
         }
+        const tEnrichRO = performance.now();
+        console.log('[RouteCreation] route_orders bulk:', Array.isArray((routesData||[])) ? routeIds.length : 0, 'ms:', Math.round(tEnrichRO - tRoutes));
         
         // Driver enrichment: use bulk fetch and also preloaded driverList
         const driverIds = Array.from(new Set(enriched.map(r => r.driver_id).filter(Boolean)));
@@ -789,23 +829,29 @@ function RouteCreationContent() {
           }
         }
 
+        console.log('[RouteCreation] applying setRoutesList:', Array.isArray(enriched) ? enriched.length : 0);
         setRoutesList(enriched as RouteWithDetails[]);
+        setTimeout(() => { try { setRoutesList(enriched as RouteWithDetails[]); console.log('[RouteCreation] reapply setRoutesList'); } catch {} }, 0);
         if (selectedRouteIdRef.current) {
           const found = (enriched as RouteWithDetails[]).find(r => String(r.id) === String(selectedRouteIdRef.current));
           if (found) {
-            setSelectedRoute(found);
+            if (isMountedRef.current) setSelectedRoute(found);
             if (showRouteModalRef.current) {
-              setShowRouteModal(true);
+              if (isMountedRef.current) setShowRouteModal(true);
             }
           }
         }
+        const tDone = performance.now();
+        console.log('[RouteCreation] loadData total ms:', Math.round(tDone - t0));
       }
 
     } catch (error) {
       console.error('Error loading data:', error);
       toast.error('Erro ao carregar dados');
     } finally {
-      setLoading(false);
+      if (isMountedRef.current) setLoading(false);
+      isLoadingRef.current = false;
+      try { clearTimeout(safety); } catch {}
     }
   };
 
@@ -913,19 +959,16 @@ function RouteCreationContent() {
 
   // --- RENDER ---
   
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center min-h-screen bg-gray-50">
-        <div className="flex flex-col items-center">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mb-4"></div>
-            <span className="text-gray-500 font-medium">Carregando plataforma de rotas...</span>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="min-h-screen bg-gray-50 pb-20">
+      {loading && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-white/70">
+          <div className="flex flex-col items-center">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mb-4"></div>
+            <span className="text-gray-700 font-medium">Carregando plataforma de rotas...</span>
+          </div>
+        </div>
+      )}
       
       {/* Header */}
       <div className="bg-white border-b border-gray-200 sticky top-0 z-20 shadow-sm">
