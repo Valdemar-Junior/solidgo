@@ -58,7 +58,7 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
   const loadRouteItems = async () => {
     try {
       setLoading(true);
-      
+
       if (isOnline) {
         const { data, error } = await supabase
           .from('assembly_products')
@@ -123,10 +123,10 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
     try {
       if (processingIds.has(item.id)) return;
       const next = new Set(processingIds); next.add(item.id); setProcessingIds(next);
-      
+
       const now = new Date().toISOString();
       const userId = (await supabase.auth.getUser()).data.user?.id || '';
-      
+
       const confirmation = {
         item_id: item.id,
         route_id: routeId,
@@ -143,15 +143,15 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
             completion_date: now,
           })
           .eq('id', item.id);
-          
+
         if (error) throw error;
         toast.success('Serviço marcado como MONTADO!');
-        
+
         // Atualiza estado local
         const updated = assemblyItems.map(it => it.id === item.id ? { ...it, status: 'completed', completion_date: now } : it);
         setAssemblyItems(updated);
         await OfflineStorage.setItem(`assembly_items_${routeId}`, updated);
-        
+
         if (onUpdated) onUpdated();
       } else {
         // Offline
@@ -216,34 +216,34 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
 
         // Clone para nova tentativa (libera para nova rota)
         const newItem = {
-            order_id: item.order_id,
-            product_name: item.product_name,
-            product_sku: item.product_sku,
-            customer_name: item.customer_name,
-            customer_phone: item.customer_phone,
-            installation_address: item.installation_address,
-            status: 'pending', // Volta para pendente sem rota
-            observations: item.observations,
-            assembly_route_id: null // Sem rota definida
+          order_id: item.order_id,
+          product_name: item.product_name,
+          product_sku: item.product_sku,
+          customer_name: item.customer_name,
+          customer_phone: item.customer_phone,
+          installation_address: item.installation_address,
+          status: 'pending', // Volta para pendente sem rota
+          observations: item.observations,
+          assembly_route_id: null // Sem rota definida
         };
-        
+
         await supabase.from('assembly_products').insert(newItem);
 
         toast.success('Marcado como RETORNADO!');
-        
+
         const updated = assemblyItems.map(it => it.id === item.id ? { ...it, status: 'cancelled' } : it);
         setAssemblyItems(updated);
         OfflineStorage.setItem(`assembly_items_${routeId}`, updated);
 
         if (onUpdated) onUpdated();
       } else {
-         await SyncQueue.addItem({ type: 'assembly_return', data: confirmation });
-         
-         const updated = assemblyItems.map(it => it.id === item.id ? { ...it, status: 'cancelled' } : it);
-         setAssemblyItems(updated);
-         OfflineStorage.setItem(`assembly_items_${routeId}`, updated);
-         
-         toast.success('Marcado como RETORNADO (offline)!');
+        await SyncQueue.addItem({ type: 'assembly_return', data: confirmation });
+
+        const updated = assemblyItems.map(it => it.id === item.id ? { ...it, status: 'cancelled' } : it);
+        setAssemblyItems(updated);
+        OfflineStorage.setItem(`assembly_items_${routeId}`, updated);
+
+        toast.success('Marcado como RETORNADO (offline)!');
       }
 
       setReturnReasonByOrder(prev => { const copy = { ...prev }; delete copy[item.id]; return copy; });
@@ -253,27 +253,98 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
       console.error('Error marking return:', error);
       toast.error('Erro ao registrar retorno');
     } finally {
-       const next2 = new Set(processingIds); next2.delete(item.id); setProcessingIds(next2);
+      const next2 = new Set(processingIds); next2.delete(item.id); setProcessingIds(next2);
     }
   };
-  
-  const openMaps = (item: any) => {
-      const addr = item.installation_address || item.order?.address_json;
-      if (!addr) {
-          toast.error('Endereço não disponível');
-          return;
-      }
-      
-      const fullAddr = buildFullAddress(addr);
-      toast.info(`Endereço: ${fullAddr}`);
-      
-      if (addr.lat && addr.lng) {
-          openWazeWithLL(addr.lat, addr.lng);
+
+  const undoAction = async (item: any) => {
+    try {
+      if (processingIds.has(item.id)) return;
+      const next = new Set(processingIds); next.add(item.id); setProcessingIds(next);
+
+      const userId = (await supabase.auth.getUser()).data.user?.id || '';
+      const now = new Date().toISOString();
+
+      const confirmation = {
+        item_id: item.id,
+        route_id: routeId,
+        action: 'undo',
+        local_timestamp: now,
+        user_id: userId,
+      };
+
+      if (isOnline) {
+        // Resetar item para pendente
+        const { error } = await supabase
+          .from('assembly_products')
+          .update({
+            status: 'pending',
+            completion_date: null,
+            observations: item.observations ? item.observations.replace(/\(Retorno: .*\)\s*/, '').replace(/^Retorno: .*/, '').trim() : item.observations
+          })
+          .eq('id', item.id);
+
+        if (error) throw error;
+
+        toast.success('Ação desfeita!');
+
+        const updated = assemblyItems.map(it => it.id === item.id ? {
+          ...it,
+          status: 'pending',
+          completion_date: null,
+          observations: it.observations ? it.observations.replace(/\(Retorno: .*\)\s*/, '').replace(/^Retorno: .*/, '').trim() : it.observations
+        } : it);
+
+        setAssemblyItems(updated);
+        await OfflineStorage.setItem(`assembly_items_${routeId}`, updated);
+
+        if (onUpdated) onUpdated();
       } else {
-          // Fallback simples para busca textual se não houver coordenadas
-           const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(fullAddr)}`;
-           window.open(mapsUrl, '_blank');
+        // Offline Undo
+        await SyncQueue.addItem({ type: 'assembly_undo', data: confirmation });
+
+        const updated = assemblyItems.map(it => it.id === item.id ? {
+          ...it,
+          status: 'pending',
+          completion_date: null,
+          observations: it.observations ? it.observations.replace(/\(Retorno: .*\)\s*/, '').replace(/^Retorno: .*/, '').trim() : it.observations
+        } : it);
+
+        setAssemblyItems(updated);
+        await OfflineStorage.setItem(`assembly_items_${routeId}`, updated);
+
+        toast.success('Ação desfeita (offline)!');
       }
+
+      // Limpar formulários de retorno se existirem
+      setReturnReasonByOrder(prev => { const copy = { ...prev }; delete copy[item.id]; return copy; });
+      setReturnObservationsByOrder(prev => { const copy = { ...prev }; delete copy[item.id]; return copy; });
+
+    } catch (error) {
+      console.error('Error undoing action:', error);
+      toast.error('Erro ao desfazer ação');
+    } finally {
+      const next2 = new Set(processingIds); next2.delete(item.id); setProcessingIds(next2);
+    }
+  };
+
+  const openMaps = (item: any) => {
+    const addr = item.installation_address || item.order?.address_json;
+    if (!addr) {
+      toast.error('Endereço não disponível');
+      return;
+    }
+
+    const fullAddr = buildFullAddress(addr);
+    toast.info(`Endereço: ${fullAddr}`);
+
+    if (addr.lat && addr.lng) {
+      openWazeWithLL(addr.lat, addr.lng);
+    } else {
+      // Fallback simples para busca textual se não houver coordenadas
+      const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(fullAddr)}`;
+      window.open(mapsUrl, '_blank');
+    }
   };
 
   const getStatusColor = (status: string) => {
@@ -285,9 +356,9 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
   };
 
   const getStatusText = (status: string) => {
-     if (status === 'completed') return 'Montado';
-     if (status === 'cancelled') return 'Retornado';
-     return 'Pendente';
+    if (status === 'completed') return 'Montado';
+    if (status === 'cancelled') return 'Retornado';
+    return 'Pendente';
   };
 
   if (loading) {
@@ -301,12 +372,10 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
 
   return (
     <div className="space-y-4">
-      <div className={`p-3 rounded-lg flex items-center ${
-        isOnline ? 'bg-green-50 text-green-800' : 'bg-yellow-50 text-yellow-800'
-      }`}>
-        <div className={`w-2 h-2 rounded-full mr-2 ${
-          isOnline ? 'bg-green-500' : 'bg-yellow-500'
-        }`}></div>
+      <div className={`p-3 rounded-lg flex items-center ${isOnline ? 'bg-green-50 text-green-800' : 'bg-yellow-50 text-yellow-800'
+        }`}>
+        <div className={`w-2 h-2 rounded-full mr-2 ${isOnline ? 'bg-green-500' : 'bg-yellow-500'
+          }`}></div>
         <span className="text-sm font-medium">
           {isOnline ? 'Online' : 'Modo Offline'}
         </span>
@@ -337,11 +406,11 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
                   </div>
                   <div>Produto: <strong>{item.product_name}</strong></div>
                   <div>SKU: {item.product_sku}</div>
-                  
+
                   {item.observations && (
-                      <div className="text-yellow-600 text-xs mt-1">
-                          Note: {item.observations}
-                      </div>
+                    <div className="text-yellow-600 text-xs mt-1">
+                      Note: {item.observations}
+                    </div>
                   )}
                 </div>
 
@@ -349,34 +418,34 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
                 {item.status === 'pending' && (
                   <div className="mt-4 p-3 bg-gray-50 rounded-lg">
                     <div className="grid grid-cols-1 gap-3">
-                       <label className="block text-xs font-medium text-gray-700">
-                          Se houver problema, informe o motivo do retorno:
-                       </label>
-                       <select
-                          value={selectedReason}
-                          onChange={(e) => setReturnReasonByOrder(prev => ({ ...prev, [item.id]: e.target.value }))}
+                      <label className="block text-xs font-medium text-gray-700">
+                        Se houver problema, informe o motivo do retorno:
+                      </label>
+                      <select
+                        value={selectedReason}
+                        onChange={(e) => setReturnReasonByOrder(prev => ({ ...prev, [item.id]: e.target.value }))}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
+                      >
+                        <option value="">Selecione...</option>
+                        {returnReasons.map((r: any) => (
+                          <option key={r.id || r.reason} value={r.reason || r.id}>{r.reason || r.reason_text}</option>
+                        ))}
+                      </select>
+                      {selectedReason === 'other' && (
+                        <input
+                          type="text"
+                          placeholder="Descreva o motivo..."
+                          value={selectedObs}
+                          onChange={(e) => setReturnObservationsByOrder(prev => ({ ...prev, [item.id]: e.target.value }))}
                           className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
-                        >
-                          <option value="">Selecione...</option>
-                          {returnReasons.map((r: any) => (
-                             <option key={r.id || r.reason} value={r.reason || r.id}>{r.reason || r.reason_text}</option>
-                          ))}
-                        </select>
-                        {selectedReason === 'other' && (
-                             <input 
-                                type="text" 
-                                placeholder="Descreva o motivo..."
-                                value={selectedObs}
-                                onChange={(e) => setReturnObservationsByOrder(prev => ({ ...prev, [item.id]: e.target.value }))}
-                                className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
-                             />
-                        )}
+                        />
+                      )}
                     </div>
                   </div>
                 )}
               </div>
 
-              <div className="ml-4 flex flex-col space-y-2">
+              <div className="ml-4 flex flex-col space-y-2 min-w-[120px]">
                 {item.status === 'pending' && (
                   <>
                     <button
@@ -387,7 +456,7 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
                       <CheckCircle className="h-5 w-5 mr-1" />
                       MONTADO
                     </button>
-                    
+
                     <button
                       onClick={() => markAsReturned(item)}
                       disabled={!selectedReason || processingIds.has(item.id)}
@@ -398,16 +467,27 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
                     </button>
                   </>
                 )}
+
+                {(item.status === 'completed' || item.status === 'cancelled') && (
+                  <button
+                    onClick={() => undoAction(item)}
+                    disabled={processingIds.has(item.id)}
+                    className="flex items-center justify-center px-3 py-2 bg-gray-100 text-gray-600 rounded-md hover:bg-gray-200 disabled:opacity-50 transition-colors text-xs font-medium w-full border border-gray-200 shadow-sm"
+                    title="Desfazer ação"
+                  >
+                    Desfazer
+                  </button>
+                )}
               </div>
             </div>
           </div>
         );
       })}
-      
+
       {assemblyItems.length === 0 && (
-          <div className="text-center py-8 text-gray-500">
-              Nenhum item nesta rota.
-          </div>
+        <div className="text-center py-8 text-gray-500">
+          Nenhum item nesta rota.
+        </div>
       )}
     </div>
   );

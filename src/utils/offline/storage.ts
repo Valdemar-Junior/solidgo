@@ -16,7 +16,7 @@ const syncQueueStorage = localforage.createInstance({
 
 export interface SyncQueueItem {
   id: string;
-  type: 'delivery_confirmation' | 'order_update' | 'assembly_update' | 'return_revert';
+  type: 'delivery_confirmation' | 'order_update' | 'assembly_update' | 'return_revert' | 'assembly_confirmation' | 'assembly_return' | 'assembly_undo';
   data: any;
   timestamp: string;
   attempts: number;
@@ -102,14 +102,14 @@ export class SyncQueue {
     try {
       const keys = await syncQueueStorage.keys();
       const items: SyncQueueItem[] = [];
-      
+
       for (const key of keys) {
         const item = await syncQueueStorage.getItem(key) as SyncQueueItem;
         if (item && (item.status === 'pending' || item.status === 'failed')) {
           items.push(item);
         }
       }
-      
+
       return items.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
     } catch (error) {
       console.error('Error getting pending sync items:', error);
@@ -139,7 +139,7 @@ export class SyncQueue {
   static async removeCompletedItems(): Promise<void> {
     try {
       const keys = await syncQueueStorage.keys();
-      
+
       for (const key of keys) {
         const item = await syncQueueStorage.getItem(key) as SyncQueueItem;
         if (item && item.status === 'completed') {

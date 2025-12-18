@@ -182,7 +182,7 @@ export default function AssemblyRouteDetails() {
                         Resumo
                     </h2>
 
-                    <div className="grid grid-cols-2 gap-4">
+                    <div className="grid grid-cols-3 gap-4">
                         <div className="text-center p-2 bg-indigo-50 rounded-lg">
                             <div className="text-xl font-bold text-indigo-600">{items.length}</div>
                             <div className="text-xs text-indigo-800">Total Serviços</div>
@@ -192,6 +192,12 @@ export default function AssemblyRouteDetails() {
                                 {items.filter(i => i.status === 'completed').length}
                             </div>
                             <div className="text-xs text-green-800">Concluídos</div>
+                        </div>
+                        <div className="text-center p-2 bg-red-50 rounded-lg">
+                            <div className="text-xl font-bold text-red-600">
+                                {items.filter(i => i.status === 'cancelled').length}
+                            </div>
+                            <div className="text-xs text-red-800">Retornados</div>
                         </div>
                     </div>
 
