@@ -1,611 +1,334 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Package, MapPin, User as UserIcon, Calendar, Camera, CheckCircle, Clock, AlertCircle } from 'lucide-react';
-import { toast } from 'sonner';
 import { supabase } from '../../supabase/client';
-import { AssemblyProductWithDetails } from '../../types/database';
+import { toast } from 'sonner';
+import { Package, MapPin, Clock, Phone, ArrowLeft, Truck } from 'lucide-react';
 import { useAuthStore } from '../../stores/authStore';
 
+type AssemblyRoute = {
+  id: string;
+  name: string;
+  deadline?: string | null;
+  observations?: string | null;
+  status: string;
+  assembler_id?: string | null;
+  vehicle_id?: string | null;
+};
+
+type AssemblyProduct = {
+  id: string;
+  assembly_route_id: string | null;
+  order_id: string | null;
+  product_name: string;
+  product_sku?: string | null;
+  customer_name: string;
+  customer_phone?: string | null;
+  installation_address?: any;
+  installer_id?: string | null;
+  status: string;
+  assembly_date?: string | null;
+  completion_date?: string | null;
+  observations?: string | null;
+  order?: any;
+  route?: AssemblyRoute;
+};
+
+type OrderGroup = {
+  orderId: string;
+  orderIdErp: string;
+  customer: string;
+  phone: string;
+  address: string;
+  items: AssemblyProduct[];
+  status: string;
+};
+
 export default function AssemblyDashboard() {
-  const [assemblyProducts, setAssemblyProducts] = useState<AssemblyProductWithDetails[]>([]);
-  const [myProducts, setMyProducts] = useState<AssemblyProductWithDetails[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [selectedProduct, setSelectedProduct] = useState<AssemblyProductWithDetails | null>(null);
-  const [showModal, setShowModal] = useState(false);
-  const [technicalNotes, setTechnicalNotes] = useState('');
-  const [photos, setPhotos] = useState<File[]>([]);
-  const [photoPreviews, setPhotoPreviews] = useState<string[]>([]);
   const navigate = useNavigate();
   const { user } = useAuthStore();
+  const [products, setProducts] = useState<AssemblyProduct[]>([]);
+  const [routes, setRoutes] = useState<AssemblyRoute[]>([]);
+  const [selectedRouteId, setSelectedRouteId] = useState<string>('');
+  const [loading, setLoading] = useState(false);
 
-  const fetchAssemblyProducts = async () => {
+  useEffect(() => {
+    loadData();
+  }, []);
+
+  const loadData = async () => {
     try {
       setLoading(true);
-      
-      // Buscar produtos de montagem
-      const { data: productsData } = await supabase
+      const { data: prodData, error } = await supabase
         .from('assembly_products')
         .select(`
           *,
           order:order_id (*),
-          installer:installer_id (*),
           route:assembly_route_id (*)
         `)
         .order('created_at', { ascending: false });
 
-      setAssemblyProducts(productsData || []);
-      
-      // Filtrar produtos atribuídos ao usuário atual
-      const { data: { user } } = await supabase.auth.getUser();
-      if (user) {
-        const myProductsData = (productsData || []).filter(product => product.installer_id === user.id);
-        setMyProducts(myProductsData);
-      }
-      
-    } catch (error) {
-      console.error('Erro ao carregar produtos:', error);
-      toast.error('Erro ao carregar produtos para montagem');
+      if (error) throw error;
+
+      // filtrar produtos do montador logado
+      const userId = user?.id;
+      const mine = (prodData || []).filter((p: any) => !userId || p.installer_id === userId);
+      setProducts(mine as AssemblyProduct[]);
+
+      // rotas distintas
+      const routeMap = new Map<string, AssemblyRoute>();
+      mine.forEach((p: any) => {
+        if (p.route) routeMap.set(p.route.id, p.route as AssemblyRoute);
+      });
+      const routeList = Array.from(routeMap.values());
+      setRoutes(routeList);
+      if (!selectedRouteId && routeList.length > 0) setSelectedRouteId(routeList[0].id);
+    } catch (e) {
+      console.error(e);
+      toast.error('Erro ao carregar montagem');
     } finally {
       setLoading(false);
     }
   };
 
-  useEffect(() => {
-    fetchAssemblyProducts();
-  }, []);
+  const groups = useMemo(() => {
+    if (!selectedRouteId) return [];
+    const grouped = new Map<string, OrderGroup>();
+    products
+      .filter((p) => p.assembly_route_id === selectedRouteId)
+      .forEach((p) => {
+        const o = p.order || {};
+        const oid = String(o.id || p.order_id || p.id);
+        if (!grouped.has(oid)) {
+          const addr = typeof o.address_json === 'string' ? JSON.parse(o.address_json) : o.address_json || {};
+          const num = addr.number ? `, ${addr.number}` : '';
+          const address = `${addr.street || ''}${num} - ${addr.neighborhood || ''}${addr.city ? ', ' + addr.city : ''}`.trim();
+          grouped.set(oid, {
+            orderId: oid,
+            orderIdErp: String(o.order_id_erp || ''),
+            customer: String(o.customer_name || ''),
+            phone: String(o.phone || ''),
+            address,
+            items: [],
+            status: 'pending',
+          });
+        }
+        grouped.get(oid)!.items.push(p);
+      });
 
-  const logout = async () => {
-    try {
-      await supabase.auth.signOut({ scope: 'local' });
-    } catch {}
-    navigate('/login');
-  };
-
-  const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files || []);
-    if (files.length + photos.length > 5) {
-      toast.error('Máximo de 5 fotos permitidas');
-      return;
-    }
-    
-    setPhotos([...photos, ...files]);
-    
-    // Criar previews
-    files.forEach(file => {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        setPhotoPreviews(prev => [...prev, e.target?.result as string]);
-      };
-      reader.readAsDataURL(file);
+    // derivar status por pedido
+    grouped.forEach((g) => {
+      const statuses = g.items.map((i) => i.status);
+      if (statuses.every((s) => s === 'cancelled')) g.status = 'cancelled';
+      else if (statuses.every((s) => s === 'completed')) g.status = 'completed';
+      else if (statuses.some((s) => s === 'in_progress')) g.status = 'pending';
+      else g.status = 'pending';
     });
-  };
 
-  const removePhoto = (index: number) => {
-    setPhotos(photos.filter((_, i) => i !== index));
-    setPhotoPreviews(photoPreviews.filter((_, i) => i !== index));
-  };
+    return Array.from(grouped.values());
+  }, [products, selectedRouteId]);
 
-  const uploadPhotos = async (): Promise<string[]> => {
-    const uploadedUrls: string[] = [];
-    
-    for (const photo of photos) {
-      const fileName = `${Date.now()}-${photo.name}`;
-      const { data, error } = await supabase.storage
-        .from('assembly-photos')
-        .upload(fileName, photo);
-      
-      if (error) {
-        console.error('Erro ao fazer upload da foto:', error);
-        continue;
-      }
-      
-      const { data: { publicUrl } } = supabase.storage
-        .from('assembly-photos')
-        .getPublicUrl(fileName);
-      
-      uploadedUrls.push(publicUrl);
-    }
-    
-    return uploadedUrls;
-  };
+  const summary = useMemo(() => {
+    const total = groups.reduce((acc, g) => acc + g.items.length, 0);
+    const completed = groups.filter((g) => g.status === 'completed').length;
+    const pending = groups.filter((g) => g.status === 'pending' || g.status === 'in_progress').length;
+    const cancelled = groups.filter((g) => g.status === 'cancelled').length;
+    return { total, completed, pending, cancelled };
+  }, [groups]);
 
-  const markAsCompleted = async () => {
-    if (!selectedProduct) return;
-    
+  const [processingOrders, setProcessingOrders] = useState<Set<string>>(new Set());
+
+  const updateOrderStatus = async (orderId: string, action: 'complete' | 'return') => {
     try {
-      let photoUrls: string[] = [];
-      
-      if (photos.length > 0) {
-        photoUrls = await uploadPhotos();
+      setProcessingOrders(prev => new Set(prev).add(orderId));
+      const now = new Date().toISOString();
+      const items = products.filter(
+        (p) => p.order_id === orderId && p.assembly_route_id === selectedRouteId
+      );
+      if (items.length === 0) throw new Error('Pedido não encontrado na rota');
+
+      if (action === 'complete') {
+        const { error } = await supabase
+          .from('assembly_products')
+          .update({ status: 'completed', completion_date: now })
+          .eq('order_id', orderId)
+          .eq('assembly_route_id', selectedRouteId);
+        if (error) throw error;
+        toast.success('Pedido montado');
+      } else {
+        // Marca histórico na rota como "retornado"
+        const { error } = await supabase
+          .from('assembly_products')
+          .update({
+            status: 'cancelled',
+            assembly_date: null,
+            completion_date: null,
+          })
+          .eq('order_id', orderId)
+          .eq('assembly_route_id', selectedRouteId);
+        if (error) throw error;
+
+        // Garantir registro pendente sem rota (reutiliza se já houver, senão cria)
+        const pendingClone = items.find((it) => !it.assembly_route_id && it.status === 'pending');
+        if (!pendingClone) {
+          const clones = items.map((it) => ({
+            assembly_route_id: null,
+            order_id: it.order_id,
+            product_name: it.product_name,
+            product_sku: it.product_sku,
+            customer_name: it.customer_name,
+            customer_phone: it.customer_phone,
+            installation_address: it.installation_address,
+            installer_id: null,
+            status: 'pending',
+            observations: it.observations,
+          }));
+          if (clones.length) {
+            const { error: insErr } = await supabase.from('assembly_products').insert(clones);
+            if (insErr) throw insErr;
+          }
+        } else {
+          await supabase
+            .from('assembly_products')
+            .update({ status: 'pending', assembly_route_id: null })
+            .eq('id', pendingClone.id);
+        }
+        toast.success('Pedido retornado e liberado para nova rota');
       }
-
-      const { error } = await supabase
-        .from('assembly_products')
-        .update({
-          status: 'completed',
-          completion_date: new Date().toISOString(),
-          technical_notes: technicalNotes,
-          photos: photoUrls
-        })
-        .eq('id', selectedProduct.id);
-
-      if (error) throw error;
-
-      // Registrar log
-      try {
-        const userId = (await supabase.auth.getUser()).data.user?.id || '';
-        await supabase.from('audit_logs').insert({
-          entity_type: 'assembly_product',
-          entity_id: selectedProduct.id,
-          action: 'completed',
-          details: { technical_notes: technicalNotes, photos: photoUrls },
-          user_id: userId,
-          timestamp: new Date().toISOString(),
-        });
-      } catch {}
-      
-      toast.success('Montagem concluída com sucesso!');
-      setShowModal(false);
-      setSelectedProduct(null);
-      setTechnicalNotes('');
-      setPhotos([]);
-      setPhotoPreviews([]);
-      fetchAssemblyProducts();
-      
-    } catch (error) {
-      console.error('Erro ao concluir montagem:', error);
-      toast.error('Erro ao concluir montagem');
+      await loadData();
+    } catch (e) {
+      console.error(e);
+      toast.error('Erro ao atualizar pedido');
+    } finally {
+      setProcessingOrders(prev => {
+        const n = new Set(prev);
+        n.delete(orderId);
+        return n;
+      });
     }
   };
 
-  const startAssembly = async (productId: string) => {
-    try {
-      const { error } = await supabase
-        .from('assembly_products')
-        .update({
-          status: 'in_progress',
-          assembly_date: new Date().toISOString()
-        })
-        .eq('id', productId);
+  const selectedRoute = routes.find((r) => r.id === selectedRouteId) || null;
 
-      if (error) throw error;
-      
-      // Registrar log
-      try {
-        const userId = (await supabase.auth.getUser()).data.user?.id || '';
-        await supabase.from('audit_logs').insert({
-          entity_type: 'assembly_product',
-          entity_id: productId,
-          action: 'started',
-          details: {},
-          user_id: userId,
-          timestamp: new Date().toISOString(),
-        });
-      } catch {}
-      
-      toast.success('Montagem iniciada!');
-      fetchAssemblyProducts();
-      
-    } catch (error) {
-      console.error('Erro ao iniciar montagem:', error);
-      toast.error('Erro ao iniciar montagem');
-    }
-  };
-
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'pending': return 'bg-yellow-100 text-yellow-800';
-      case 'assigned': return 'bg-blue-100 text-blue-800';
-      case 'in_progress': return 'bg-orange-100 text-orange-800';
-      case 'completed': return 'bg-green-100 text-green-800';
-      case 'cancelled': return 'bg-red-100 text-red-800';
-      default: return 'bg-gray-100 text-gray-800';
-    }
-  };
-
-  const getStatusLabel = (status: string) => {
-    switch (status) {
-      case 'pending': return 'Pendente';
-      case 'assigned': return 'Atribuído';
-      case 'in_progress': return 'Em Andamento';
-      case 'completed': return 'Concluído';
-      case 'cancelled': return 'Cancelado';
-      default: return status;
-    }
-  };
-
-  const getOrderCompleteInfo = (product: AssemblyProductWithDetails) => {
-    const order = product.order;
-    const address = typeof order?.address_json === 'string' ? JSON.parse(order.address_json) : order?.address_json;
-    const items = typeof order?.items_json === 'string' ? JSON.parse(order.items_json) : order?.items_json;
-    
-    return {
-      orderId: order?.order_id_erp || '—',
-      numeroLancamento: order?.order_id_erp || '—',
-      cliente: order?.customer_name || '—',
-      telefone: order?.phone || '—',
-      enderecoCompleto: address ? `${address.street}${address.number ? ', ' + address.number : ''} - ${address.neighborhood || ''}` : '—',
-      cidade: address?.city || '—',
-      bairro: address?.neighborhood || '—',
-      dataVenda: order?.sale_date ? new Date(order.sale_date).toLocaleDateString('pt-BR') : '—',
-      dataEntrega: order?.delivery_date ? new Date(order.delivery_date).toLocaleDateString('pt-BR') : '—',
-      motoristaEntrega: order?.driver_name || '—',
-      observacoes: (order as any)?.observacoes_publicas || (order as any)?.raw_json?.observacoes || '—',
-      observacoesInternas: order?.observacoes_internas || '—'
-    };
-  };
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-      </div>
-    );
+  if (!user) {
+    return null;
   }
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="bg-white rounded-lg shadow p-6">
-        <div className="flex items-center justify-between">
+    <div className="min-h-screen bg-gray-50">
+      <header className="bg-white shadow-sm">
+        <div className="max-w-5xl mx-auto px-4 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
-             <h1 className="text-2xl font-bold text-gray-900 flex items-center">
-               <Package className="h-6 w-6 mr-2" />
-               Dashboard de Montagem
-             </h1>
+            <button onClick={() => navigate(-1)} className="p-2 hover:bg-gray-100 rounded-full text-gray-600">
+              <ArrowLeft className="h-5 w-5" />
+            </button>
+            <div>
+              <p className="text-xs text-gray-500">Montador</p>
+              <h1 className="text-lg font-bold text-gray-900 flex items-center gap-2">
+                <Package className="h-5 w-5 text-indigo-600" />
+                {selectedRoute ? selectedRoute.name : 'Suas rotas'}
+              </h1>
+              <p className="text-xs text-gray-500">{user.name || user.email}</p>
+            </div>
           </div>
-          <div className="flex items-center space-x-2">
-            <span className="bg-indigo-100 text-indigo-800 px-3 py-1 rounded-full text-sm font-medium">Montador</span>
-            <button onClick={logout} className="px-3 py-2 bg-gray-100 text-gray-800 rounded border hover:bg-gray-200">Sair</button>
+          <div className="flex items-center gap-2">
+            {selectedRoute && (
+              <span className="text-xs px-2 py-1 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-100 flex items-center gap-1">
+                <Clock className="h-3 w-3" /> {selectedRoute.deadline ? new Date(selectedRoute.deadline).toLocaleDateString('pt-BR') : 'Sem prazo'}
+              </span>
+            )}
+            <button onClick={async()=>{ try{ await supabase.auth.signOut({scope:'local'}); }catch{} navigate('/login'); }} className="text-sm px-3 py-2 border border-gray-300 rounded-lg hover:bg-gray-50">Sair</button>
           </div>
         </div>
-        <p className="text-gray-600 mt-1">Bem-vindo, {user?.name || user?.email}</p>
-      </div>
+      </header>
 
-      {/* Estatísticas */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <div className="bg-white rounded-lg shadow p-4">
-          <div className="flex items-center">
-            <div className="flex-shrink-0">
-              <Package className="h-8 w-8 text-blue-600" />
-            </div>
-            <div className="ml-4">
-              <p className="text-sm font-medium text-gray-500">Total Montagens</p>
-              <p className="text-2xl font-semibold text-gray-900">{myProducts.length}</p>
-            </div>
-          </div>
-        </div>
-        
-        <div className="bg-white rounded-lg shadow p-4">
-          <div className="flex items-center">
-            <div className="flex-shrink-0">
-              <Clock className="h-8 w-8 text-yellow-600" />
-            </div>
-            <div className="ml-4">
-              <p className="text-sm font-medium text-gray-500">Pendentes</p>
-              <p className="text-2xl font-semibold text-gray-900">
-                {myProducts.filter(p => p.status === 'pending').length}
-              </p>
-            </div>
-          </div>
-        </div>
-        
-        <div className="bg-white rounded-lg shadow p-4">
-          <div className="flex items-center">
-            <div className="flex-shrink-0">
-              <UserIcon className="h-8 w-8 text-blue-600" />
-            </div>
-            <div className="ml-4">
-              <p className="text-sm font-medium text-gray-500">Em Andamento</p>
-              <p className="text-2xl font-semibold text-gray-900">
-                {myProducts.filter(p => p.status === 'in_progress').length}
-              </p>
-            </div>
-          </div>
-        </div>
-        
-        <div className="bg-white rounded-lg shadow p-4">
-          <div className="flex items-center">
-            <div className="flex-shrink-0">
-              <CheckCircle className="h-8 w-8 text-green-600" />
-            </div>
-            <div className="ml-4">
-              <p className="text-sm font-medium text-gray-500">Concluídas</p>
-              <p className="text-2xl font-semibold text-gray-900">
-                {myProducts.filter(p => p.status === 'completed').length}
-              </p>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Tela do montador não exibe pendentes nem opção de criar rota */}
-
-      {/* Lista de Montagens */}
-      <div className="bg-white rounded-lg shadow">
-        <div className="px-6 py-4 border-b border-gray-200">
-          <h2 className="text-lg font-semibold text-gray-900">Suas Montagens</h2>
-        </div>
-        
-        {myProducts.length === 0 ? (
-          <div className="px-6 py-8 text-center text-gray-500">
-            <Package className="h-12 w-12 mx-auto mb-4 text-gray-300" />
-            <p>Nenhuma montagem atribuída a você</p>
-            <p className="text-sm mt-2">Aguarde novas atribuições do administrador</p>
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Produto</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Nº Pedido</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Nº Lançamento</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Cliente</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Endereço</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Cidade</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Bairro</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Data Venda</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Data Entrega</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Motorista</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Observações</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Obs. Internas</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Ações</th>
-                </tr>
-              </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
-                {myProducts.map((product) => {
-                  const info = getOrderCompleteInfo(product);
-                  return (
-                    <tr key={product.id} className="hover:bg-gray-50">
-                      <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
-                        {product.product_name}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        {info.orderId}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        {info.numeroLancamento}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        {info.cliente}
-                      </td>
-                      <td className="px-6 py-4 text-sm text-gray-500 max-w-xs">
-                        <div className="max-h-12 overflow-y-auto" title={info.enderecoCompleto}>
-                          {info.enderecoCompleto}
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        {info.cidade}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        {info.bairro}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        {info.dataVenda}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        {info.dataEntrega}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        {info.motoristaEntrega}
-                      </td>
-                      <td className="px-6 py-4 text-sm text-gray-500 max-w-xs">
-                        <div className="max-h-12 overflow-y-auto" title={info.observacoes}>
-                          {info.observacoes}
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 text-sm text-gray-500 max-w-xs">
-                        <div className="max-h-12 overflow-y-auto" title={info.observacoesInternas}>
-                          {info.observacoesInternas}
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getStatusColor(product.status)}`}>
-                          {getStatusLabel(product.status)}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                        {product.status === 'assigned' && (
-                          <button
-                            onClick={() => startAssembly(product.id)}
-                            className="text-blue-600 hover:text-blue-900 mr-2"
-                          >
-                            Iniciar
-                          </button>
-                        )}
-                        {product.status === 'in_progress' && (
-                          <button
-                            onClick={() => {
-                              setSelectedProduct(product);
-                              setShowModal(true);
-                            }}
-                            className="text-green-600 hover:text-green-900"
-                          >
-                            Concluir
-                          </button>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+      <main className="max-w-5xl mx-auto px-4 py-4 space-y-4">
+        {routes.length > 1 && (
+          <div className="bg-white rounded-lg border shadow-sm p-3 flex gap-2 overflow-x-auto">
+            {routes.map((r) => (
+              <button
+                key={r.id}
+                onClick={() => setSelectedRouteId(r.id)}
+                className={`px-3 py-2 rounded-lg text-sm border ${selectedRouteId === r.id ? 'bg-indigo-50 text-indigo-700 border-indigo-200' : 'bg-gray-50 text-gray-700 border-gray-200'}`}
+              >
+                {r.name}
+              </button>
+            ))}
           </div>
         )}
-      </div>
 
-      {/* Modal de Conclusão */}
-      {showModal && selectedProduct && (
-        <div className="fixed inset-0 bg-gray-500 bg-opacity-75 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-lg max-w-2xl w-full max-h-[90vh] overflow-y-auto">
-            <div className="px-6 py-4 border-b border-gray-200">
-              <div className="flex items-center justify-between">
-                <h3 className="text-lg font-semibold text-gray-900">Concluir Montagem</h3>
-                <button
-                  onClick={() => {
-                    setShowModal(false);
-                    setSelectedProduct(null);
-                    setTechnicalNotes('');
-                    setPhotos([]);
-                    setPhotoPreviews([]);
-                  }}
-                  className="text-gray-400 hover:text-gray-500"
-                >
-                  <span className="sr-only">Fechar</span>
-                  <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
-              </div>
-            </div>
-            
-            <div className="px-6 py-4 space-y-4">
-              {(() => {
-                const info = getOrderCompleteInfo(selectedProduct);
-                return (
-                  <>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-                      <div>
-                        <h4 className="font-medium text-gray-900 mb-1">Produto</h4>
-                        <p className="text-gray-600">{selectedProduct.product_name}</p>
-                      </div>
-                      <div>
-                        <h4 className="font-medium text-gray-900 mb-1">Nº Pedido</h4>
-                        <p className="text-gray-600">{info.orderId}</p>
-                      </div>
-                      <div>
-                        <h4 className="font-medium text-gray-900 mb-1">Nº Lançamento</h4>
-                        <p className="text-gray-600">{info.numeroLancamento}</p>
-                      </div>
-                      <div>
-                        <h4 className="font-medium text-gray-900 mb-1">Cliente</h4>
-                        <p className="text-gray-600">{info.cliente}</p>
-                      </div>
-                      <div>
-                        <h4 className="font-medium text-gray-900 mb-1">Telefone</h4>
-                        <p className="text-gray-600">{info.telefone}</p>
-                      </div>
-                      <div>
-                        <h4 className="font-medium text-gray-900 mb-1">Data Venda</h4>
-                        <p className="text-gray-600">{info.dataVenda}</p>
-                      </div>
-                      <div>
-                        <h4 className="font-medium text-gray-900 mb-1">Data Entrega</h4>
-                        <p className="text-gray-600">{info.dataEntrega}</p>
-                      </div>
-                      <div>
-                        <h4 className="font-medium text-gray-900 mb-1">Motorista Entrega</h4>
-                        <p className="text-gray-600">{info.motoristaEntrega}</p>
-                      </div>
-                    </div>
-                    
-                    <div>
-                      <h4 className="font-medium text-gray-900 mb-1">Endereço Completo</h4>
-                      <p className="text-gray-600">{info.enderecoCompleto}</p>
-                    </div>
-                    
-                    {info.observacoes !== '—' && (
-                      <div>
-                        <h4 className="font-medium text-gray-900 mb-1">Observações</h4>
-                        <p className="text-gray-600 bg-yellow-50 p-2 rounded border border-yellow-200">{info.observacoes}</p>
-                      </div>
-                    )}
-                    
-                    {info.observacoesInternas !== '—' && (
-                      <div>
-                        <h4 className="font-medium text-gray-900 mb-1">Observações Internas</h4>
-                        <p className="text-gray-600 bg-blue-50 p-2 rounded border border-blue-200">{info.observacoesInternas}</p>
-                      </div>
-                    )}
-                  </>
-                );
-              })()}
-              
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Observações Técnicas
-                </label>
-                <textarea
-                  value={technicalNotes}
-                  onChange={(e) => setTechnicalNotes(e.target.value)}
-                  rows={4}
-                  className="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  placeholder="Descreva detalhes da montagem, problemas encontrados, etc..."
-                />
-              </div>
-              
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Fotos da Montagem (máximo 5)
-                </label>
-                <div className="space-y-4">
-                  {photoPreviews.length > 0 && (
-                    <div className="grid grid-cols-3 gap-4">
-                      {photoPreviews.map((preview, index) => (
-                        <div key={index} className="relative">
-                          <img
-                            src={preview}
-                            alt={`Foto ${index + 1}`}
-                            className="w-full h-24 object-cover rounded-lg border"
-                          />
-                          <button
-                            onClick={() => removePhoto(index)}
-                            className="absolute top-1 right-1 bg-red-500 text-white rounded-full p-1 hover:bg-red-600"
-                          >
-                            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                            </svg>
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  
-                  {photoPreviews.length < 5 && (
-                    <div className="flex items-center justify-center w-full">
-                      <label className="w-full flex flex-col items-center px-4 py-6 bg-white text-blue rounded-lg shadow-lg tracking-wide uppercase border border-blue cursor-pointer hover:bg-blue hover:text-white">
-                        <Camera className="h-8 w-8" />
-                        <span className="mt-2 text-base leading-normal">Adicionar Foto</span>
-                        <input
-                          type="file"
-                          className="hidden"
-                          accept="image/*"
-                          multiple
-                          onChange={handlePhotoUpload}
-                        />
-                      </label>
-                    </div>
-                  )}
+        {selectedRoute && (
+          <>
+            <div className="bg-white rounded-lg border shadow-sm p-4">
+              <div className="flex items-center gap-3 mb-3">
+                <div className="p-2 rounded-full bg-indigo-50 text-indigo-700"><Truck className="h-5 w-5" /></div>
+                <div>
+                  <p className="text-sm text-gray-500">Resumo</p>
+                  <p className="text-lg font-bold text-gray-900">{summary.total} itens • {groups.length} pedidos</p>
                 </div>
               </div>
+              <div className="flex flex-wrap gap-2 text-xs">
+                <span className="px-2 py-1 rounded-full bg-green-50 text-green-700 border border-green-100">Concluídos: {summary.completed}</span>
+                <span className="px-2 py-1 rounded-full bg-yellow-50 text-yellow-700 border border-yellow-100">Pendentes: {summary.pending}</span>
+                {summary.cancelled > 0 && (
+                  <span className="px-2 py-1 rounded-full bg-red-50 text-red-700 border border-red-100">Retornados: {summary.cancelled}</span>
+                )}
+              </div>
             </div>
-            
-            <div className="px-6 py-4 border-t border-gray-200 flex justify-end space-x-3">
-              <button
-                onClick={() => {
-                  setShowModal(false);
-                  setSelectedProduct(null);
-                  setTechnicalNotes('');
-                  setPhotos([]);
-                  setPhotoPreviews([]);
-                }}
-                className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-md hover:bg-gray-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500"
-              >
-                Cancelar
-              </button>
-              <button
-                onClick={markAsCompleted}
-                className="px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500"
-              >
-                <CheckCircle className="h-4 w-4 mr-1 inline" />
-                Concluir Montagem
-              </button>
+
+            <div className="space-y-3">
+              {groups.map((g) => (
+                <div key={g.orderId} className="bg-white rounded-lg border shadow-sm p-3">
+                  <div className="flex justify-between items-start gap-2">
+                    <div>
+                      <p className="text-sm font-semibold text-gray-900">{g.customer}</p>
+                      <p className="text-xs text-gray-500">Pedido {g.orderIdErp || g.orderId}</p>
+                      <div className="flex items-center gap-1 text-xs text-gray-500 mt-1">
+                        <Phone className="h-3 w-3" /> {g.phone || '-'}
+                      </div>
+                      <div className="flex items-start gap-1 text-xs text-gray-500">
+                        <MapPin className="h-3 w-3 mt-0.5" /> {g.address || '-'}
+                      </div>
+                    </div>
+                    <div className="flex flex-col gap-1 text-xs">
+                      <span className="px-2 py-1 rounded bg-gray-100 text-gray-800 border border-gray-200 text-center capitalize">
+                        {g.status === 'cancelled' ? 'Retornado' : g.status === 'completed' ? 'Concluído' : 'Pendente'}
+                      </span>
+                      <button
+                        onClick={() => updateOrderStatus(g.orderId, 'complete')}
+                        disabled={processingOrders.has(g.orderId) || g.status === 'completed' || g.status === 'cancelled'}
+                        className="px-2 py-1 rounded bg-green-50 text-green-700 border border-green-200 disabled:opacity-50"
+                      >
+                        {processingOrders.has(g.orderId) ? '...' : 'Concluir'}
+                      </button>
+                      <button
+                        onClick={() => updateOrderStatus(g.orderId, 'return')}
+                        disabled={processingOrders.has(g.orderId) || g.status === 'cancelled'}
+                        className="px-2 py-1 rounded bg-red-50 text-red-700 border border-red-200 disabled:opacity-50"
+                      >
+                        {processingOrders.has(g.orderId) ? '...' : 'Retornar'}
+                      </button>
+                    </div>
+                  </div>
+                  <div className="mt-2 text-xs text-gray-600">
+                    <p className="font-semibold mb-1">Produtos</p>
+                    <ul className="list-disc list-inside space-y-1">
+                      {g.items.map((it) => (
+                        <li key={it.id}>{it.product_sku || ''} - {it.product_name}</li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+              ))}
+
+              {groups.length === 0 && (
+                <div className="bg-white rounded-lg border shadow-sm p-4 text-center text-sm text-gray-500">
+                  Nenhum pedido atribuído.
+                </div>
+              )}
             </div>
-          </div>
-        </div>
-      )}
+          </>
+        )}
+      </main>
     </div>
   );
 }

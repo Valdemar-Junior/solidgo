@@ -83,12 +83,12 @@ export class DeliverySheetGenerator {
     const gridY = y;
     this.drawText(page, `Nº do Romaneio`, margin, gridY, { font: helveticaBoldFont, size: 10, color: { r: 0, g: 0, b: 0 } });
     this.drawText(page, String(data.route.name || data.route.id), margin, gridY - 14, { font: helveticaFont, size: 11, color: { r: 0, g: 0, b: 0 } });
-    this.drawText(page, isAssemblySheet ? `Montador` : `Transportador`, margin, gridY - 32, { font: helveticaBoldFont, size: 10, color: { r: 0, g: 0, b: 0 } });
+    this.drawText(page, isAssemblySheet ? `Montador` : `Conferente`, margin, gridY - 32, { font: helveticaBoldFont, size: 10, color: { r: 0, g: 0, b: 0 } });
     this.drawText(page, `Veículo`, margin + 300, gridY - 32, { font: helveticaBoldFont, size: 10, color: { r: 0, g: 0, b: 0 } });
     this.drawText(page, `Placa`, margin + 460, gridY - 32, { font: helveticaBoldFont, size: 10, color: { r: 0, g: 0, b: 0 } });
     const vehicleText = isAssemblySheet ? (data.assemblyVehicleModel || '') : (data.vehicle ? `${data.vehicle.model}` : '');
     const plateText = isAssemblySheet ? (data.assemblyVehiclePlate || '') : (data.vehicle ? `${data.vehicle.plate}` : '');
-    const installerText = isAssemblySheet ? (data.assemblyInstallerName || '') : '';
+    const installerText = isAssemblySheet ? (data.assemblyInstallerName || '') : (data.route as any)?.conferente || '';
     this.drawText(page, installerText, margin, gridY - 46, { font: helveticaFont, size: 11, color: { r: 0, g: 0, b: 0 } });
     this.drawText(page, vehicleText, margin + 300, gridY - 46, { font: helveticaFont, size: 11, color: { r: 0, g: 0, b: 0 } });
     this.drawText(page, plateText, margin + 460, gridY - 46, { font: helveticaFont, size: 11, color: { r: 0, g: 0, b: 0 } });

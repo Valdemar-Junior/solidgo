@@ -109,6 +109,9 @@ export class BackgroundSyncService {
       case 'delivery_confirmation':
         await this.syncDeliveryConfirmation(item.data);
         break;
+      case 'assembly_update':
+        await this.syncAssemblyUpdate(item.data);
+        break;
       case 'return_revert':
         await this.syncReturnRevert(item.data);
         break;
@@ -117,6 +120,52 @@ export class BackgroundSyncService {
         break;
       default:
         console.warn(`Unknown sync item type: ${item.type}`);
+    }
+  }
+
+  private async syncAssemblyUpdate(data: any): Promise<void> {
+    const { route_id, order_id, action, local_timestamp } = data || {};
+    if (!order_id || !route_id || !action) throw new Error('Invalid assembly_update payload');
+    if (action === 'complete') {
+      const { error } = await supabase
+        .from('assembly_products')
+        .update({ status: 'completed', completion_date: local_timestamp })
+        .eq('order_id', order_id)
+        .eq('assembly_route_id', route_id);
+      if (error) throw error;
+    } else if (action === 'return') {
+      const { error } = await supabase
+        .from('assembly_products')
+        .update({ status: 'cancelled', assembly_date: null, completion_date: null })
+        .eq('order_id', order_id)
+        .eq('assembly_route_id', route_id);
+      if (error) throw error;
+      const { data: pendente } = await supabase
+        .from('assembly_products')
+        .select('*')
+        .eq('order_id', order_id)
+        .is('assembly_route_id', null)
+        .eq('status', 'pending');
+      if (!pendente || pendente.length === 0) {
+        const { data: base } = await supabase
+          .from('assembly_products')
+          .select('*')
+          .eq('order_id', order_id)
+          .eq('assembly_route_id', route_id);
+        const clones = (base || []).map((it: any) => ({
+          assembly_route_id: null,
+          order_id: it.order_id,
+          product_name: it.product_name,
+          product_sku: it.product_sku,
+          customer_name: it.customer_name,
+          customer_phone: it.customer_phone,
+          installation_address: it.installation_address,
+          installer_id: null,
+          status: 'pending',
+          observations: it.observations,
+        }));
+        if (clones.length) await supabase.from('assembly_products').insert(clones);
+      }
     }
   }
 
