@@ -20,6 +20,7 @@ import RouteCreation from './pages/admin/RouteCreation';
 import AssemblyManagement from './pages/admin/AssemblyManagement';
 import OrderLookup from './pages/admin/OrderLookup';
 import AssemblyDashboard from './pages/montador/AssemblyDashboard';
+import AssemblyRouteDetails from './pages/montador/AssemblyRouteDetails';
 import TesteImportacao from './pages/teste-importacao';
 import DiagnosticoOrders from './pages/diagnostico-orders';
 import VerificarColunasOrders from './pages/verificar-colunas';
@@ -62,9 +63,9 @@ function App() {
           <Route path="/teste-importacao" element={<TesteImportacao />} />
           <Route path="/diagnostico-orders" element={<DiagnosticoOrders />} />
           <Route path="/verificar-colunas" element={<VerificarColunasOrders />} />
-          
+
           {/* Rotas de teste removidas para fluxo profissional */}
-          
+
           {/* Admin Routes */}
           <Route
             path="/admin"
@@ -122,7 +123,7 @@ function App() {
               </ProtectedRoute>
             }
           />
-          
+
           {/* Driver Routes */}
           <Route
             path="/driver"
@@ -140,13 +141,21 @@ function App() {
               </ProtectedRoute>
             }
           />
-          
+
           {/* Montador Routes */}
           <Route
             path="/montador"
             element={
               <ProtectedRoute allowedRoles={['montador']}>
                 <AssemblyDashboard />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/montador/route/:routeId"
+            element={
+              <ProtectedRoute allowedRoles={['montador']}>
+                <AssemblyRouteDetails />
               </ProtectedRoute>
             }
           />
@@ -167,7 +176,7 @@ function App() {
               </ProtectedRoute>
             }
           />
-          
+
           {/* Default redirect based on role */}
           <Route
             path="/"
@@ -177,11 +186,11 @@ function App() {
               </ProtectedRoute>
             }
           />
-          
+
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </Router>
-      
+
       <Toaster
         position="top-right"
         expand={false}
@@ -195,9 +204,9 @@ function App() {
 
 function RoleBasedRedirect() {
   const { user } = useAuthStore();
-  
+
   console.log('RoleBasedRedirect - Current user:', user);
-  
+
   if (!user) {
     console.log('No user found, redirecting to login');
     return (
@@ -209,14 +218,14 @@ function RoleBasedRedirect() {
       </div>
     );
   }
-  
+
   if (user.must_change_password) {
     return <Navigate to="/first-login" replace />;
   }
   console.log('User found, redirecting based on role:', user.role);
-  return user.role === 'admin' 
-    ? <Navigate to="/admin" replace /> 
-    : user.role === 'driver' 
+  return user.role === 'admin'
+    ? <Navigate to="/admin" replace />
+    : user.role === 'driver'
       ? <Navigate to="/driver" replace />
       : user.role === 'conferente'
         ? <Navigate to="/conferente" replace />
