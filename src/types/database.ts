@@ -36,7 +36,7 @@ export interface Order {
   phone: string;
   customer_cpf?: string;
   address_json: Address;
-   items_json: OrderItem[];
+  items_json: OrderItem[];
   status: 'pending' | 'imported' | 'assigned' | 'delivered' | 'returned';
   danfe_base64?: string;
   danfe_gerada_em?: string;
@@ -47,7 +47,7 @@ export interface Order {
   last_return_notes?: string | null;
   created_at: string;
   updated_at: string;
-  
+
   // Novos campos do JSON reformulado (sem campos XML - usamos xml_documento existente)
   numero_lancamento?: number;
   observacoes_publicas?: string;
@@ -56,7 +56,9 @@ export interface Order {
   etiquetas?: string[];
   tem_frete_full?: string;
   filial_venda?: string;
-  
+  brand?: string;
+  department?: string;
+
   // Campos adicionais para montagem
   destinatario_cidade?: string;
   destinatario_bairro?: string;

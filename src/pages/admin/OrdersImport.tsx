@@ -143,7 +143,13 @@ export default function OrdersImport() {
           });
         }
 
+        // Extract representative department/brand for the order (from first valid item)
+        const repDept = produtos.find((p: any) => p.departamento)?.departamento || produtos.find((p: any) => p.department)?.department || '';
+        const repBrand = produtos.find((p: any) => p.marca)?.marca || produtos.find((p: any) => p.brand)?.brand || '';
+
         return {
+          department: String(repDept),
+          brand: String(repBrand),
           order_id_erp: String(o.numero_lancamento ?? o.lancamento_venda ?? o.codigo_cliente ?? Math.random().toString(36).slice(2)),
           customer_name: String(o.nome_cliente ?? ''),
           phone: String(o.cliente_celular ?? ''),
@@ -179,6 +185,8 @@ export default function OrdersImport() {
             location: String(p.local_estocagem ?? ''),
             has_assembly: String(p.tem_montagem ?? ''),
             labels: Array.isArray(p.etiquetas) ? p.etiquetas : [],
+            department: String(p.departamento ?? ''),
+            brand: String(p.marca ?? ''),
           })),
           status: 'pending' as const,
           raw_json: o,

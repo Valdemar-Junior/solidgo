@@ -399,14 +399,16 @@ function RouteCreationContent() {
   const clientOptions = useMemo(() => Array.from(new Set((orders || []).map((o: any) => String((o.customer_name || '')).trim()).filter(Boolean))).sort(), [orders]);
   const departmentOptions = useMemo(() => {
     const fromItems = (orders || []).flatMap((o: any) => Array.isArray(o.items_json) ? o.items_json.map((it: any) => String(it?.department || '').trim()) : []);
-    const fromRaw = (orders || []).flatMap((o: any) => Array.isArray(o.raw_json?.produtos_locais) ? o.raw_json.produtos_locais.map((p: any) => String(p?.departamento || '').trim()) : []);
-    return Array.from(new Set([...(fromItems || []), ...(fromRaw || [])].filter(Boolean))).sort();
+    const fromRawLoc = (orders || []).flatMap((o: any) => Array.isArray(o.raw_json?.produtos_locais) ? o.raw_json.produtos_locais.map((p: any) => String(p?.departamento || '').trim()) : []);
+    const fromRawProd = (orders || []).flatMap((o: any) => Array.isArray(o.raw_json?.produtos) ? o.raw_json.produtos.map((p: any) => String(p?.departamento || '').trim()) : []);
+    return Array.from(new Set([...(fromItems || []), ...(fromRawLoc || []), ...(fromRawProd || [])].filter(Boolean))).sort();
   }, [orders]);
   const brandOptions = useMemo(() => {
     const fromItems = (orders || []).flatMap((o: any) => Array.isArray(o.items_json) ? o.items_json.map((it: any) => String(it?.brand || '').trim()) : []);
     const fromProdLoc = (orders || []).flatMap((o: any) => Array.isArray(o.raw_json?.produtos_locais) ? o.raw_json.produtos_locais.map((p: any) => String(p?.marca || '').trim()) : []);
+    const fromProdRaw = (orders || []).flatMap((o: any) => Array.isArray(o.raw_json?.produtos) ? o.raw_json.produtos.map((p: any) => String(p?.marca || '').trim()) : []);
     const fromRawSingle = (orders || []).map((o: any) => String(o.raw_json?.marca || '').trim());
-    return Array.from(new Set([...(fromItems || []), ...(fromProdLoc || []), ...(fromRawSingle || [])].filter(Boolean))).sort();
+    return Array.from(new Set([...(fromItems || []), ...(fromProdLoc || []), ...(fromProdRaw || []), ...(fromRawSingle || [])].filter(Boolean))).sort();
   }, [orders]);
 
   const filteredClients = useMemo(() => {
@@ -485,7 +487,18 @@ function RouteCreationContent() {
       const o: any = (orders || []).find((x: any) => String(x.id) === String(oid));
       if (!o) continue;
       const pedido = String(o.raw_json?.lancamento_venda ?? o.order_id_erp ?? o.id ?? '');
-      const items = Array.isArray(o.items_json) ? o.items_json : [];
+      let items = Array.isArray(o.items_json) ? o.items_json : [];
+
+      if (items.length > 0) {
+        const rawProds = Array.isArray(o.raw_json?.produtos_locais) ? o.raw_json.produtos_locais : (Array.isArray(o.raw_json?.produtos) ? o.raw_json.produtos : []);
+        if (rawProds.length === items.length) {
+          items = items.map((it: any, idx: number) => ({
+            ...it,
+            department: it.department || rawProds[idx]?.departamento || '',
+            brand: it.brand || rawProds[idx]?.marca || ''
+          }));
+        }
+      }
       const byLocal = filterLocalEstocagem ? items.filter((it: any) => String(it?.location || '').toLowerCase() === filterLocalEstocagem.toLowerCase()) : items;
       let visibleItems = byLocal;
       if (filterHasAssembly) visibleItems = visibleItems.filter((it: any) => isTrue(it?.has_assembly));
@@ -559,7 +572,19 @@ function RouteCreationContent() {
       // Apply per-item filters
       const ids = new Set<string>();
       for (const o of filtered) {
-        const items = Array.isArray(o.items_json) ? o.items_json : [];
+        let items = Array.isArray(o.items_json) ? o.items_json : [];
+
+        // Enrich items with department/brand from raw_json if missing
+        if (items.length > 0) {
+          const rawProds = Array.isArray(o.raw_json?.produtos_locais) ? o.raw_json.produtos_locais : (Array.isArray(o.raw_json?.produtos) ? o.raw_json.produtos : []);
+          if (rawProds.length === items.length) {
+            items = items.map((it: any, idx: number) => ({
+              ...it,
+              department: it.department || rawProds[idx]?.departamento || '',
+              brand: it.brand || rawProds[idx]?.marca || ''
+            }));
+          }
+        }
         if (strictDepartment && filterDepartment) {
           const allInDept = items.length > 0 && items.every((it: any) => String(it?.department || '').toLowerCase() === filterDepartment.toLowerCase());
           if (!allInDept) continue;
