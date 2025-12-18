@@ -250,7 +250,7 @@ export default function OrdersImport() {
 
       const pedidosImportados = inseridos;
 
-      toast.success(`Importação finalizada: ${pedidosImportados} pedidos salvos! Iniciando busca de coordenadas em segundo plano...`, {
+      toast.success(`Importação finalizada: ${pedidosImportados} novos pedidos salvos. (${duplicados} já existiam)`, {
         duration: 5000,
         style: { background: '#10B981', color: 'white' }
       });
