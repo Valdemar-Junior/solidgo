@@ -152,6 +152,20 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
         setAssemblyItems(updated);
         await OfflineStorage.setItem(`assembly_items_${routeId}`, updated);
 
+        // Verifica se todos os produtos da rota estão concluídos
+        const { data: allProducts } = await supabase
+          .from('assembly_products')
+          .select('status')
+          .eq('assembly_route_id', routeId);
+
+        if (allProducts && allProducts.length > 0) {
+          const allDone = allProducts.every((p: any) => p.status !== 'pending');
+          if (allDone) {
+            await supabase.from('assembly_routes').update({ status: 'completed' }).eq('id', routeId);
+            toast.success('Rota de montagem concluída!');
+          }
+        }
+
         if (onUpdated) onUpdated();
       } else {
         // Offline
@@ -208,6 +222,7 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
           .from('assembly_products')
           .update({
             status: 'cancelled', // Retornado
+            returned_at: now,
             observations: currentObs ? `(Retorno: ${reasonValue}) ${currentObs}` : `Retorno: ${reasonValue}`
           })
           .eq('id', item.id);
@@ -234,6 +249,20 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
         const updated = assemblyItems.map(it => it.id === item.id ? { ...it, status: 'cancelled' } : it);
         setAssemblyItems(updated);
         OfflineStorage.setItem(`assembly_items_${routeId}`, updated);
+
+        // Verifica se todos os produtos da rota estão concluídos
+        const { data: allProducts } = await supabase
+          .from('assembly_products')
+          .select('status')
+          .eq('assembly_route_id', routeId);
+
+        if (allProducts && allProducts.length > 0) {
+          const allDone = allProducts.every((p: any) => p.status !== 'pending');
+          if (allDone) {
+            await supabase.from('assembly_routes').update({ status: 'completed' }).eq('id', routeId);
+            toast.success('Rota de montagem concluída!');
+          }
+        }
 
         if (onUpdated) onUpdated();
       } else {
