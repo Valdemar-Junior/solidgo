@@ -248,19 +248,17 @@ export class BackgroundSyncService {
           console.log('[BackgroundSync] Products with assembly found:', produtosComMontagem.length);
 
           if (produtosComMontagem.length > 0) {
-            // Verificar se já existem registros para evitar duplicação (por SKU)
+            // Verificar se já existem registros PARA ESTE PEDIDO (order_id é único)
             const { data: existing } = await supabase
               .from('assembly_products')
-              .select('id, product_sku')
+              .select('id')
               .eq('order_id', order_id);
 
-            const existingSkus = new Set((existing || []).map((e: any) => e.product_sku));
-            const novosParaInserir = produtosComMontagem.filter((item: any) => !existingSkus.has(item.sku));
+            console.log('[BackgroundSync] Existing products for this order:', (existing || []).length);
 
-            console.log('[BackgroundSync] Existing SKUs:', existingSkus.size, 'New to insert:', novosParaInserir.length);
-
-            if (novosParaInserir.length > 0) {
-              const assemblyProducts = novosParaInserir.map((item: any) => ({
+            // Só insere se NÃO existir nenhum registro para este pedido
+            if (!existing || existing.length === 0) {
+              const assemblyProducts = produtosComMontagem.map((item: any) => ({
                 order_id: orderData.id,
                 product_name: item.name,
                 product_sku: item.sku,
@@ -279,6 +277,8 @@ export class BackgroundSyncService {
               } else {
                 console.log(`[BackgroundSync] Created ${assemblyProducts.length} assembly products for order ${order_id}`);
               }
+            } else {
+              console.log('[BackgroundSync] Order already has assembly products, skipping creation');
             }
           }
         }

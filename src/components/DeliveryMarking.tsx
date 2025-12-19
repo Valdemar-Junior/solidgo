@@ -245,20 +245,18 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
             console.log('[DeliveryMarking] Produtos com montagem encontrados:', produtosComMontagem.length);
 
             if (produtosComMontagem.length > 0) {
-              // Verificar se já existem registros para evitar duplicação
+              // Verificar se já existem registros PARA ESTE PEDIDO (order_id é único)
               const { data: existing } = await supabase
                 .from('assembly_products')
-                .select('id, product_sku')
+                .select('id')
                 .eq('order_id', orderData.id);
 
-              const existingSkus = new Set((existing || []).map((e: any) => e.product_sku));
-              const novosParaInserir = produtosComMontagem.filter((item: any) => !existingSkus.has(item.sku));
+              console.log('[DeliveryMarking] Já existentes para este pedido:', (existing || []).length);
 
-              console.log('[DeliveryMarking] Já existentes:', existingSkus.size, 'Novos para inserir:', novosParaInserir.length);
-
-              if (novosParaInserir.length > 0) {
+              // Só insere se NÃO existir nenhum registro para este pedido
+              if (!existing || existing.length === 0) {
                 // Criar registro de montagem pendente
-                const assemblyProducts = novosParaInserir.map((item: any) => ({
+                const assemblyProducts = produtosComMontagem.map((item: any) => ({
                   order_id: orderData.id,
                   product_name: item.name,
                   product_sku: item.sku,
@@ -285,14 +283,16 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
                       entity_type: 'order',
                       entity_id: orderData.id,
                       action: 'assembly_required',
-                      details: { count: novosParaInserir.length },
+                      details: { count: produtosComMontagem.length },
                       user_id: userId,
                       timestamp: new Date().toISOString(),
                     });
                   } catch { }
 
-                  toast.info(`Pedido ${orderData.order_id_erp || order.order.order_id_erp} tem ${novosParaInserir.length} produto(s) com montagem!`);
+                  toast.info(`Pedido ${orderData.order_id_erp || order.order.order_id_erp} tem ${produtosComMontagem.length} produto(s) com montagem!`);
                 }
+              } else {
+                console.log('[DeliveryMarking] Pedido já possui produtos de montagem, ignorando criação');
               }
             }
           }
