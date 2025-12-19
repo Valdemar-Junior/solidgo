@@ -165,6 +165,7 @@ function AssemblyManagementContent() {
     { id: 'pedido', label: 'Pedido', visible: true },
     { id: 'cliente', label: 'Cliente', visible: true },
     { id: 'telefone', label: 'Telefone', visible: true },
+    { id: 'sinais', label: 'Sinais', visible: true },
     { id: 'produto', label: 'Produto', visible: true },
     { id: 'sku', label: 'SKU', visible: true },
     { id: 'obsPublicas', label: 'Obs. Públicas', visible: true },
@@ -707,7 +708,7 @@ function AssemblyManagementContent() {
   }, [groupedProducts, filterCity, filterNeighborhood, filterDeadline]);
 
   const orderRows = useMemo(() => {
-    const rows: Array<{ key: string; orderId: string; dataVenda: string; entrega: string; previsao: string; pedido: string; cliente: string; telefone: string; produto: string; sku: string; obsPublicas: string; obsInternas: string; cidade: string; bairro: string; endereco: string; selected: boolean; }> = [];
+    const rows: Array<{ key: string; orderId: string; dataVenda: string; entrega: string; previsao: string; pedido: string; cliente: string; telefone: string; produto: string; sku: string; obsPublicas: string; obsInternas: string; cidade: string; bairro: string; endereco: string; selected: boolean; wasReturned: boolean; isForaPrazo: boolean; }> = [];
     Object.entries(filteredGroupedProducts).forEach(([orderId, products]) => {
       const order = products[0]?.order || {} as any;
       const raw = order?.raw_json || {};
@@ -724,8 +725,11 @@ function AssemblyManagementContent() {
       const bairro = addr.neighborhood || '-';
       const endereco = [addr.street, addr.number, addr.complement].filter(Boolean).join(', ') || '-';
       const selected = selectedOrders.has(orderId);
+      const prazoStatus = getPrazoStatusForOrder(order);
+      const isForaPrazo = prazoStatus === 'out';
       products.forEach((ap, idx) => {
-        rows.push({ key: `${orderId}-${ap.id}-${idx}`, orderId, dataVenda, entrega, previsao, pedido, cliente, telefone, produto: ap.product_name || '-', sku: ap.product_sku || '-', obsPublicas, obsInternas, cidade, bairro, endereco, selected });
+        const wasReturned = (ap as any).was_returned === true;
+        rows.push({ key: `${orderId}-${ap.id}-${idx}`, orderId, dataVenda, entrega, previsao, pedido, cliente, telefone, produto: ap.product_name || '-', sku: ap.product_sku || '-', obsPublicas, obsInternas, cidade, bairro, endereco, selected, wasReturned, isForaPrazo });
       });
     });
     return rows;
@@ -954,13 +958,31 @@ function AssemblyManagementContent() {
                                                 <span>{row.telefone}</span>
                                               </div>
                                             ) :
-                                              c.id === 'produto' ? row.produto :
-                                                c.id === 'sku' ? row.sku :
-                                                  c.id === 'obsPublicas' ? row.obsPublicas :
-                                                    c.id === 'obsInternas' ? row.obsInternas :
-                                                      c.id === 'cidade' ? row.cidade :
-                                                        c.id === 'bairro' ? row.bairro :
-                                                          c.id === 'endereco' ? row.endereco : '-'}
+                                              c.id === 'sinais' ? (
+                                                <div className="flex items-center gap-1 flex-wrap">
+                                                  {row.wasReturned && (
+                                                    <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-orange-100 text-orange-800">
+                                                      🔄 Retornado
+                                                    </span>
+                                                  )}
+                                                  {row.isForaPrazo ? (
+                                                    <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-800">
+                                                      ⏰ Fora do Prazo
+                                                    </span>
+                                                  ) : (
+                                                    <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800">
+                                                      ✅ No Prazo
+                                                    </span>
+                                                  )}
+                                                </div>
+                                              ) :
+                                                c.id === 'produto' ? row.produto :
+                                                  c.id === 'sku' ? row.sku :
+                                                    c.id === 'obsPublicas' ? row.obsPublicas :
+                                                      c.id === 'obsInternas' ? row.obsInternas :
+                                                        c.id === 'cidade' ? row.cidade :
+                                                          c.id === 'bairro' ? row.bairro :
+                                                            c.id === 'endereco' ? row.endereco : '-'}
                                 </td>
                               ))}
                             </tr>

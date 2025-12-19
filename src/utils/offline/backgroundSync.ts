@@ -254,6 +254,32 @@ export class BackgroundSyncService {
     }
     console.log('[BackgroundSync] Assembly return synced successfully:', item_id);
 
+    // Buscar dados do produto para clonar
+    const { data: originalProduct } = await supabase
+      .from('assembly_products')
+      .select('*')
+      .eq('id', item_id)
+      .single();
+
+    if (originalProduct) {
+      // Clone para nova tentativa (libera para nova rota)
+      const newItem = {
+        order_id: originalProduct.order_id,
+        product_name: originalProduct.product_name,
+        product_sku: originalProduct.product_sku,
+        customer_name: originalProduct.customer_name,
+        customer_phone: originalProduct.customer_phone,
+        installation_address: originalProduct.installation_address,
+        status: 'pending',
+        observations: originalProduct.observations,
+        assembly_route_id: null,
+        was_returned: true // Marca como retorno para badge
+      };
+
+      await supabase.from('assembly_products').insert(newItem);
+      console.log('[BackgroundSync] Created clone for returned product');
+    }
+
     // Verificar se todos os produtos da rota estão concluídos
     if (route_id) {
       await this.checkAssemblyRouteCompletion(route_id);

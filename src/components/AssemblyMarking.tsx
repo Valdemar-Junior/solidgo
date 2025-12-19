@@ -239,7 +239,8 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
           installation_address: item.installation_address,
           status: 'pending', // Volta para pendente sem rota
           observations: item.observations,
-          assembly_route_id: null // Sem rota definida
+          assembly_route_id: null, // Sem rota definida
+          was_returned: true // Marca como retorno para badge
         };
 
         await supabase.from('assembly_products').insert(newItem);
