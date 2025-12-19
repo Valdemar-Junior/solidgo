@@ -3,57 +3,6 @@
 
 <head>
   <meta charset="UTF-8" />
-  <script>
-    // EMERGENCY ERROR HANDLER
-    window.onerror = function (msg, url, line, col, error) {
-      showError('Erro Global: ' + msg + '\n' + (error ? error.stack : ''));
-    };
-    window.onunhandledrejection = function (event) {
-      showError('Promessa Rejeitada: ' + event.reason);
-    };
-
-
-    // CONSOLE INTERCEPTOR
-    const originalLog = console.log;
-    const originalWarn = console.warn;
-    const originalError = console.error;
-
-    function appendLog(type, args) {
-      const text = args.map(a => (typeof a === 'object' ? JSON.stringify(a) : String(a))).join(' ');
-      showError('[' + type + '] ' + text, true);
-    }
-
-    console.log = function (...args) { originalLog.apply(console, args); appendLog('LOG', args); };
-    console.warn = function (...args) { originalWarn.apply(console, args); appendLog('WARN', args); };
-    console.error = function (...args) { originalError.apply(console, args); appendLog('ERR', args); };
-
-    function showError(text, append = false) {
-      const el = document.getElementById('debug-overlay') || document.createElement('div');
-      if (!document.getElementById('debug-overlay')) {
-        el.id = 'debug-overlay';
-        el.style.cssText = 'position:fixed;top:40px;left:0;width:100%;height:calc(100% - 40px);z-index:99998;background:rgba(255,255,255,0.9);color:black;padding:10px;overflow:auto;font-family:monospace;font-size:10px;pointer-events:none;';
-        document.body.appendChild(el);
-
-        // Add clear button separately to be clickable
-        const btn = document.createElement('button');
-        btn.textContent = 'LIMPAR DADOS';
-        btn.style.cssText = 'position:fixed;top:45px;right:10px;z-index:99999;background:red;color:white;padding:5px;';
-        btn.onclick = function () {
-          localStorage.clear(); sessionStorage.clear();
-          navigator.serviceWorker.getRegistrations().then(r => r.forEach(i => i.unregister()));
-          window.location.reload();
-        };
-        document.body.appendChild(btn);
-      }
-
-      const line = document.createElement('div');
-      line.style.borderBottom = '1px solid #ccc';
-      line.style.padding = '2px 0';
-      if (text.includes('ERR')) line.style.color = 'red';
-      line.textContent = text;
-      el.appendChild(line);
-    }
-  </script>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>SolidGo</title>
@@ -71,10 +20,6 @@
 </head>
 
 <body>
-  <div
-    style="background:yellow; color:black; font-weight:bold; text-align:center; padding:5px; position:fixed; top:0; left:0; width:100%; z-index:99999;">
-    DEBUG MODE V3 - VERSÃO ATUALIZADA
-  </div>
   <div id="root"></div>
   <script type="module" src="/src/main.tsx"></script>
 </body>

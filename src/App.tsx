@@ -229,7 +229,9 @@ function RoleBasedRedirect() {
       ? <Navigate to="/driver" replace />
       : user.role === 'conferente'
         ? <Navigate to="/conferente" replace />
-        : <Navigate to="/driver" replace />;
+        : user.role === 'montador'
+          ? <Navigate to="/montador" replace />
+          : <Navigate to="/driver" replace />;
 }
 
 export default App;
