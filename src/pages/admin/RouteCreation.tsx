@@ -952,7 +952,20 @@ function RouteCreationContent() {
         .order('sequence');
       const existingIds = new Set<string>((existingRO || []).map((r: any) => String(r.order_id)));
       const startSeq = (existingRO && existingRO.length > 0) ? Math.max(...existingRO.map((r: any) => Number(r.sequence || 0))) + 1 : 1;
-      const toAdd = Array.from(selectedOrders).filter((id) => !existingIds.has(String(id)));
+
+      // Filter out stale IDs (e.g. from localStorage after DB wipe)
+      const validOrderIds = new Set((orders || []).map((o) => String(o.id)));
+      const toAdd = Array.from(selectedOrders)
+        .filter((id) => !existingIds.has(String(id)))
+        .filter((id) => validOrderIds.has(String(id)));
+
+      if (toAdd.length === 0 && selectedOrders.size > 0) {
+        toast.error('Pedidos selecionados não são mais válidos. A seleção será limpa.');
+        setSelectedOrders(new Set());
+        setSaving(false);
+        return;
+      }
+
       const routeOrders = toAdd.map((orderId, idx) => ({ route_id: targetRouteId, order_id: orderId, sequence: startSeq + idx, status: 'pending' }));
       if (routeOrders.length > 0) {
         const { error: routeOrdersError } = await supabase.from('route_orders').insert(routeOrders);
