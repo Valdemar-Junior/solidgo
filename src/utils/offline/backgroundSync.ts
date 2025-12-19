@@ -154,6 +154,9 @@ export class BackgroundSyncService {
       case 'order_update':
         await this.syncOrderUpdate(item.data);
         break;
+      case 'assembly_undo':
+        await this.syncAssemblyUndo(item.data);
+        break;
       default:
         console.warn(`Unknown sync item type: ${item.type}`);
     }
@@ -460,6 +463,59 @@ export class BackgroundSyncService {
   private async syncOrderUpdate(data: any): Promise<void> {
     // Implement order update sync logic if needed
     console.log('Syncing order update:', data);
+  }
+
+  private async syncAssemblyUndo(data: any): Promise<void> {
+    const { item_id, local_timestamp } = data;
+    if (!item_id) throw new Error('Invalid assembly_undo payload');
+
+    console.log('[BackgroundSync] syncAssemblyUndo:', item_id);
+
+    // 1. Fetch current status to check if we are undoing a return
+    const { data: current } = await supabase.from('assembly_products').select('status, order_id, product_sku, observations').eq('id', item_id).single();
+
+    if (current && current.status === 'cancelled') {
+      try {
+        // Clean up ghost
+        let query = supabase
+          .from('assembly_products')
+          .select('id')
+          .eq('order_id', current.order_id)
+          .eq('status', 'pending')
+          .eq('was_returned', true)
+          .is('assembly_route_id', null)
+          .order('created_at', { ascending: false })
+          .limit(1);
+
+        if (current.product_sku) query = query.eq('product_sku', current.product_sku);
+
+        const { data: ghosts } = await query;
+        if (ghosts && ghosts.length > 0) {
+          await supabase.from('assembly_products').delete().eq('id', ghosts[0].id);
+          console.log('[BackgroundSync] Deleted ghost copy for undo');
+        }
+      } catch (e) {
+        console.error('[BackgroundSync] Error cleaning ghost:', e);
+      }
+    }
+
+    // 2. Revert status
+    // Note: We use db current observations to clean strings, or default to whatever logic needed.
+    // Ideally we assume current.observations is up to date relative to when action was queued? 
+    // Actually the queue data usually doesn't contain full observations string, so we must use DB value.
+    const obs = current?.observations || '';
+    const cleanObs = obs.replace(/\(Retorno: .*\)\s*/, '').replace(/^Retorno: .*/, '').trim();
+
+    const { error } = await supabase
+      .from('assembly_products')
+      .update({
+        status: 'pending',
+        completion_date: null,
+        observations: cleanObs || null
+      })
+      .eq('id', item_id);
+
+    if (error) throw error;
   }
 
   private async logSyncAction(

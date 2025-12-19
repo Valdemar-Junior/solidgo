@@ -304,6 +304,33 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
       };
 
       if (isOnline) {
+        // CORREÇÃO: Se estiver desfazendo um retorno, apagar a cópia (fantasma) que foi criada
+        if (item.status === 'cancelled') {
+          try {
+            let query = supabase
+              .from('assembly_products')
+              .select('id')
+              .eq('order_id', item.order_id)
+              .eq('status', 'pending')
+              .eq('was_returned', true)
+              .is('assembly_route_id', null)
+              .order('created_at', { ascending: false })
+              .limit(1);
+
+            if (item.product_sku) {
+              query = query.eq('product_sku', item.product_sku);
+            }
+
+            const { data: ghosts } = await query;
+
+            if (ghosts && ghosts.length > 0) {
+              await supabase.from('assembly_products').delete().eq('id', ghosts[0].id);
+            }
+          } catch (err) {
+            console.error('Error cleaning up return duplicate:', err);
+          }
+        }
+
         // Resetar item para pendente
         const { error } = await supabase
           .from('assembly_products')
