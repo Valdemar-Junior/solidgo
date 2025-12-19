@@ -240,6 +240,24 @@ export class BackgroundSyncService {
       if (orderError2) console.warn('Failed to update order status:', orderError2);
     }
 
+    // Verificar se todos os pedidos da rota estão concluídos para atualizar status da rota
+    try {
+      const { data: allOrders } = await supabase
+        .from('route_orders')
+        .select('status')
+        .eq('route_id', route_id);
+
+      if (allOrders && allOrders.length > 0) {
+        const allDone = allOrders.every((ro: any) => ro.status !== 'pending');
+        if (allDone) {
+          await supabase.from('routes').update({ status: 'completed' }).eq('id', route_id);
+          console.log('Route marked as completed:', route_id);
+        }
+      }
+    } catch (routeErr) {
+      console.warn('Failed to check/update route status:', routeErr);
+    }
+
     await this.logSyncAction('delivery_confirmation', order_id, action, user_id);
   }
 
