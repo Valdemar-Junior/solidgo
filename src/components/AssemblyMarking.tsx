@@ -104,7 +104,7 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
         .from('return_reasons')
         .select('*')
         .eq('active', true)
-        .order('reason_text', { ascending: true });
+        .order('reason', { ascending: true });
 
       if (error) throw error;
       if (data && data.length > 0) {
@@ -481,7 +481,7 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
                     <button
                       onClick={() => markAsCompleted(item)}
                       disabled={processingIds.has(item.id)}
-                      className="flex items-center justify-center px-4 py-3 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 transition-colors text-sm font-bold shadow-sm"
+                      className="flex items-center justify-center w-full px-4 py-3 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 transition-colors text-sm font-bold shadow-sm"
                     >
                       <CheckCircle className="h-5 w-5 mr-1" />
                       MONTADO
@@ -490,10 +490,10 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
                     <button
                       onClick={() => markAsReturned(item)}
                       disabled={!selectedReason || processingIds.has(item.id)}
-                      className="flex items-center justify-center px-4 py-2 bg-red-100 text-red-700 rounded-md hover:bg-red-200 disabled:opacity-50 transition-colors text-xs font-medium"
+                      className="flex items-center justify-center w-full px-4 py-3 bg-red-100 text-red-700 rounded-md hover:bg-red-200 disabled:opacity-50 transition-colors text-sm font-bold shadow-sm"
                     >
-                      <XCircle className="h-4 w-4 mr-1" />
-                      Retornar
+                      <XCircle className="h-5 w-5 mr-1" />
+                      RETORNAR
                     </button>
                   </>
                 )}

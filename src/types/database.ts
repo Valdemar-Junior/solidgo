@@ -200,6 +200,9 @@ export interface AssemblyProduct {
   completion_date?: string;
   technical_notes?: string;
   photos: string[];
+  observations?: string;
+  returned_at?: string;
+  was_returned?: boolean;
   created_at: string;
   updated_at: string;
 }

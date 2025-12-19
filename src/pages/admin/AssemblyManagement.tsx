@@ -329,7 +329,7 @@ function AssemblyManagementContent() {
       const { data: productsPending } = await supabase
         .from('assembly_products')
         .select(`
-          id, order_id, product_name, product_sku, status, assembly_route_id, created_at, updated_at,
+          id, order_id, product_name, product_sku, status, assembly_route_id, created_at, updated_at, was_returned,
           order:order_id (id, order_id_erp, customer_name, phone, address_json, raw_json, data_venda, previsao_entrega, observacoes_publicas, observacoes_internas),
           installer:installer_id (id, name)
         `)
@@ -344,7 +344,7 @@ function AssemblyManagementContent() {
           const { data: productsR } = await supabase
             .from('assembly_products')
             .select(`
-              id, order_id, product_name, product_sku, status, assembly_route_id, created_at, updated_at,
+              id, order_id, product_name, product_sku, status, assembly_route_id, created_at, updated_at, was_returned,
               order:order_id (id, order_id_erp, customer_name, phone, address_json, raw_json, items_json, data_venda, previsao_entrega),
               installer:installer_id (id, name)
             `)

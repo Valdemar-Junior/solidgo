@@ -2053,8 +2053,8 @@ function RouteCreationContent() {
                     setWaSending(false);
                   }
                 }}
-                disabled={waSending}
-                className="flex items-center justify-center px-4 py-2 bg-green-50 text-green-700 hover:bg-green-100 rounded-lg font-medium text-sm transition-colors border border-green-200 disabled:opacity-50"
+                disabled={waSending || selectedRoute?.status === 'completed'}
+                className="flex items-center justify-center px-4 py-2 bg-gray-50 text-gray-700 hover:bg-gray-100 rounded-lg font-medium text-sm transition-colors border border-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <WhatsAppIcon className="h-4 w-4 mr-2" /> {waSending ? 'Enviando...' : 'Enviar cliente'}
               </button>
@@ -2123,8 +2123,8 @@ function RouteCreationContent() {
                     setGroupSending(false);
                   }
                 }}
-                disabled={groupSending}
-                className="flex items-center justify-center px-4 py-2 bg-green-50 text-green-700 hover:bg-green-100 rounded-lg font-medium text-sm transition-colors border border-green-200 disabled:opacity-50"
+                disabled={groupSending || selectedRoute?.status === 'completed'}
+                className="flex items-center justify-center px-4 py-2 bg-gray-50 text-gray-700 hover:bg-gray-100 rounded-lg font-medium text-sm transition-colors border border-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <WhatsAppIcon className="h-4 w-4 mr-2" /> {groupSending ? 'Enviando...' : 'Enviar grupo'}
               </button>

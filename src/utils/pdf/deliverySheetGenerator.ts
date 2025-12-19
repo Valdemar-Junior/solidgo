@@ -377,7 +377,11 @@ export class DeliverySheetGenerator {
 
     // Footer
     const footerY = 40;
-    this.drawText(page, 'Este documento é válido como comprovante de entrega', margin, footerY, {
+    const footerText = isAssemblySheet
+      ? 'Este documento é válido como comprovante de montagem'
+      : 'Este documento é válido como comprovante de entrega';
+
+    this.drawText(page, footerText, margin, footerY, {
       font: helveticaFont,
       size: 10,
       color: { r: 0.5, g: 0.5, b: 0.5 },
