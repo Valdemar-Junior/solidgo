@@ -40,7 +40,7 @@ export class BackgroundSyncService {
     }
 
     console.log('Starting background sync...');
-    
+
     // Sync immediately when coming online
     this.syncPendingItems();
 
@@ -58,50 +58,80 @@ export class BackgroundSyncService {
     }
   }
 
-  private async syncPendingItems(): Promise<number> {
-    if (this.isSyncing || !NetworkStatus.isOnline()) {
+  private syncPromise: Promise<number> | null = null;
+
+  public async forceSync(): Promise<number> {
+    if (!NetworkStatus.isOnline()) {
+      toast.error('Sem conexão com a internet');
       return 0;
     }
 
+    // Se já estiver sincronizando, retorna a promessa atual
+    if (this.syncPromise) {
+      return this.syncPromise;
+    }
+
+    toast.info('Sincronizando dados...');
+    return this.syncPendingItems();
+  }
+
+  private async syncPendingItems(): Promise<number> {
+    // Evita múltiplas chamadas
+    if (!NetworkStatus.isOnline()) {
+      return 0;
+    }
+
+    // Se já existe uma promessa rodando, retorna ela (embora o forceSync já trate isso,
+    // o sync periódico chama este método direto)
+    if (this.syncPromise) {
+      return this.syncPromise;
+    }
+
     this.isSyncing = true;
-    let syncedCount = 0;
 
-    try {
-      const pendingItems = await SyncQueue.getPendingItems();
-      
-      if (pendingItems.length === 0) {
-        return 0;
-      }
+    // Cria nova promessa para esta execução
+    this.syncPromise = (async () => {
+      let syncedCount = 0;
+      try {
+        const pendingItems = await SyncQueue.getPendingItems();
 
-      console.log(`Syncing ${pendingItems.length} pending items...`);
+        if (pendingItems.length === 0) {
+          return 0;
+        }
 
-      for (const item of pendingItems) {
-        try {
-          await this.syncItem(item);
-          await SyncQueue.updateItemStatus(item.id, 'completed');
-          syncedCount++;
-        } catch (error) {
-          console.error(`Failed to sync item ${item.id}:`, error);
-          await SyncQueue.updateItemStatus(item.id, 'failed', item.attempts + 1);
-          
-          // If too many attempts, mark as failed permanently
-          if (item.attempts >= 3) {
-            await this.logSyncError(item, error as Error);
+        console.log(`Syncing ${pendingItems.length} pending items...`);
+
+        for (const item of pendingItems) {
+          try {
+            await this.syncItem(item);
+            await SyncQueue.updateItemStatus(item.id, 'completed');
+            syncedCount++;
+          } catch (error) {
+            console.error(`Failed to sync item ${item.id}:`, error);
+            await SyncQueue.updateItemStatus(item.id, 'failed', item.attempts + 1);
+            if (item.attempts >= 3) {
+              await this.logSyncError(item, error as Error);
+            }
           }
         }
-      }
 
-      if (syncedCount > 0) {
-        await SyncQueue.removeCompletedItems();
-        toast.success(`${syncedCount} sincronizações concluídas`);
-      }
+        if (syncedCount > 0) {
+          await SyncQueue.removeCompletedItems();
+          toast.success(`${syncedCount} sincronizações concluídas`);
+        }
 
-    } catch (error) {
-      console.error('Error during sync:', error);
-    } finally {
-      this.isSyncing = false;
-    }
-    return syncedCount;
+        return syncedCount;
+
+      } catch (error) {
+        console.error('Error during sync:', error);
+        return 0;
+      } finally {
+        this.isSyncing = false;
+        this.syncPromise = null; // Limpa a promessa ao terminar
+      }
+    })();
+
+    return this.syncPromise;
   }
 
   private async syncItem(item: any): Promise<void> {
@@ -286,16 +316,7 @@ export class BackgroundSyncService {
     }
   }
 
-  public async forceSync(): Promise<number> {
-    if (!NetworkStatus.isOnline()) {
-      toast.error('Sem conexão com a internet');
-      return 0;
-    }
 
-    toast.info('Sincronizando dados...');
-    const count = await this.syncPendingItems();
-    return count;
-  }
 
   public getSyncStatus(): { isSyncing: boolean; isOnline: boolean } {
     return {

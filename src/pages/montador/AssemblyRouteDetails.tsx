@@ -22,9 +22,11 @@ export default function AssemblyRouteDetails() {
             loadRouteDetails();
         }
 
-        const handleOnline = () => {
+        const handleOnline = async () => {
             setIsOnline(true);
-            backgroundSync.forceSync();
+            // Agora garantimos que o sync termina antes de recarregar
+            await backgroundSync.forceSync();
+            loadRouteDetails();
         };
         const handleOffline = () => setIsOnline(false);
 
