@@ -216,7 +216,26 @@ export default function OrderLookup() {
           .select('*, assembly_route:assembly_routes(*)')
           .eq('order_id', selectedOrder.id)
           .order('created_at', { ascending: false });
-        setAssemblies(apData as AssemblyInfo[] || []);
+
+        let finalAssemblies = (apData || []) as any[];
+
+        // Buscar nomes dos montadores manualmente
+        const asmIds = Array.from(new Set(finalAssemblies.map(a => a.assembly_route?.assembler_id).filter(Boolean)));
+        if (asmIds.length > 0) {
+          const { data: uData } = await supabase.from('users').select('id, name').in('id', asmIds);
+          const uMap: Record<string, string> = {};
+          (uData || []).forEach((u: any) => { uMap[u.id] = u.name; });
+
+          finalAssemblies = finalAssemblies.map(a => ({
+            ...a,
+            assembly_route: {
+              ...(a.assembly_route || {}),
+              assembler: { name: a.assembly_route?.assembler_id ? uMap[a.assembly_route.assembler_id] : null }
+            }
+          }));
+        }
+
+        setAssemblies(finalAssemblies as AssemblyInfo[]);
       } catch (err) {
         console.error(err);
         toast.error('Erro ao carregar detalhes do pedido');
@@ -403,7 +422,7 @@ export default function OrderLookup() {
                                   localStorage.setItem('rc_selectedRouteId', String(ro.route_id));
                                   localStorage.setItem('rc_showRouteModal', '1');
                                 }
-                              } catch {}
+                              } catch { }
                               window.open('/admin/routes', '_blank');
                             }}
                             className="text-xs px-2 py-1 rounded border border-gray-300 text-gray-700 hover:bg-gray-50 transition-colors"
@@ -432,8 +451,8 @@ export default function OrderLookup() {
                     {assemblies.map((ap) => (
                       <div key={ap.id} className="border border-gray-100 rounded-lg p-3">
                         <p className="text-sm font-semibold text-gray-900">{ap.assembly_route?.name || ap.assembly_route_id}</p>
-                        <p className="text-xs text-gray-500 capitalize">Status: {ap.status}</p>
-                        <p className="text-xs text-gray-500">Montador: {ap.assembly_route?.assembler_id || ap.assembly_route?.assembler?.name || '-'}</p>
+                        <p className="text-xs text-gray-500 capitalize">Status: {statusLabelMontagem[(ap.status || '').toLowerCase()] || ap.status}</p>
+                        <p className="text-xs text-gray-500">Montador: {ap.assembly_route?.assembler?.name || '-'}</p>
                         <p className="text-xs text-gray-500">Prazo: {formatDate(ap.assembly_route?.deadline)}</p>
                       </div>
                     ))}
