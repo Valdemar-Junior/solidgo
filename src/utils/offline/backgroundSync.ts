@@ -230,27 +230,37 @@ export class BackgroundSyncService {
 
       // Criar produtos de montagem se o pedido tiver itens com montagem
       try {
-        const { data: orderData } = await supabase
+        const { data: orderData, error: orderFetchError } = await supabase
           .from('orders')
           .select('id, items_json, customer_name, phone, address_json, order_id_erp')
           .eq('id', order_id)
           .single();
 
-        if (orderData && orderData.items_json) {
+        if (orderFetchError) {
+          console.warn('[BackgroundSync] Failed to fetch order for assembly:', orderFetchError);
+        } else if (orderData && orderData.items_json) {
+          console.log('[BackgroundSync] Checking assembly for order:', order_id, 'items:', orderData.items_json.length);
+
           const produtosComMontagem = orderData.items_json.filter((item: any) =>
             item.has_assembly === 'SIM' || item.has_assembly === 'sim' || item.possui_montagem === true || item.possui_montagem === 'true'
           );
 
+          console.log('[BackgroundSync] Products with assembly found:', produtosComMontagem.length);
+
           if (produtosComMontagem.length > 0) {
-            // Verificar se já existem registros para evitar duplicação
+            // Verificar se já existem registros para evitar duplicação (por SKU)
             const { data: existing } = await supabase
               .from('assembly_products')
-              .select('id')
-              .eq('order_id', order_id)
-              .is('assembly_route_id', null);
+              .select('id, product_sku')
+              .eq('order_id', order_id);
 
-            if (!existing || existing.length === 0) {
-              const assemblyProducts = produtosComMontagem.map((item: any) => ({
+            const existingSkus = new Set((existing || []).map((e: any) => e.product_sku));
+            const novosParaInserir = produtosComMontagem.filter((item: any) => !existingSkus.has(item.sku));
+
+            console.log('[BackgroundSync] Existing SKUs:', existingSkus.size, 'New to insert:', novosParaInserir.length);
+
+            if (novosParaInserir.length > 0) {
+              const assemblyProducts = novosParaInserir.map((item: any) => ({
                 order_id: orderData.id,
                 product_name: item.name,
                 product_sku: item.sku,
@@ -262,13 +272,18 @@ export class BackgroundSyncService {
                 updated_at: new Date().toISOString()
               }));
 
-              await supabase.from('assembly_products').insert(assemblyProducts);
-              console.log(`Created ${assemblyProducts.length} assembly products for order ${order_id}`);
+              const { error: insertError } = await supabase.from('assembly_products').insert(assemblyProducts);
+
+              if (insertError) {
+                console.error('[BackgroundSync] Failed to insert assembly_products:', insertError);
+              } else {
+                console.log(`[BackgroundSync] Created ${assemblyProducts.length} assembly products for order ${order_id}`);
+              }
             }
           }
         }
       } catch (assemblyErr) {
-        console.warn('Failed to create assembly products:', assemblyErr);
+        console.warn('[BackgroundSync] Failed to create assembly products:', assemblyErr);
       }
     } else if (action === 'returned') {
       const { error: orderError2 } = await supabase

@@ -59,7 +59,7 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
   const loadRouteOrders = async () => {
     try {
       setLoading(true);
-      
+
       // Load from Supabase if online
       if (isOnline) {
         const { data, error } = await supabase
@@ -96,7 +96,7 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
               }
             }
             */
-          } catch {}
+          } catch { }
         }
       } else {
         // Load from offline storage
@@ -173,10 +173,10 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
       openWazeWithLL(Number(enriched.lat), Number(enriched.lng));
       return;
     }
-    
+
     // Se nÃ£o tiver lat/lng, avisa e tenta buscar (mas sÃ³ se o usuÃ¡rio clicar, nÃ£o automÃ¡tico no load)
     toast.info('Buscando coordenadas...');
-    
+
     try {
       const svc = await fetch('/api/geocode-order', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ orderId: routeOrder.order_id, debug: true }) })
       if (svc.ok) {
@@ -194,10 +194,10 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
         openWazeWithLL(coords.lat, coords.lng);
         try {
           await supabase.from('orders').update({ address_json: { ...enriched, lat: coords.lat, lng: coords.lng } }).eq('id', routeOrder.order_id);
-        } catch {}
+        } catch { }
         return;
       }
-    } catch {}
+    } catch { }
     toast.error('NÃ£o foi possÃ­vel obter coordenadas para este endereÃ§o. Ajuste o endereÃ§o no admin e tente novamente.');
   };
 
@@ -224,57 +224,82 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
         if (error) throw error;
         toast.success('Pedido marcado como entregue!');
         setRouteOrders(prev => prev.map(ro => ro.id === order.id ? { ...ro, status: 'delivered', delivered_at: confirmation.local_timestamp } : ro));
-        
+
         // Verificar se o pedido tem produtos com montagem
         try {
-            const { data: orderData } = await supabase
+          const { data: orderData, error: orderError } = await supabase
             .from('orders')
             .select('id, items_json, customer_name, phone, address_json, order_id_erp')
             .eq('id', order.order_id)
             .single();
-          
-          if (orderData && orderData.items_json) {
-            const produtosComMontagem = orderData.items_json.filter((item: any) => 
+
+          if (orderError) {
+            console.error('Erro ao buscar pedido para montagem:', orderError);
+          } else if (orderData && orderData.items_json) {
+            console.log('[DeliveryMarking] Verificando montagem para pedido:', orderData.id, 'items:', orderData.items_json.length);
+
+            const produtosComMontagem = orderData.items_json.filter((item: any) =>
               item.has_assembly === 'SIM' || item.has_assembly === 'sim' || item.possui_montagem === true || item.possui_montagem === 'true'
             );
-            
-            if (produtosComMontagem.length > 0) {
-              // Criar registro de montagem pendente
-              const assemblyProducts = produtosComMontagem.map((item: any) => ({
-                order_id: orderData.id,
-                product_name: item.name,
-                product_sku: item.sku,
-                customer_name: orderData.customer_name,
-                customer_phone: orderData.phone,
-                installation_address: orderData.address_json,
-                status: 'pending', // MantÃ©m como pending para o admin atribuir
-                created_at: new Date().toISOString(),
-                updated_at: new Date().toISOString()
-              }));
-              
-              // Inserir produtos para montagem (sem assembly_route_id ainda)
-              await supabase.from('assembly_products').insert(assemblyProducts);
 
-              // Auditoria: pedido passou a requerer montagem
-              try {
-                const userId = (await supabase.auth.getUser()).data.user?.id || '';
-                await supabase.from('audit_logs').insert({
-                  entity_type: 'order',
-                  entity_id: orderData.id,
-                  action: 'assembly_required',
-                  details: { count: produtosComMontagem.length },
-                  user_id: userId,
-                  timestamp: new Date().toISOString(),
-                });
-              } catch {}
-              
-              toast.info(`Pedido ${orderData.order_id_erp || order.order.order_id_erp} tem ${produtosComMontagem.length} produto(s) com montagem!`);
+            console.log('[DeliveryMarking] Produtos com montagem encontrados:', produtosComMontagem.length);
+
+            if (produtosComMontagem.length > 0) {
+              // Verificar se já existem registros para evitar duplicação
+              const { data: existing } = await supabase
+                .from('assembly_products')
+                .select('id, product_sku')
+                .eq('order_id', orderData.id);
+
+              const existingSkus = new Set((existing || []).map((e: any) => e.product_sku));
+              const novosParaInserir = produtosComMontagem.filter((item: any) => !existingSkus.has(item.sku));
+
+              console.log('[DeliveryMarking] Já existentes:', existingSkus.size, 'Novos para inserir:', novosParaInserir.length);
+
+              if (novosParaInserir.length > 0) {
+                // Criar registro de montagem pendente
+                const assemblyProducts = novosParaInserir.map((item: any) => ({
+                  order_id: orderData.id,
+                  product_name: item.name,
+                  product_sku: item.sku,
+                  customer_name: orderData.customer_name,
+                  customer_phone: orderData.phone,
+                  installation_address: orderData.address_json,
+                  status: 'pending',
+                  created_at: new Date().toISOString(),
+                  updated_at: new Date().toISOString()
+                }));
+
+                // Inserir produtos para montagem (sem assembly_route_id ainda)
+                const { error: insertError } = await supabase.from('assembly_products').insert(assemblyProducts);
+
+                if (insertError) {
+                  console.error('[DeliveryMarking] Erro ao inserir assembly_products:', insertError);
+                } else {
+                  console.log('[DeliveryMarking] Inseridos', assemblyProducts.length, 'produtos de montagem com sucesso');
+
+                  // Auditoria: pedido passou a requerer montagem
+                  try {
+                    const userId = (await supabase.auth.getUser()).data.user?.id || '';
+                    await supabase.from('audit_logs').insert({
+                      entity_type: 'order',
+                      entity_id: orderData.id,
+                      action: 'assembly_required',
+                      details: { count: novosParaInserir.length },
+                      user_id: userId,
+                      timestamp: new Date().toISOString(),
+                    });
+                  } catch { }
+
+                  toast.info(`Pedido ${orderData.order_id_erp || order.order.order_id_erp} tem ${novosParaInserir.length} produto(s) com montagem!`);
+                }
+              }
             }
           }
         } catch (error) {
           console.error('Erro ao verificar montagem:', error);
         }
-        
+
         try {
           const { data } = await supabase
             .from('route_orders')
@@ -304,10 +329,10 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
                   timestamp: now,
                 }));
                 await supabase.from('audit_logs').insert(logs);
-              } catch {}
+              } catch { }
             }
           }
-        } catch {}
+        } catch { }
         if (onUpdated) onUpdated();
       } else {
         await SyncQueue.addItem({ type: 'delivery_confirmation', data: confirmation });
@@ -398,7 +423,7 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
                 .in('id', returnedIds);
             }
           }
-        } catch {}
+        } catch { }
         if (onUpdated) onUpdated();
       } else {
         // Queue for offline sync
@@ -417,8 +442,8 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
 
         // Update local state
         const returnReasonObj = returnReasons.find(r => r.reason === currentReason || r.reason === reasonValue);
-        const updatedOrders = routeOrders.map(ro => 
-          ro.id === order.id 
+        const updatedOrders = routeOrders.map(ro =>
+          ro.id === order.id
             ? { ...ro, status: 'returned' as const, returned_at: confirmation.local_timestamp, return_reason: returnReasonObj || null, return_notes: currentObs }
             : ro
         );
@@ -545,12 +570,10 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
   return (
     <div className="space-y-4">
       {/* Network Status */}
-      <div className={`p-3 rounded-lg flex items-center ${
-        isOnline ? 'bg-green-50 text-green-800' : 'bg-yellow-50 text-yellow-800'
-      }`}>
-        <div className={`w-2 h-2 rounded-full mr-2 ${
-          isOnline ? 'bg-green-500' : 'bg-yellow-500'
-        }`}></div>
+      <div className={`p-3 rounded-lg flex items-center ${isOnline ? 'bg-green-50 text-green-800' : 'bg-yellow-50 text-yellow-800'
+        }`}>
+        <div className={`w-2 h-2 rounded-full mr-2 ${isOnline ? 'bg-green-500' : 'bg-yellow-500'
+          }`}></div>
         <span className="text-sm font-medium">
           {isOnline ? 'Online' : 'Modo Offline'}
         </span>
@@ -600,8 +623,8 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
                   </div>
                   <div>Pedido: {order.order_id_erp}</div>
                   {(() => {
-                    const items:any[] = Array.isArray(order.items_json) ? order.items_json as any[] : [];
-                    const v = items.reduce((sum:number,it:any)=> sum + Number(it.total_price_real ?? it.total_price ?? (Number(it.unit_price_real ?? it.unit_price ?? 0) * Number(it.purchased_quantity ?? 1))), 0);
+                    const items: any[] = Array.isArray(order.items_json) ? order.items_json as any[] : [];
+                    const v = items.reduce((sum: number, it: any) => sum + Number(it.total_price_real ?? it.total_price ?? (Number(it.unit_price_real ?? it.unit_price ?? 0) * Number(it.purchased_quantity ?? 1))), 0);
                     return <div>Valor: R$ {v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>;
                   })()}
                   {(() => {
@@ -682,7 +705,7 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
                       <CheckCircle className="h-4 w-4 mr-1" />
                       Entregue
                     </button>
-                    
+
                     <button
                       onClick={() => markAsReturned(routeOrder)}
                       disabled={!selectedReason || processingIds.has(routeOrder.id)}
@@ -693,15 +716,15 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
                     </button>
                   </>
                 )}
-                
-                
+
+
               </div>
             </div>
           </div>
         );
       })}
 
-      
+
     </div>
   );
 }
