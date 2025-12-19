@@ -227,6 +227,49 @@ export class BackgroundSyncService {
         .update({ status: 'delivered', return_flag: false, last_return_reason: null, last_return_notes: null })
         .eq('id', order_id);
       if (orderError) console.warn('Failed to update order status:', orderError);
+
+      // Criar produtos de montagem se o pedido tiver itens com montagem
+      try {
+        const { data: orderData } = await supabase
+          .from('orders')
+          .select('id, items_json, customer_name, phone, address_json, order_id_erp')
+          .eq('id', order_id)
+          .single();
+
+        if (orderData && orderData.items_json) {
+          const produtosComMontagem = orderData.items_json.filter((item: any) =>
+            item.has_assembly === 'SIM' || item.has_assembly === 'sim' || item.possui_montagem === true || item.possui_montagem === 'true'
+          );
+
+          if (produtosComMontagem.length > 0) {
+            // Verificar se já existem registros para evitar duplicação
+            const { data: existing } = await supabase
+              .from('assembly_products')
+              .select('id')
+              .eq('order_id', order_id)
+              .is('assembly_route_id', null);
+
+            if (!existing || existing.length === 0) {
+              const assemblyProducts = produtosComMontagem.map((item: any) => ({
+                order_id: orderData.id,
+                product_name: item.name,
+                product_sku: item.sku,
+                customer_name: orderData.customer_name,
+                customer_phone: orderData.phone,
+                installation_address: orderData.address_json,
+                status: 'pending',
+                created_at: new Date().toISOString(),
+                updated_at: new Date().toISOString()
+              }));
+
+              await supabase.from('assembly_products').insert(assemblyProducts);
+              console.log(`Created ${assemblyProducts.length} assembly products for order ${order_id}`);
+            }
+          }
+        }
+      } catch (assemblyErr) {
+        console.warn('Failed to create assembly products:', assemblyErr);
+      }
     } else if (action === 'returned') {
       const { error: orderError2 } = await supabase
         .from('orders')
