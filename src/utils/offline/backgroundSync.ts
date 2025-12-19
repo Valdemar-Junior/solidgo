@@ -142,6 +142,12 @@ export class BackgroundSyncService {
       case 'assembly_update':
         await this.syncAssemblyUpdate(item.data);
         break;
+      case 'assembly_confirmation':
+        await this.syncAssemblyConfirmation(item.data);
+        break;
+      case 'assembly_return':
+        await this.syncAssemblyReturn(item.data);
+        break;
       case 'return_revert':
         await this.syncReturnRevert(item.data);
         break;
@@ -197,6 +203,50 @@ export class BackgroundSyncService {
         if (clones.length) await supabase.from('assembly_products').insert(clones);
       }
     }
+  }
+
+  // Sync assembly confirmation (marcado como montado) - usa item_id
+  private async syncAssemblyConfirmation(data: any): Promise<void> {
+    const { item_id, route_id, action, local_timestamp } = data || {};
+    console.log('[BackgroundSync] syncAssemblyConfirmation:', { item_id, route_id, action });
+
+    if (!item_id) throw new Error('Invalid assembly_confirmation payload: missing item_id');
+
+    if (action === 'completed') {
+      const { error } = await supabase
+        .from('assembly_products')
+        .update({ status: 'completed', completion_date: local_timestamp })
+        .eq('id', item_id);
+
+      if (error) {
+        console.error('[BackgroundSync] Error syncing assembly confirmation:', error);
+        throw error;
+      }
+      console.log('[BackgroundSync] Assembly confirmation synced successfully:', item_id);
+    }
+  }
+
+  // Sync assembly return (marcado como retorno) - usa item_id
+  private async syncAssemblyReturn(data: any): Promise<void> {
+    const { item_id, route_id, return_reason, observations, local_timestamp } = data || {};
+    console.log('[BackgroundSync] syncAssemblyReturn:', { item_id, route_id });
+
+    if (!item_id) throw new Error('Invalid assembly_return payload: missing item_id');
+
+    const { error } = await supabase
+      .from('assembly_products')
+      .update({
+        status: 'cancelled',
+        return_reason: return_reason || null,
+        observations: observations || null
+      })
+      .eq('id', item_id);
+
+    if (error) {
+      console.error('[BackgroundSync] Error syncing assembly return:', error);
+      throw error;
+    }
+    console.log('[BackgroundSync] Assembly return synced successfully:', item_id);
   }
 
   private async syncDeliveryConfirmation(data: any): Promise<void> {
