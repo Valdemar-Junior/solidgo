@@ -836,6 +836,57 @@ function RouteCreationContent() {
   const toggleOrderSelection = (orderId: string) => {
     const newSelected = new Set(selectedOrders);
     const wasSelected = newSelected.has(orderId);
+
+    // Logic for CPF Grouping (Only when selecting, not deselecting)
+    if (!wasSelected) {
+      const order = (orders || []).find((x: any) => String(x.id) === String(orderId));
+      const cpf = order?.customer_cpf ? String(order.customer_cpf).trim() : '';
+
+      if (cpf) {
+        // 1. Check for other pending orders with same CPF
+        const sameCpfPending = (orders || []).filter((o: any) =>
+          String(o.id) !== String(orderId) &&
+          String(o.customer_cpf || '').trim() === cpf &&
+          !newSelected.has(o.id)
+        );
+
+        if (sameCpfPending.length > 0) {
+          toast.message(`Este cliente possui mais ${sameCpfPending.length} pedido(s) pendente(s).`, {
+            description: 'Deseja selecionar todos juntos?',
+            action: {
+              label: 'Selecionar Todos',
+              onClick: () => {
+                const updated = new Set(selectedOrders);
+                updated.add(orderId);
+                sameCpfPending.forEach((o: any) => updated.add(String(o.id)));
+                setSelectedOrders(updated);
+                toast.success(`${sameCpfPending.length + 1} pedidos selecionados!`);
+              },
+            },
+            duration: 6000,
+          });
+        }
+
+        // 2. Check for active routes with this CPF
+        const existingRoutes: string[] = [];
+        for (const r of routesList) {
+          if (r.status === 'completed') continue;
+          // Check route orders
+          const hasCpf = r.route_orders?.some((ro: any) => String(ro.order?.customer_cpf || '').trim() === cpf);
+          if (hasCpf) {
+            existingRoutes.push(`${r.name} (${r.status === 'pending' ? 'Pendente' : 'Em Rota'})`);
+          }
+        }
+
+        if (existingRoutes.length > 0) {
+          toast.warning(`Atenção: Cliente com entregas em andamento!`, {
+            description: `Rotas: ${existingRoutes.join(', ')}. Considere agrupar.`,
+            duration: 8000,
+          });
+        }
+      }
+    }
+
     if (wasSelected) {
       newSelected.delete(orderId);
     } else {
@@ -963,7 +1014,7 @@ function RouteCreationContent() {
               <div>
                 <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
                   <MapPin className="h-6 w-6 text-blue-600" />
-                  Gestão de Rotas
+                  Gestão de Entrega
                 </h1>
                 <p className="text-sm text-gray-500">Crie, monitore e gerencie entregas e romaneios</p>
               </div>
@@ -2249,33 +2300,7 @@ function RouteCreationContent() {
                 <FileSpreadsheet className="h-4 w-4 mr-2" /> {nfLoading ? '...' : ((selectedRoute?.route_orders || []).every((ro: any) => !!ro.order?.danfe_base64) ? 'Imprimir Notas' : 'Gerar Notas')}
               </button>
 
-              {/* Complete Route Button */}
-              <button
-                onClick={async () => {
-                  try {
-                    const route = selectedRoute as any;
-                    const { data: roData, error: roErr } = await supabase.from('route_orders').select('order_id,status').eq('route_id', route.id);
-                    if (roErr) throw roErr;
-                    if (!roData || roData.length === 0) { toast.error('Nenhum pedido na rota'); return; }
-                    const allDelivered = (roData || []).every((ro: any) => ro.status === 'delivered');
-                    if (!allDelivered) { toast.error('Existem pedidos pendentes ou retornados'); return; }
-                    const { error: rErr } = await supabase.from('routes').update({ status: 'completed' }).eq('id', route.id);
-                    if (rErr) throw rErr;
-                    const orderIds = (roData || []).map((ro: any) => ro.order_id);
-                    await supabase.from('orders').update({ status: 'delivered' }).in('id', orderIds);
-                    const updated = { ...selectedRoute, status: 'completed' } as any;
-                    setSelectedRoute(updated);
-                    toast.success('Rota concluída');
-                    loadData();
-                  } catch (e) {
-                    toast.error('Falha ao concluir rota');
-                  }
-                }}
-                disabled={selectedRoute.status !== 'in_progress'}
-                className="flex items-center justify-center px-4 py-2 bg-gray-800 text-white hover:bg-gray-900 rounded-lg font-medium text-sm transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <CheckCircle2 className="h-4 w-4 mr-2" /> Concluir
-              </button>
+              {/* Complete Route Button REMOVED as per user request (auto-complete logic exists) */}
             </div>
 
             <div className="flex-1 overflow-auto p-6 bg-gray-50">
@@ -2307,7 +2332,7 @@ function RouteCreationContent() {
                                 ro.status === 'returned' ? 'bg-red-100 text-red-700' :
                                   'bg-yellow-100 text-yellow-700'
                                 }`}>
-                                {ro.status === 'delivered' ? 'Entregue' : ro.status === 'returned' ? 'Retornado' : 'Pendente'}
+                                {ro.status === 'delivered' ? `Entregue ${ro.delivered_at ? new Date(ro.delivered_at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''}` : ro.status === 'returned' ? 'Retornado' : 'Pendente'}
                               </span>
                               {ro.status === 'returned' && (returnReason || returnNotes) && (
                                 <span className="text-xs text-red-700" title={returnInfo}>

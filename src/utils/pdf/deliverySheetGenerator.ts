@@ -1,4 +1,4 @@
-import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
+import { PDFDocument, rgb, StandardFonts, degrees } from 'pdf-lib';
 import type { Route, RouteOrder, Order, DriverWithUser, Vehicle } from '../../types/database';
 
 export interface DeliverySheetData {
@@ -67,7 +67,7 @@ export class DeliverySheetGenerator {
         drawnLogoHeight = logoH;
         logoOk = true;
         break;
-      } catch {}
+      } catch { }
     }
     if (!logoOk) {
       this.drawText(page, 'Lojão dos Móveis', margin, y, { font: helveticaBoldFont, size: 16, color: { r: 0, g: 0, b: 0 } });
@@ -107,7 +107,7 @@ export class DeliverySheetGenerator {
       const order = data.orders.find(o => String(o.id) === oid);
       if (!order) continue;
       itemIndex++;
-      
+
       // Precompute dynamic heights to ensure the whole block fits including signatures
       const addr = order.address_json || { street: '', neighborhood: '', city: '', zip: '', complement: '' };
       const addressValuePre = `${addr.street}, ${addr.neighborhood}, ${addr.city} - CEP: ${addr.zip}${addr.complement ? ' • ' + addr.complement : ''}`;
@@ -383,6 +383,23 @@ export class DeliverySheetGenerator {
       color: { r: 0.5, g: 0.5, b: 0.5 },
     });
 
+    // Add Watermark if route is completed
+    if (data.route.status === 'completed') {
+      const pages = pdfDoc.getPages();
+      for (const p of pages) {
+        const { width, height } = p.getSize();
+        p.drawText('ROTA FINALIZADA', {
+          x: margin + 40,
+          y: height / 2 - 50,
+          size: 55,
+          font: helveticaBoldFont,
+          color: rgb(0.8, 0, 0),
+          opacity: 0.25,
+          rotate: degrees(45),
+        });
+      }
+    }
+
     return await pdfDoc.save();
   }
 
@@ -470,30 +487,30 @@ export class DeliverySheetGenerator {
     signatures: Map<string, string> // order_id -> base64 signature
   ): Promise<Uint8Array> {
     const pdfDoc = await PDFDocument.load(await this.generateDeliverySheet(data));
-    
+
     // Add signatures to the PDF
     // This is a simplified version - in a real implementation,
     // you would need to properly position the signatures on each order's signature box
-    
+
     return await pdfDoc.save();
   }
 
   static downloadPDF(pdfBytes: Uint8Array, filename: string): void {
-    const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+    const blob = new Blob([pdfBytes as any], { type: 'application/pdf' });
     const url = URL.createObjectURL(blob);
-    
+
     const link = document.createElement('a');
     link.href = url;
     link.download = filename;
     document.body.appendChild(link);
     link.click();
-    
+
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
   }
 
   static openPDFInNewTab(pdfBytes: Uint8Array): void {
-    const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+    const blob = new Blob([pdfBytes as any], { type: 'application/pdf' });
     const url = URL.createObjectURL(blob);
     const w = window.open(url, '_blank');
     if (!w) {
