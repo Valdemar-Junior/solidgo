@@ -1447,7 +1447,8 @@ function AssemblyManagementContent() {
                         setEditRouteObservations(r.observations || '');
                         setIsEditingRoute(true);
                       }}
-                      className="inline-flex items-center px-3 py-2 border border-yellow-200 shadow-sm text-sm font-medium rounded-lg text-yellow-700 bg-yellow-50 hover:bg-yellow-100"
+                      disabled={(selectedRoute as any).status === 'completed'}
+                      className="inline-flex items-center px-3 py-2 border border-yellow-200 shadow-sm text-sm font-medium rounded-lg text-yellow-700 bg-yellow-50 hover:bg-yellow-100 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       <Pencil className="h-4 w-4 mr-2" /> Editar
                     </button>
@@ -1554,8 +1555,8 @@ function AssemblyManagementContent() {
                         setWaSending(false);
                       }
                     }}
-                    disabled={waSending}
-                    className="inline-flex items-center px-3 py-2 border border-green-200 shadow-sm text-sm font-medium rounded-lg text-green-700 bg-green-50 hover:bg-green-100 disabled:opacity-50"
+                    disabled={waSending || (selectedRoute as any).status === 'completed'}
+                    className="inline-flex items-center px-3 py-2 border border-green-200 shadow-sm text-sm font-medium rounded-lg text-green-700 bg-green-50 hover:bg-green-100 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     Enviar cliente
                   </button>
@@ -1625,8 +1626,8 @@ function AssemblyManagementContent() {
                         setGroupSending(false);
                       }
                     }}
-                    disabled={groupSending}
-                    className="inline-flex items-center px-3 py-2 border border-green-200 shadow-sm text-sm font-medium rounded-lg text-green-700 bg-green-50 hover:bg-green-100 disabled:opacity-50"
+                    disabled={groupSending || (selectedRoute as any).status === 'completed'}
+                    className="inline-flex items-center px-3 py-2 border border-green-200 shadow-sm text-sm font-medium rounded-lg text-green-700 bg-green-50 hover:bg-green-100 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     Enviar grupo
                   </button>
