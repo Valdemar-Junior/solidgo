@@ -20,35 +20,20 @@ export default function AssemblyDashboard() {
     try {
       setLoading(true);
 
-      // Buscar produtos atribuídos ao montador
-      const { data: prodData, error } = await supabase
-        .from('assembly_products')
+      // Buscar rotas onde o montador está atribuído (assembler_id)
+      const { data: routesData, error } = await supabase
+        .from('assembly_routes')
         .select(`
-          assembly_route_id,
-          route:assembly_route_id (
-              *,
-              vehicle:vehicles!vehicle_id(*)
-          )
+          *,
+          vehicle:vehicles!vehicle_id(*)
         `)
-        .eq('installer_id', user.id);
+        .eq('assembler_id', user.id)
+        .in('status', ['pending', 'in_progress']) // Mostrar rotas pendentes e em progresso
+        .order('created_at', { ascending: false });
 
       if (error) throw error;
 
-      // Agrupar rotas únicas
-      const routeMap = new Map();
-      if (prodData) {
-        prodData.forEach((item: any) => {
-          if (item.route && !routeMap.has(item.route.id)) {
-            routeMap.set(item.route.id, item.route);
-          }
-        });
-      }
-
-      const uniqueRoutes = Array.from(routeMap.values());
-      // Ordenar por data (mais recente primeiro)
-      uniqueRoutes.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-
-      setRoutes(uniqueRoutes);
+      setRoutes(routesData || []);
 
     } catch (error) {
       console.error('Error loading assembly routes:', error);
