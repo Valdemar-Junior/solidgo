@@ -978,9 +978,13 @@ function RouteCreationContent() {
       // Reload data
       loadData(false);
 
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error creating route:', error);
-      toast.error('Erro ao criar rota');
+      if (error?.code === '23505' || error?.status === 409) {
+        toast.error('Já existe uma rota com este nome. Por favor, escolha outro.');
+      } else {
+        toast.error('Erro ao criar rota: ' + (error?.message || 'Erro desconhecido'));
+      }
     } finally {
       setSaving(false);
     }
