@@ -12,34 +12,46 @@
       showError('Promessa Rejeitada: ' + event.reason);
     };
 
-    function showError(text) {
+
+    // CONSOLE INTERCEPTOR
+    const originalLog = console.log;
+    const originalWarn = console.warn;
+    const originalError = console.error;
+
+    function appendLog(type, args) {
+      const text = args.map(a => (typeof a === 'object' ? JSON.stringify(a) : String(a))).join(' ');
+      showError('[' + type + '] ' + text, true);
+    }
+
+    console.log = function (...args) { originalLog.apply(console, args); appendLog('LOG', args); };
+    console.warn = function (...args) { originalWarn.apply(console, args); appendLog('WARN', args); };
+    console.error = function (...args) { originalError.apply(console, args); appendLog('ERR', args); };
+
+    function showError(text, append = false) {
       const el = document.getElementById('debug-overlay') || document.createElement('div');
-      el.id = 'debug-overlay';
-      el.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;z-index:99999;background:white;color:red;padding:20px;overflow:auto;font-family:monospace;font-size:12px;';
+      if (!document.getElementById('debug-overlay')) {
+        el.id = 'debug-overlay';
+        el.style.cssText = 'position:fixed;top:40px;left:0;width:100%;height:calc(100% - 40px);z-index:99998;background:rgba(255,255,255,0.9);color:black;padding:10px;overflow:auto;font-family:monospace;font-size:10px;pointer-events:none;';
+        document.body.appendChild(el);
 
-      const content = document.createElement('pre');
-      content.textContent = text;
+        // Add clear button separately to be clickable
+        const btn = document.createElement('button');
+        btn.textContent = 'LIMPAR DADOS';
+        btn.style.cssText = 'position:fixed;top:45px;right:10px;z-index:99999;background:red;color:white;padding:5px;';
+        btn.onclick = function () {
+          localStorage.clear(); sessionStorage.clear();
+          navigator.serviceWorker.getRegistrations().then(r => r.forEach(i => i.unregister()));
+          window.location.reload();
+        };
+        document.body.appendChild(btn);
+      }
 
-      const btn = document.createElement('button');
-      btn.textContent = 'LIMPAR CACHE & RESETAR APP';
-      btn.style.cssText = 'padding:15px;background:red;color:white;border:none;border-radius:8px;margin-bottom:20px;width:100%;font-weight:bold;font-size:14px;';
-      btn.onclick = function () {
-        navigator.serviceWorker.getRegistrations().then(function (registrations) {
-          for (let registration of registrations) { registration.unregister(); }
-        });
-        localStorage.clear();
-        sessionStorage.clear();
-        caches.keys().then(function (names) {
-          for (let name of names) caches.delete(name);
-        });
-        alert('Limpeza concluída. O app será recarregado.');
-        window.location.reload();
-      };
-
-      el.innerHTML = '';
-      el.appendChild(btn);
-      el.appendChild(content);
-      document.body.appendChild(el);
+      const line = document.createElement('div');
+      line.style.borderBottom = '1px solid #ccc';
+      line.style.padding = '2px 0';
+      if (text.includes('ERR')) line.style.color = 'red';
+      line.textContent = text;
+      el.appendChild(line);
     }
   </script>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
