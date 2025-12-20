@@ -251,8 +251,13 @@ export default function OrderLookup() {
     const latestRO = routeOrders[0];
     const routeStatus = latestRO?.route?.status;
     const roStatus = latestRO?.status;
+    const routeName = String(latestRO?.route?.name || '');
+
     let entrega = base;
-    if (roStatus === 'returned' || selectedOrder?.return_flag) entrega = 'returned';
+    if (routeName.startsWith('RETIRADA')) {
+      entrega = 'pickup';
+    }
+    else if (roStatus === 'returned' || selectedOrder?.return_flag) entrega = 'returned';
     else if (routeStatus === 'in_progress') entrega = 'in_progress';
     else if (roStatus === 'delivered') entrega = 'delivered';
     else if (routeStatus === 'pending') entrega = 'pending';
@@ -278,6 +283,7 @@ export default function OrderLookup() {
     in_progress: 'Em rota',
     delivered: 'Entregue',
     returned: 'Retornado',
+    pickup: 'Retirado em Loja',
   };
 
   const statusLabelMontagem: Record<string, string> = {
@@ -377,7 +383,7 @@ export default function OrderLookup() {
                   )}
                   {(() => {
                     const raw = selectedOrder.raw_json || {};
-                    const prev = raw.previsao_entrega || selectedOrder.delivery_date || selectedOrder.previsao_entrega;
+                    const prev = raw.previsao_entrega || selectedOrder.delivery_date || (selectedOrder as any).previsao_entrega;
                     if (!prev) return null;
                     return <span className="px-2 py-1 rounded-full bg-blue-50 text-blue-700 border border-blue-200">Prev. {formatDate(prev)}</span>;
                   })()}

@@ -33,7 +33,8 @@ import {
   ClipboardCheck,
   FilePlus,
   RefreshCw,
-  Wrench
+  Wrench,
+  Store
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { DeliverySheetGenerator } from '../../utils/pdf/deliverySheetGenerator';
@@ -173,6 +174,25 @@ function RouteCreationContent() {
   const showCreateModalRef = useRef<boolean>(false);
   const [mixedConfirmOrders, setMixedConfirmOrders] = useState<Array<{ id: string, pedido: string, otherLocs: string[] }>>([]);
   const [mixedConfirmAction, setMixedConfirmAction] = useState<'create' | 'add' | 'none'>('none');
+
+  // Tabs State
+  const [activeRoutesTab, setActiveRoutesTab] = useState<'deliveries' | 'pickups'>('deliveries');
+
+  // Pickup Modal State
+  const [showPickupModal, setShowPickupModal] = useState(false);
+  const [pickupConferente, setPickupConferente] = useState(''); // Conferente ID for pickup
+  const [pickupObservations, setPickupObservations] = useState('');
+  const [pickupSaving, setPickupSaving] = useState(false);
+
+  // Motorista placeholder para retiradas - não será mostrado na UI
+  const PICKUP_PLACEHOLDER_DRIVER_ID = '6bb1d41b-0a88-4468-8902-c42402fc0aeb';
+
+  const filteredRoutesList = useMemo(() => {
+    return routesList.filter(r => {
+      const isPkp = String(r.name || '').startsWith('RETIRADA');
+      return activeRoutesTab === 'pickups' ? isPkp : !isPkp;
+    });
+  }, [routesList, activeRoutesTab]);
 
   // --- SINGLE LAUNCH IMPORT (TROCAS/ASSISTENCIAS) ---
   const [showLaunchModal, setShowLaunchModal] = useState(false);
@@ -772,6 +792,7 @@ function RouteCreationContent() {
         driversRes,
         conferentesRes,
         routesRes,
+        activeRouteOrdersRes,
       ] = await Promise.all([
         // Orders (pending or returned)
         supabase
@@ -811,17 +832,34 @@ function RouteCreationContent() {
           .select('*, vehicle:vehicles!vehicle_id(id,model,plate), route_orders:route_orders(*, order:orders!order_id(*)), conferences:route_conferences!route_id(id,route_id,status,result_ok,finished_at,created_at,resolved_at,resolved_by,resolution,summary)')
           .order('created_at', { ascending: false })
           .limit(50),
+
+        // Active route orders (SAFETY: prevent re-routing orders that are in active routes)
+        supabase
+          .from('route_orders')
+          .select('order_id, route:routes!inner(status)')
+          .neq('route.status', 'completed'),
       ]);
 
-      // Process orders - normalize return flags
+      // Identify locked orders (belonging to active routes)
+      const lockedOrderIds = new Set<string>();
+      if (activeRouteOrdersRes.data) {
+        activeRouteOrdersRes.data.forEach((ro: any) => {
+          if (ro.order_id) lockedOrderIds.add(String(ro.order_id));
+        });
+      }
+
+      // Process orders - normalize return flags and FILTER LOCKED ORDERS
       let processedOrders: Order[] = [];
       if (ordersRes.data) {
-        processedOrders = (ordersRes.data as Order[]).map((o: any) => {
-          if (String(o.status) === 'returned' && !o.return_flag) {
-            return { ...o, return_flag: true };
-          }
-          return o;
-        });
+        const rawOrders = ordersRes.data as Order[];
+        processedOrders = rawOrders
+          .filter(o => !lockedOrderIds.has(o.id)) // SAFETY FILTER
+          .map((o: any) => {
+            if (String(o.status) === 'returned' && !o.return_flag) {
+              return { ...o, return_flag: true };
+            }
+            return o;
+          });
         setOrders(processedOrders);
       }
 
@@ -963,11 +1001,15 @@ function RouteCreationContent() {
         setRoutesList(processedRoutes);
 
         // Handle selected route restoration from localStorage
+        // BUT: Don't overwrite if modal is already open to prevent background refresh issues
         if (selectedRouteIdRef.current) {
           const found = processedRoutes.find(r => String(r.id) === String(selectedRouteIdRef.current));
           if (found) {
-            setSelectedRoute(found);
-            if (showRouteModalRef.current) {
+            // Only set if modal is not currently open (to avoid overwriting user's current view)
+            if (!showRouteModal) {
+              setSelectedRoute(found);
+            }
+            if (showRouteModalRef.current && !showRouteModal) {
               setShowRouteModal(true);
             }
           }
@@ -1053,6 +1095,86 @@ function RouteCreationContent() {
       }
     }
     setSelectedOrders(newSelected);
+  };
+
+
+
+  const createPickup = async () => {
+    if (selectedOrders.size === 0) {
+      toast.error('Selecione pelo menos um pedido para retirada.');
+      return;
+    }
+    if (!pickupConferente) {
+      toast.error('Selecione o conferente responsável pela entrega.');
+      return;
+    }
+
+    // Buscar o nome do conferente selecionado
+    const conferenteInfo = conferentes.find(c => c.id === pickupConferente);
+    const conferenteName = conferenteInfo?.name || 'Não informado';
+
+    setPickupSaving(true);
+    try {
+      const name = `RETIRADA - ${new Date().toLocaleString('pt-BR')}`;
+      const { data: routeData, error: routeError } = await supabase
+        .from('routes')
+        .insert({
+          name,
+          driver_id: PICKUP_PLACEHOLDER_DRIVER_ID, // Motorista placeholder
+          conferente: conferenteName, // Responsável pela entrega
+          status: 'pending',
+          observations: `Retirada em Loja.\nResponsável: ${conferenteName}\nObs: ${pickupObservations}`.trim()
+        })
+        .select()
+        .single();
+
+      if (routeError) throw routeError;
+
+      const orderIds = Array.from(selectedOrders);
+      // Create route_orders with 'pending' status
+      const routeOrdersPayload = orderIds.map((oid, idx) => ({
+        route_id: routeData.id,
+        order_id: oid,
+        sequence: idx + 1,
+        status: 'pending',
+        delivery_observations: `Retirada em Loja. Resp: ${conferenteName}. ${pickupObservations}`.trim().slice(0, 500)
+      }));
+
+      const { error: roError } = await supabase.from('route_orders').insert(routeOrdersPayload);
+      if (roError) throw roError;
+
+      // Update orders to 'assigned'
+      const { error: ordError } = await supabase.from('orders').update({ status: 'assigned' }).in('id', orderIds);
+      if (ordError) throw ordError;
+
+      toast.success('Retirada registrada!');
+      setSelectedOrders(new Set());
+      setPickupConferente('');
+      setPickupObservations('');
+      setShowPickupModal(false);
+
+      await loadData(false);
+
+      setActiveRoutesTab('pickups');
+
+      // Attempt to set route for modal
+      const { data: fullRoute } = await supabase
+        .from('routes')
+        .select('*, route_orders(*, order:orders(*)), driver:drivers(*, user:users(*)), vehicle:vehicles(*)')
+        .eq('id', routeData.id)
+        .single();
+
+      if (fullRoute) {
+        setSelectedRoute(fullRoute as any);
+        setShowRouteModal(true);
+      }
+
+    } catch (error: any) {
+      console.error('Error creating pickup:', error);
+      toast.error('Erro: ' + error.message);
+    } finally {
+      setPickupSaving(false);
+    }
   };
 
   const createRoute = async (forceProceed: boolean = false) => {
@@ -1193,30 +1315,6 @@ function RouteCreationContent() {
               >
                 <Filter className="h-4 w-4 mr-2" />
                 Filtros
-              </button>
-              <button
-                onClick={() => setShowLaunchModal(true)}
-                className="inline-flex items-center px-4 py-2 rounded-lg border border-orange-200 text-orange-700 bg-orange-50 hover:bg-orange-100 text-sm font-medium transition-colors"
-                title="Lançar Troca ou Assistência Avulsa"
-              >
-                <FilePlus className="h-4 w-4 mr-2" />
-                Lançamento Avulso
-              </button>
-              <button
-                onClick={() => loadData(false)}
-                disabled={loading}
-                className="inline-flex items-center px-4 py-2 rounded-lg border text-sm font-medium transition-colors bg-white border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50"
-              >
-                <RefreshCcw className={`h-4 w-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
-                Recarregar
-              </button>
-              <button
-                onClick={() => { showCreateModalRef.current = true; localStorage.setItem('rc_showCreateModal', '1'); setShowCreateModal(true); }}
-                disabled={selectedOrders.size === 0}
-                className="inline-flex items-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm transition-all transform active:scale-95"
-              >
-                <Plus className="h-4 w-4 mr-2" />
-                Criar Rota ({selectedOrders.size})
               </button>
             </div>
           </div>
@@ -1401,6 +1499,46 @@ function RouteCreationContent() {
             </div>
           </div>
         )}
+
+        {/* Action Bar */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <button
+            onClick={() => setShowLaunchModal(true)}
+            className="flex items-center justify-center px-4 py-3 rounded-xl border border-orange-200 text-orange-700 bg-orange-50 hover:bg-orange-100 font-bold transition-all shadow-sm hover:shadow"
+            title="Lançar Troca ou Assistência Avulsa"
+          >
+            <FilePlus className="h-5 w-5 mr-2" />
+            Lançamento Avulso
+          </button>
+
+          <button
+            onClick={() => setShowPickupModal(true)}
+            disabled={selectedOrders.size === 0}
+            className="flex items-center justify-center px-4 py-3 rounded-xl border border-purple-200 text-purple-700 bg-purple-50 hover:bg-purple-100 font-bold transition-all shadow-sm hover:shadow disabled:opacity-60 disabled:cursor-not-allowed disabled:shadow-none"
+            title="Registrar Retirada em Loja"
+          >
+            <Store className="h-5 w-5 mr-2" />
+            Registrar Retirada
+          </button>
+
+          <button
+            onClick={() => loadData(false)}
+            disabled={loading}
+            className="flex items-center justify-center px-4 py-3 rounded-xl border border-gray-200 text-gray-700 bg-white hover:bg-gray-50 font-bold transition-all shadow-sm hover:shadow disabled:opacity-60 disabled:cursor-not-allowed"
+          >
+            <RefreshCcw className={`h-5 w-5 mr-2 ${loading ? 'animate-spin' : ''}`} />
+            Recarregar Dados
+          </button>
+
+          <button
+            onClick={() => { showCreateModalRef.current = true; localStorage.setItem('rc_showCreateModal', '1'); setShowCreateModal(true); }}
+            disabled={selectedOrders.size === 0}
+            className="flex items-center justify-center px-4 py-3 rounded-xl bg-blue-600 text-white hover:bg-blue-700 font-bold transition-all shadow-sm hover:shadow disabled:opacity-60 disabled:cursor-not-allowed disabled:shadow-none transform active:scale-95"
+          >
+            <Plus className="h-5 w-5 mr-2" />
+            Criar Rota ({selectedOrders.size})
+          </button>
+        </div>
 
         {/* Orders Selection Card */}
         <div ref={ordersSectionRef} className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
@@ -1683,27 +1821,50 @@ function RouteCreationContent() {
 
         {/* Routes List Section */}
         <div ref={routesSectionRef} className="space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
-              <Truck className="h-6 w-6 text-gray-700" />
-              Romaneios Ativos
-            </h2>
-            <span className="bg-gray-100 text-gray-600 px-3 py-1 rounded-full text-xs font-bold">
-              {routesList.length}
-            </span>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-gray-200 pb-2">
+            <div className="flex items-center gap-1 bg-gray-100/80 p-1 rounded-xl">
+              <button
+                onClick={() => setActiveRoutesTab('deliveries')}
+                className={`px-4 py-2 rounded-lg text-sm font-bold transition-all flex items-center gap-2 ${activeRoutesTab === 'deliveries' ? 'bg-white shadow-sm text-blue-700' : 'text-gray-500 hover:text-gray-700'}`}
+              >
+                <Truck className="h-4 w-4" />
+                Rotas de Entrega
+              </button>
+              <button
+                onClick={() => setActiveRoutesTab('pickups')}
+                className={`px-4 py-2 rounded-lg text-sm font-bold transition-all flex items-center gap-2 ${activeRoutesTab === 'pickups' ? 'bg-white shadow-sm text-purple-700' : 'text-gray-500 hover:text-gray-700'}`}
+              >
+                <Store className="h-4 w-4" />
+                Retiradas em Loja
+              </button>
+            </div>
+
+            {(() => {
+              const filtered = routesList.filter(r => {
+                const isPkp = String(r.name || '').startsWith('RETIRADA');
+                return activeRoutesTab === 'pickups' ? isPkp : !isPkp;
+              });
+              return (
+                <span className="bg-gray-100 text-gray-600 px-3 py-1 rounded-full text-xs font-bold self-start sm:self-center">
+                  {filtered.length} registros
+                </span>
+              );
+            })()}
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
-            {routesList.length === 0 ? (
+            {filteredRoutesList.length === 0 ? (
               <div className="col-span-full bg-white rounded-xl border border-dashed border-gray-300 p-12 text-center">
                 <div className="mx-auto w-16 h-16 bg-gray-50 rounded-full flex items-center justify-center mb-4">
-                  <Truck className="h-8 w-8 text-gray-400" />
+                  {activeRoutesTab === 'pickups' ? <Store className="h-8 w-8 text-gray-400" /> : <Truck className="h-8 w-8 text-gray-400" />}
                 </div>
-                <h3 className="text-lg font-medium text-gray-900">Nenhuma rota encontrada</h3>
-                <p className="text-gray-500">Crie sua primeira rota selecionando pedidos acima.</p>
+                <h3 className="text-lg font-medium text-gray-900">Nenhum registro encontrado</h3>
+                <p className="text-gray-500">
+                  {activeRoutesTab === 'pickups' ? 'Nenhuma retirada registrada recentemente.' : 'Crie sua primeira rota selecionando pedidos acima.'}
+                </p>
               </div>
             ) : (
-              routesList.map(route => {
+              filteredRoutesList.map(route => {
                 const total = route.route_orders?.length || 0;
                 const pending = route.route_orders?.filter(r => r.status === 'pending').length || 0;
                 const delivered = route.route_orders?.filter(r => r.status === 'delivered').length || 0;
@@ -1754,18 +1915,38 @@ function RouteCreationContent() {
                       </div>
 
                       <div className="space-y-3 mb-6">
-                        <div className="flex items-center text-sm text-gray-600">
-                          <User className="h-4 w-4 mr-2 text-gray-400" />
-                          {(route as any)?.driver_name || (route as any)?.driver?.user?.name || (route as any)?.driver?.name || 'Sem motorista'}
-                        </div>
-                        <div className="flex items-center text-sm text-gray-600">
-                          <ClipboardList className="h-4 w-4 mr-2 text-gray-400" />
-                          {String((route as any)?.conferente || '').trim() || 'Sem conferente'}
-                        </div>
-                        <div className="flex items-center text-sm text-gray-600">
-                          <Truck className="h-4 w-4 mr-2 text-gray-400" />
-                          {route.vehicle ? `${route.vehicle.model} (${route.vehicle.plate})` : 'Sem veículo'}
-                        </div>
+                        {/* Para retiradas: mostrar conferente como Responsável, esconder motorista e veículo */}
+                        {(() => {
+                          const isPickupRoute = String(route.name || '').startsWith('RETIRADA');
+
+                          if (isPickupRoute) {
+                            return (
+                              <div className="flex items-center text-sm text-gray-600">
+                                <ClipboardList className="h-4 w-4 mr-2 text-gray-400" />
+                                <span className="font-medium text-purple-700">Responsável:</span>&nbsp;
+                                {String((route as any)?.conferente || '').trim() || 'Não informado'}
+                              </div>
+                            );
+                          }
+
+                          // Para rotas normais de entrega
+                          return (
+                            <>
+                              <div className="flex items-center text-sm text-gray-600">
+                                <User className="h-4 w-4 mr-2 text-gray-400" />
+                                {(route as any)?.driver_name || (route as any)?.driver?.user?.name || (route as any)?.driver?.name || 'Sem motorista'}
+                              </div>
+                              <div className="flex items-center text-sm text-gray-600">
+                                <ClipboardList className="h-4 w-4 mr-2 text-gray-400" />
+                                {String((route as any)?.conferente || '').trim() || 'Sem conferente'}
+                              </div>
+                              <div className="flex items-center text-sm text-gray-600">
+                                <Truck className="h-4 w-4 mr-2 text-gray-400" />
+                                {route.vehicle ? `${route.vehicle.model} (${route.vehicle.plate})` : 'Sem veículo'}
+                              </div>
+                            </>
+                          );
+                        })()}
                       </div>
 
                       {/* Mini Stats */}
@@ -1986,6 +2167,126 @@ function RouteCreationContent() {
                     </button>
                   </div>
                 </form>
+              </div>
+            </div>
+          </div>
+        )
+      }
+
+      {/* --- PICKUP MODAL --- */}
+      {
+        showPickupModal && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden">
+              <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
+                <h3 className="text-lg font-bold text-gray-900 flex items-center gap-2">
+                  <Store className="h-5 w-5 text-purple-600" />
+                  Registrar Retirada
+                </h3>
+                <button onClick={() => setShowPickupModal(false)} className="text-gray-400 hover:text-gray-600"><X className="h-5 w-5" /></button>
+              </div>
+              <div className="p-6 space-y-4">
+                <p className="text-sm text-gray-600 bg-purple-50 p-3 rounded-lg border border-purple-100">
+                  Você está prestes a marcar <strong>{selectedOrders.size}</strong> pedido(s) como <strong>RETIRADO</strong>.
+                  Isso baixará os pedidos do sistema imediatamente e gerará um comprovante.
+                </p>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Responsável pela Entrega *</label>
+                  <select
+                    value={pickupConferente}
+                    onChange={e => setPickupConferente(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 outline-none bg-white"
+                    autoFocus
+                  >
+                    <option value="">Selecione o conferente...</option>
+                    {conferentes.map(c => (
+                      <option key={c.id} value={c.id}>{c.name}</option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-gray-500 mt-1">Quem entregou a mercadoria ao cliente na loja</p>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Observações (Opcional)</label>
+                  <textarea
+                    value={pickupObservations}
+                    onChange={e => setPickupObservations(e.target.value)}
+                    placeholder="Ex: Cliente conferiu mercadoria no local."
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 outline-none h-24 resize-none"
+                  />
+                </div>
+              </div>
+              <div className="px-6 py-4 border-t border-gray-100 bg-gray-50 flex justify-end gap-3">
+                <button onClick={() => setShowPickupModal(false)} className="px-4 py-2 rounded-lg border border-gray-300 text-gray-700 font-medium hover:bg-white transition-colors">Cancelar</button>
+                <button
+                  onClick={createPickup}
+                  disabled={pickupSaving}
+                  className="px-6 py-2 rounded-lg bg-purple-600 text-white font-bold hover:bg-purple-700 shadow-md transition-all flex items-center gap-2"
+                >
+                  {pickupSaving && <RefreshCw className="animate-spin h-4 w-4" />}
+                  Confirmar Retirada
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      }
+
+      {/* --- PICKUP MODAL --- */}
+      {
+        showPickupModal && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden">
+              <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
+                <h3 className="text-lg font-bold text-gray-900 flex items-center gap-2">
+                  <Store className="h-5 w-5 text-purple-600" />
+                  Registrar Retirada
+                </h3>
+                <button onClick={() => setShowPickupModal(false)} className="text-gray-400 hover:text-gray-600"><X className="h-5 w-5" /></button>
+              </div>
+              <div className="p-6 space-y-4">
+                <p className="text-sm text-gray-600 bg-purple-50 p-3 rounded-lg border border-purple-100">
+                  Você está prestes a marcar <strong>{selectedOrders.size}</strong> pedido(s) como <strong>RETIRADO</strong>.
+                  Isso baixará os pedidos do sistema imediatamente e gerará um comprovante.
+                </p>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Responsável pela Entrega *</label>
+                  <select
+                    value={pickupConferente}
+                    onChange={e => setPickupConferente(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 outline-none bg-white"
+                    autoFocus
+                  >
+                    <option value="">Selecione o conferente...</option>
+                    {conferentes.map(c => (
+                      <option key={c.id} value={c.id}>{c.name}</option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-gray-500 mt-1">Quem entregou a mercadoria ao cliente na loja</p>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Observações (Opcional)</label>
+                  <textarea
+                    value={pickupObservations}
+                    onChange={e => setPickupObservations(e.target.value)}
+                    placeholder="Ex: Cliente conferiu mercadoria no local."
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 outline-none h-24 resize-none"
+                  />
+                </div>
+              </div>
+              <div className="px-6 py-4 border-t border-gray-100 bg-gray-50 flex justify-end gap-3">
+                <button onClick={() => setShowPickupModal(false)} className="px-4 py-2 rounded-lg border border-gray-300 text-gray-700 font-medium hover:bg-white transition-colors">Cancelar</button>
+                <button
+                  onClick={createPickup}
+                  disabled={pickupSaving}
+                  className="px-6 py-2 rounded-lg bg-purple-600 text-white font-bold hover:bg-purple-700 shadow-md transition-all flex items-center gap-2"
+                >
+                  {pickupSaving && <RefreshCw className="animate-spin h-4 w-4" />}
+                  Confirmar Retirada
+                </button>
               </div>
             </div>
           </div>
@@ -2231,8 +2532,11 @@ function RouteCreationContent() {
                 <div>
                   <h2 className="text-xl font-bold text-gray-900">{selectedRoute.name}</h2>
                   <p className="text-sm text-gray-500">
-                    {selectedRoute.status === 'pending' ? 'Em Separação' : selectedRoute.status === 'in_progress' ? 'Em Rota' : 'Concluída'}
-                    • {(selectedRoute.driver as any)?.user?.name || selectedRoute.driver?.name}
+                    {selectedRoute.status === 'pending' ? 'Em Separação' : selectedRoute.status === 'in_progress' ? 'Em Rota' : (String(selectedRoute.name || '').startsWith('RETIRADA') ? 'Retirado' : 'Concluída')}
+                    {String(selectedRoute.name || '').startsWith('RETIRADA')
+                      ? ` • Responsável: ${selectedRoute.conferente || 'Não informado'}`
+                      : ` • ${(selectedRoute.driver as any)?.user?.name || selectedRoute.driver?.name || 'Sem motorista'}`
+                    }
                   </p>
                 </div>
                 <button onClick={() => { setShowRouteModal(false); showRouteModalRef.current = false; localStorage.setItem('rc_showRouteModal', '0'); }} className="p-2 hover:bg-gray-200 rounded-full text-gray-500"><X className="h-6 w-6" /></button>
@@ -2240,188 +2544,267 @@ function RouteCreationContent() {
 
               {/* Toolbar */}
               <div className="px-6 py-3 border-b border-gray-100 bg-white grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-                {/* Add Orders Button */}
-                {selectedRoute?.status === 'pending' && (
-                  <button
-                    onClick={async () => {
-                      try {
-                        const route = selectedRoute as any;
-                        const { data: roData } = await supabase.from('route_orders').select('order_id,sequence,id').eq('route_id', route.id).order('sequence');
-                        const existingIds = new Set<string>((roData || []).map((r: any) => String(r.order_id)));
-                        const toAddIds = Array.from(selectedOrders).filter((id) => !existingIds.has(String(id)));
-                        if (toAddIds.length === 0) { toast.info('Nenhum novo pedido selecionado'); return; }
-                        const startSeq = (roData && roData.length > 0) ? Math.max(...(roData || []).map((r: any) => Number(r.sequence || 0))) + 1 : 1;
-                        const rows = toAddIds.map((orderId, idx) => ({ route_id: route.id, order_id: orderId, sequence: startSeq + idx, status: 'pending' }));
-                        const { error: insErr } = await supabase.from('route_orders').insert(rows);
-                        if (insErr) throw insErr;
-                        const { error: updErr } = await supabase.from('orders').update({ status: 'assigned' }).in('id', toAddIds);
-                        if (updErr) throw updErr;
-                        toast.success('Pedidos adicionados à rota');
-                        loadData();
-                      } catch {
-                        toast.error('Falha ao adicionar pedidos');
-                      }
-                    }}
-                    className="flex items-center justify-center px-4 py-2 bg-green-50 text-green-700 hover:bg-green-100 rounded-lg font-medium text-sm transition-colors border border-green-200"
-                  >
-                    <Plus className="h-4 w-4 mr-2" /> Adicionar Pedidos
-                  </button>
-                )}
-                {/* Start Route Button */}
-                <button
-                  onClick={async () => {
-                    if (!selectedRoute) return;
-                    try {
-                      if (selectedRoute.status !== 'pending') { toast.error('A rota ja foi iniciada'); return; }
-                      const conf: any = (selectedRoute as any).conference;
-                      const cStatus = String(conf?.status || '').toLowerCase();
-                      const ok = conf?.result_ok === true || cStatus === 'completed';
-                      if (requireConference && !ok) { toast.error('Finalize a conferencia para iniciar a rota'); return; }
-                      const { error } = await supabase.from('routes').update({ status: 'in_progress' }).eq('id', selectedRoute.id);
-                      if (error) throw error;
-                      const updated = { ...selectedRoute, status: 'in_progress' } as any;
-                      setSelectedRoute(updated);
-                      toast.success('Rota iniciada');
-                      loadData();
-                    } catch (e) {
-                      toast.error('Falha ao iniciar rota');
-                    }
-                  }}
-                  disabled={
-                    selectedRoute.status !== 'pending' ||
-                    (requireConference && !((selectedRoute as any)?.conference?.result_ok === true || String((selectedRoute as any)?.conference?.status || '').toLowerCase() === 'completed'))
-                  }
-                  title={
-                    selectedRoute.status !== 'pending'
-                      ? 'A rota ja foi iniciada'
-                      : ((requireConference && !((selectedRoute as any)?.conference?.result_ok === true || String((selectedRoute as any)?.conference?.status || '').toLowerCase() === 'completed')) ? 'Finalize a conferencia para iniciar' : '')
-                  }
-                  className="flex items-center justify-center px-4 py-2 bg-yellow-50 text-yellow-700 hover:bg-yellow-100 rounded-lg font-medium text-sm transition-colors border border-yellow-200 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  <Clock className="h-4 w-4 mr-2" /> Iniciar Rota
-                </button>
+                {/* Custom Buttons for Pickup Routes vs Standard Routes */}
+                {(() => {
+                  const isPickup = String(selectedRoute.name || '').startsWith('RETIRADA');
 
-                {/* WhatsApp Button (cliente) */}
-                <button
-                  onClick={async () => {
-                    if (!selectedRoute) return;
-                    setWaSending(true);
-                    try {
-                      const route = selectedRoute as any;
-                      const { data: roForNotify } = await supabase.from('route_orders').select('*, order:orders(*)').eq('route_id', route.id).order('sequence');
-                      const contatos = (roForNotify || []).map((ro: any) => {
-                        const o = ro.order || {};
-                        const address = o.address_json || {};
-                        const zip = String(address.zip || o.raw_json?.destinatario_cep || '');
-                        const street = String(address.street || o.raw_json?.destinatario_endereco || '');
-                        const neighborhood = String(address.neighborhood || o.raw_json?.destinatario_bairro || '');
-                        const city = String(address.city || o.raw_json?.destinatario_cidade || '');
-                        const endereco_completo = [zip, street, neighborhood && `- ${neighborhood}`, city].filter(Boolean).join(', ').replace(', -', ' -');
-                        const items = Array.isArray(o.items_json) ? o.items_json : [];
-                        const produtos = items.map((it: any) => `${String(it.sku || '')} - ${String(it.name || '')}`).join(', ');
-                        return {
-                          lancamento_venda: Number(o.order_id_erp || ro.order_id || 0),
-                          cliente_nome: String(o.customer_name || o.raw_json?.nome_cliente || ''),
-                          cliente_celular: String(o.phone || o.raw_json?.cliente_celular || ''),
-                          endereco_completo,
-                          produtos,
-                        };
-                      });
-                      let webhookUrl = import.meta.env.VITE_WEBHOOK_WHATSAPP_URL as string | undefined;
-                      if (!webhookUrl) {
-                        const { data } = await supabase.from('webhook_settings').select('url').eq('key', 'envia_mensagem').eq('active', true).single();
-                        webhookUrl = data?.url || 'https://n8n.lojaodosmoveis.shop/webhook-test/envia_mensagem';
-                      }
-                      const payload = { contatos, tipo_de_romaneio: 'entrega' };
-                      try {
-                        await fetch(String(webhookUrl), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-                      } catch {
-                        const fd = new FormData();
-                        for (const c of contatos) fd.append('contatos[]', JSON.stringify(c));
-                        await fetch(String(webhookUrl), { method: 'POST', body: fd });
-                      }
-                      toast.success('WhatsApp solicitado');
-                    } catch (e) {
-                      toast.error('Erro ao enviar WhatsApp');
-                    } finally {
-                      setWaSending(false);
-                    }
-                  }}
-                  disabled={waSending || selectedRoute?.status === 'completed'}
-                  className="flex items-center justify-center px-4 py-2 bg-gray-50 text-gray-700 hover:bg-gray-100 rounded-lg font-medium text-sm transition-colors border border-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  <WhatsAppIcon className="h-4 w-4 mr-2" /> {waSending ? 'Enviando...' : 'Enviar cliente'}
-                </button>
+                  if (isPickup) {
+                    // --- PICKUP BUTTONS ---
+                    return (
+                      <>
+                        {/* Confirmar Retirada Button */}
+                        <button
+                          onClick={async (e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            if (!selectedRoute) return;
+                            if (selectedRoute.status === 'completed') return; // Already completed
+                            try {
+                              if (confirm('Confirma a retirada destes pedidos? Isso marcará a rota como concluída e os pedidos como entregues.')) {
+                                setSaving(true);
 
-                {/* Group Button */}
-                <button
-                  onClick={async () => {
-                    if (!selectedRoute) return;
-                    setGroupSending(true);
-                    try {
-                      const route = selectedRoute as any;
-                      const { data: roForGroup } = await supabase.from('route_orders').select('*, order:orders(*)').eq('route_id', route.id).order('sequence');
-                      const route_name = String(route.name || '');
-                      const driver_name = String(route.driver?.user?.name || '');
-                      const conferente_name = String(route.conferente || '');
-                      const status = String(route.status || '');
-                      let vehicle_text = '';
-                      try {
-                        let v = route.vehicle || null;
-                        if (!v && route.vehicle_id) {
-                          const { data: vData } = await supabase.from('vehicles').select('*').eq('id', route.vehicle_id).single();
-                          v = vData || null;
-                        }
-                        if (v) vehicle_text = `${String(v.model || '')}${v.plate ? ' • ' + String(v.plate) : ''}`;
-                      } catch { }
-                      const observations = String(route.observations || '');
-                      const documentos = (roForGroup || []).map((ro: any) => String(ro.order?.order_id_erp || ro.order_id || '')).filter(Boolean);
-                      if (documentos.length === 0) { toast.error('Nenhum número de lançamento encontrado'); setGroupSending(false); return; }
-                      let webhookUrl = import.meta.env.VITE_WEBHOOK_ENVIA_GRUPO_URL as string | undefined;
-                      if (!webhookUrl) {
-                        try {
-                          const { data } = await supabase.from('webhook_settings').select('url').eq('key', 'envia_grupo').eq('active', true).single();
-                          webhookUrl = data?.url || 'https://n8n.lojaodosmoveis.shop/webhook-test/envia_grupo';
-                        } catch {
-                          webhookUrl = 'https://n8n.lojaodosmoveis.shop/webhook-test/envia_grupo';
-                        }
-                      }
-                      const payload = { route_name, driver_name, conferente: conferente_name, documentos, status, vehicle: vehicle_text, observations, tipo_de_romaneio: 'entrega' };
-                      try {
-                        const resp = await fetch(String(webhookUrl), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-                        if (!resp.ok) {
-                          const text = await resp.text();
-                          if (resp.status === 404 && text.includes('envia_grupo')) {
-                            toast.error('Webhook de teste não está ativo.');
-                          } else {
-                            toast.error('Falha ao enviar informativo');
+                                // 1. Update Route Status
+                                const { error: rErr } = await supabase.from('routes').update({ status: 'completed' }).eq('id', selectedRoute.id);
+                                if (rErr) throw rErr;
+
+                                const now = new Date().toISOString();
+
+                                // Update route_orders one by one
+                                const routeOrdersToUpdate = selectedRoute.route_orders || [];
+
+                                for (const ro of routeOrdersToUpdate) {
+                                  await supabase
+                                    .from('route_orders')
+                                    .update({ status: 'delivered', delivered_at: now })
+                                    .eq('id', ro.id);
+                                }
+
+                                // Update orders
+                                const oIds = routeOrdersToUpdate.map((ro: any) => ro.order_id);
+                                if (oIds.length > 0) {
+                                  await supabase.from('orders').update({ status: 'delivered' }).in('id', oIds);
+                                }
+
+                                // 2. Local State Update (Optimistic)
+                                const updated = { ...selectedRoute, status: 'completed' };
+                                updated.route_orders = (updated.route_orders || []).map((ro: any) => ({
+                                  ...ro,
+                                  status: 'delivered',
+                                  delivered_at: now
+                                }));
+                                setSelectedRoute(updated as any);
+
+                                toast.success('Retirada confirmada com sucesso!');
+                                await loadData(false);
+                                setShowRouteModal(false);
+                                if (showRouteModalRef && showRouteModalRef.current) showRouteModalRef.current = false;
+                              }
+                            } catch (e) {
+                              console.error(e);
+                              toast.error('Erro ao confirmar retirada');
+                            } finally {
+                              setSaving(false);
+                            }
+                          }}
+                          disabled={selectedRoute.status === 'completed'}
+                          className="flex items-center justify-center px-4 py-2 bg-purple-50 text-purple-700 hover:bg-purple-100 rounded-lg font-medium text-sm transition-colors border border-purple-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          <CheckCircle2 className="h-4 w-4 mr-2" />
+                          {selectedRoute.status === 'completed' ? 'Retirada Concluída' : 'Confirmar Retirada'}
+                        </button>
+                      </>
+                    );
+                  }
+
+                  // --- STANDARD BUTTONS ---
+                  return (
+                    <>
+                      {/* Add Orders Button */}
+                      {selectedRoute?.status === 'pending' && (
+                        <button
+                          onClick={async () => {
+                            try {
+                              const route = selectedRoute as any;
+                              const { data: roData } = await supabase.from('route_orders').select('order_id,sequence,id').eq('route_id', route.id).order('sequence');
+                              const existingIds = new Set((roData || []).map((r) => String(r.order_id)));
+                              const toAddIds = Array.from(selectedOrders).filter((id) => !existingIds.has(String(id)));
+                              if (toAddIds.length === 0) { toast.info('Nenhum novo pedido selecionado'); return; }
+                              const startSeq = (roData && roData.length > 0) ? Math.max(...(roData || []).map((r) => Number(r.sequence || 0))) + 1 : 1;
+                              const rows = toAddIds.map((orderId, idx) => ({ route_id: route.id, order_id: orderId, sequence: startSeq + idx, status: 'pending' }));
+                              const { error: insErr } = await supabase.from('route_orders').insert(rows);
+                              if (insErr) throw insErr;
+                              const { error: updErr } = await supabase.from('orders').update({ status: 'assigned' }).in('id', toAddIds);
+                              if (updErr) throw updErr;
+                              toast.success('Pedidos adicionados à rota');
+                              loadData();
+                            } catch {
+                              toast.error('Falha ao adicionar pedidos');
+                            }
+                          }}
+                          className="flex items-center justify-center px-4 py-2 bg-green-50 text-green-700 hover:bg-green-100 rounded-lg font-medium text-sm transition-colors border border-green-200"
+                        >
+                          <Plus className="h-4 w-4 mr-2" /> Adicionar Pedidos
+                        </button>
+                      )}
+
+                      {/* Start Route Button */}
+                      <button
+                        onClick={async () => {
+                          if (!selectedRoute) return;
+                          try {
+                            if (selectedRoute.status !== 'pending') { toast.error('A rota ja foi iniciada'); return; }
+                            const conf = (selectedRoute).conference;
+                            const cStatus = String(conf?.status || '').toLowerCase();
+                            const ok = conf?.result_ok === true || cStatus === 'completed';
+                            if (requireConference && !ok) { toast.error('Finalize a conferencia para iniciar a rota'); return; }
+                            const { error } = await supabase.from('routes').update({ status: 'in_progress' }).eq('id', selectedRoute.id);
+                            if (error) throw error;
+                            const updated = { ...selectedRoute, status: 'in_progress' };
+                            setSelectedRoute(updated);
+                            toast.success('Rota iniciada');
+                            loadData();
+                          } catch (e) {
+                            toast.error('Falha ao iniciar rota');
                           }
-                          setGroupSending(false);
-                          return;
+                        }}
+                        disabled={
+                          selectedRoute.status !== 'pending' ||
+                          (requireConference && !((selectedRoute)?.conference?.result_ok === true || String((selectedRoute)?.conference?.status || '').toLowerCase() === 'completed'))
                         }
-                      } catch {
-                        const fd = new FormData();
-                        fd.append('route_name', route_name);
-                        fd.append('driver_name', driver_name);
-                        fd.append('conferente', conferente_name);
-                        fd.append('status', status);
-                        fd.append('vehicle', vehicle_text);
-                        fd.append('observations', observations);
-                        for (const d of documentos) fd.append('documentos[]', d);
-                        await fetch(String(webhookUrl), { method: 'POST', body: fd });
-                      }
-                      toast.success('Rota enviada ao grupo');
-                    } catch (e) {
-                      toast.error('Erro ao enviar rota em grupo');
-                    } finally {
-                      setGroupSending(false);
-                    }
-                  }}
-                  disabled={groupSending || selectedRoute?.status === 'completed'}
-                  className="flex items-center justify-center px-4 py-2 bg-gray-50 text-gray-700 hover:bg-gray-100 rounded-lg font-medium text-sm transition-colors border border-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  <WhatsAppIcon className="h-4 w-4 mr-2" /> {groupSending ? 'Enviando...' : 'Enviar grupo'}
-                </button>
+                        title={
+                          selectedRoute.status !== 'pending'
+                            ? 'A rota ja foi iniciada'
+                            : ((requireConference && !((selectedRoute)?.conference?.result_ok === true || String((selectedRoute)?.conference?.status || '').toLowerCase() === 'completed')) ? 'Finalize a conferencia para iniciar' : '')
+                        }
+                        className="flex items-center justify-center px-4 py-2 bg-yellow-50 text-yellow-700 hover:bg-yellow-100 rounded-lg font-medium text-sm transition-colors border border-yellow-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        <Clock className="h-4 w-4 mr-2" /> Iniciar Rota
+                      </button>
+
+                      {/* WhatsApp Button (cliente) */}
+                      <button
+                        onClick={async () => {
+                          if (!selectedRoute) return;
+                          setWaSending(true);
+                          try {
+                            const route = selectedRoute;
+                            const { data: roForNotify } = await supabase.from('route_orders').select('*, order:orders(*)').eq('route_id', route.id).order('sequence');
+                            const contatos = (roForNotify || []).map((ro) => {
+                              const o = ro.order || {};
+                              const address = o.address_json || {};
+                              const zip = String(address.zip || o.raw_json?.destinatario_cep || '');
+                              const street = String(address.street || o.raw_json?.destinatario_endereco || '');
+                              const neighborhood = String(address.neighborhood || o.raw_json?.destinatario_bairro || '');
+                              const city = String(address.city || o.raw_json?.destinatario_cidade || '');
+                              const endereco_completo = [zip, street, neighborhood && `- ${neighborhood}`, city].filter(Boolean).join(', ').replace(', -', ' -');
+                              const items = Array.isArray(o.items_json) ? o.items_json : [];
+                              const produtos = items.map((it) => `${String(it.sku || '')} - ${String(it.name || '')}`).join(', ');
+                              return {
+                                lancamento_venda: Number(o.order_id_erp || ro.order_id || 0),
+                                cliente_nome: String(o.customer_name || o.raw_json?.nome_cliente || ''),
+                                cliente_celular: String(o.phone || o.raw_json?.cliente_celular || ''),
+                                endereco_completo,
+                                produtos,
+                              };
+                            });
+                            let webhookUrl = import.meta.env.VITE_WEBHOOK_WHATSAPP_URL;
+                            if (!webhookUrl) {
+                              const { data } = await supabase.from('webhook_settings').select('url').eq('key', 'envia_mensagem').eq('active', true).single();
+                              webhookUrl = data?.url || 'https://n8n.lojaodosmoveis.shop/webhook-test/envia_mensagem';
+                            }
+                            const payload = { contatos, tipo_de_romaneio: 'entrega' };
+                            try {
+                              await fetch(String(webhookUrl), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+                            } catch {
+                              const fd = new FormData();
+                              for (const c of contatos) fd.append('contatos[]', JSON.stringify(c));
+                              await fetch(String(webhookUrl), { method: 'POST', body: fd });
+                            }
+                            toast.success('WhatsApp solicitado');
+                          } catch (e) {
+                            toast.error('Erro ao enviar WhatsApp');
+                          } finally {
+                            setWaSending(false);
+                          }
+                        }}
+                        disabled={waSending || selectedRoute?.status === 'completed'}
+                        className="flex items-center justify-center px-4 py-2 bg-gray-50 text-gray-700 hover:bg-gray-100 rounded-lg font-medium text-sm transition-colors border border-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        <WhatsAppIcon className="h-4 w-4 mr-2" /> {waSending ? 'Enviando...' : 'Enviar cliente'}
+                      </button>
+
+                      {/* Group Button */}
+                      <button
+                        onClick={async () => {
+                          if (!selectedRoute) return;
+                          setGroupSending(true);
+                          try {
+                            const route = selectedRoute;
+                            const { data: roForGroup } = await supabase.from('route_orders').select('*, order:orders(*)').eq('route_id', route.id).order('sequence');
+                            const route_name = String(route.name || '');
+                            const driver_name = String(route.driver?.user?.name || '');
+                            const conferente_name = String(route.conferente || '');
+                            const status = String(route.status || '');
+                            let vehicle_text = '';
+                            try {
+                              let v = route.vehicle || null;
+                              if (!v && route.vehicle_id) {
+                                const { data: vData } = await supabase.from('vehicles').select('*').eq('id', route.vehicle_id).single();
+                                v = vData || null;
+                              }
+                              if (v) vehicle_text = `${String(v.model || '')}${v.plate ? ' • ' + String(v.plate) : ''}`;
+                            } catch { }
+                            const observations = String(route.observations || '');
+                            const documentos = (roForGroup || []).map((ro) => String(ro.order?.order_id_erp || ro.order_id || '')).filter(Boolean);
+                            if (documentos.length === 0) { toast.error('Nenhum número de lançamento encontrado'); setGroupSending(false); return; }
+                            let webhookUrl = import.meta.env.VITE_WEBHOOK_ENVIA_GRUPO_URL;
+                            if (!webhookUrl) {
+                              try {
+                                const { data } = await supabase.from('webhook_settings').select('url').eq('key', 'envia_grupo').eq('active', true).single();
+                                webhookUrl = data?.url || 'https://n8n.lojaodosmoveis.shop/webhook-test/envia_grupo';
+                              } catch {
+                                webhookUrl = 'https://n8n.lojaodosmoveis.shop/webhook-test/envia_grupo';
+                              }
+                            }
+                            const payload = { route_name, driver_name, conferente: conferente_name, documentos, status, vehicle: vehicle_text, observations, tipo_de_romaneio: 'entrega' };
+                            try {
+                              const resp = await fetch(String(webhookUrl), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+                              if (!resp.ok) {
+                                const text = await resp.text();
+                                if (resp.status === 404 && text.includes('envia_grupo')) {
+                                  toast.error('Webhook de teste não está ativo.');
+                                } else {
+                                  toast.error('Falha ao enviar informativo');
+                                }
+                                setGroupSending(false);
+                                return;
+                              }
+                            } catch {
+                              const fd = new FormData();
+                              fd.append('route_name', route_name);
+                              fd.append('driver_name', driver_name);
+                              fd.append('conferente', conferente_name);
+                              fd.append('status', status);
+                              fd.append('vehicle', vehicle_text);
+                              fd.append('observations', observations);
+                              for (const d of documentos) fd.append('documentos[]', d);
+                              await fetch(String(webhookUrl), { method: 'POST', body: fd });
+                            }
+                            toast.success('Rota enviada ao grupo');
+                          } catch (e) {
+                            toast.error('Erro ao enviar rota em grupo');
+                          } finally {
+                            setGroupSending(false);
+                          }
+                        }}
+                        disabled={groupSending || selectedRoute?.status === 'completed'}
+                        className="flex items-center justify-center px-4 py-2 bg-gray-50 text-gray-700 hover:bg-gray-100 rounded-lg font-medium text-sm transition-colors border border-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        <WhatsAppIcon className="h-4 w-4 mr-2" /> {groupSending ? 'Enviando...' : 'Enviar grupo'}
+                      </button>
+                    </>
+                  );
+                })()}
 
                 {/* PDF Romaneio Button */}
                 <button
@@ -2507,12 +2890,18 @@ function RouteCreationContent() {
 
                 {/* DANFE Button */}
                 <button
-                  onClick={async () => {
+                  onClick={async (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
                     if (!selectedRoute) return;
+                    if (nfLoading) return; // Prevent double-clicks
+
+                    // Capture route ID at the start to avoid stale closure issues
+                    const routeId = selectedRoute.id;
+
                     setNfLoading(true);
                     try {
-                      const route = selectedRoute as any;
-                      const { data: roData, error: roErr } = await supabase.from('route_orders').select('*, order:orders(*)').eq('route_id', route.id).order('sequence');
+                      const { data: roData, error: roErr } = await supabase.from('route_orders').select('*, order:orders(*)').eq('route_id', routeId).order('sequence');
                       if (roErr) throw roErr;
                       const allHaveDanfe = (roData || []).every((ro: any) => !!ro.order?.danfe_base64);
                       if (allHaveDanfe) {
@@ -2546,7 +2935,7 @@ function RouteCreationContent() {
                         const { data: s } = await supabase.from('webhook_settings').select('url').eq('key', 'gera_nf').eq('active', true).single();
                         if (s?.url) nfWebhook = s.url;
                       } catch { }
-                      const resp = await fetch(nfWebhook, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ route_id: route.id, documentos: docs, count: docs.length }) });
+                      const resp = await fetch(nfWebhook, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ route_id: routeId, documentos: docs, count: docs.length }) });
                       const text = await resp.text();
                       let payload: any = null; try { payload = JSON.parse(text); } catch { payload = { error: text }; }
                       if (!resp.ok) { toast.error('Erro ao gerar notas fiscais'); setNfLoading(false); return; }
@@ -2561,12 +2950,10 @@ function RouteCreationContent() {
                       if (Array.isArray(payload?.arquivos)) payload.arquivos.forEach((d: any) => { if (d?.data?.startsWith('JVBER')) pushData(d.data); if (d?.order_id) mapByOrderId.set(String(d.order_id), d.data); });
                       if (base64List.length === 0) { toast.error('Resposta não contém PDFs em base64'); setNfLoading(false); return; }
                       try {
+                        // Just save DANFE to database - don't update local state to avoid stale closure issues
                         if (mapByOrderId.size > 0) {
                           for (const [orderId, b64] of mapByOrderId.entries()) {
                             await supabase.from('orders').update({ danfe_base64: b64, danfe_gerada_em: new Date().toISOString() }).eq('id', orderId);
-                            const updated = { ...selectedRoute } as any;
-                            updated.route_orders = (updated.route_orders || []).map((ro: any) => ro.order_id === orderId ? { ...ro, order: { ...(ro.order || {}), danfe_base64: b64, danfe_gerada_em: new Date().toISOString() } } : ro);
-                            setSelectedRoute(updated);
                           }
                         } else if (base64List.length === docs.length) {
                           for (let i = 0; i < docs.length; i++) {
@@ -2626,7 +3013,17 @@ function RouteCreationContent() {
                                   ro.status === 'returned' ? 'bg-red-100 text-red-700' :
                                     'bg-yellow-100 text-yellow-700'
                                   }`}>
-                                  {ro.status === 'delivered' ? `Entregue ${ro.delivered_at ? new Date(ro.delivered_at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''}` : ro.status === 'returned' ? 'Retornado' : 'Pendente'}
+                                  {(() => {
+                                    if (ro.status === 'delivered') {
+                                      const isPkp = String(selectedRoute.name || '').startsWith('RETIRADA');
+                                      const dt = ro.delivered_at
+                                        ? new Date(ro.delivered_at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+                                        : '';
+                                      return isPkp ? `Retirado ${dt}` : `Entregue ${dt}`;
+                                    }
+                                    if (ro.status === 'returned') return 'Retornado';
+                                    return 'Pendente';
+                                  })()}
                                 </span>
                                 {ro.status === 'returned' && (returnReason || returnNotes) && (
                                   <span className="text-xs text-red-700" title={returnInfo}>

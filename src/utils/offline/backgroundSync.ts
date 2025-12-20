@@ -151,6 +151,9 @@ export class BackgroundSyncService {
       case 'return_revert':
         await this.syncReturnRevert(item.data);
         break;
+      case 'delivery_revert':
+        await this.syncDeliveryRevert(item.data);
+        break;
       case 'order_update':
         await this.syncOrderUpdate(item.data);
         break;
@@ -449,7 +452,7 @@ export class BackgroundSyncService {
     const { error: orderError } = await supabase
       .from('orders')
       .update({
-        status: 'pending',
+        status: 'assigned', // LOCK: Back to 'assigned' (safe)
         return_flag: false,
         last_return_reason: null,
         last_return_notes: null,
@@ -458,6 +461,34 @@ export class BackgroundSyncService {
     if (orderError) console.warn('Failed to update order status on revert:', orderError);
 
     await this.logSyncAction('return_revert', order_id, 'pending', data.user_id || null);
+  }
+
+  private async syncDeliveryRevert(data: any): Promise<void> {
+    const { order_id, route_id } = data;
+    const { error } = await supabase
+      .from('route_orders')
+      .update({
+        status: 'pending',
+        delivered_at: null,
+        signature_url: null,
+      })
+      .eq('order_id', order_id)
+      .eq('route_id', route_id);
+
+    if (error) {
+      throw new Error(`Failed to revert delivery: ${error.message}`);
+    }
+
+    const { error: orderError } = await supabase
+      .from('orders')
+      .update({
+        status: 'assigned', // LOCK: Back to 'assigned' (safe)
+        return_flag: false,
+      })
+      .eq('id', order_id);
+    if (orderError) console.warn('Failed to update order status on revert:', orderError);
+
+    await this.logSyncAction('delivery_revert', order_id, 'pending', data.user_id || null);
   }
 
   private async syncOrderUpdate(data: any): Promise<void> {

@@ -344,7 +344,7 @@ function AssemblyManagementContent() {
           const { data: productsR } = await supabase
             .from('assembly_products')
             .select(`
-              id, order_id, product_name, product_sku, status, assembly_route_id, created_at, updated_at, was_returned,
+              id, order_id, product_name, product_sku, status, assembly_route_id, created_at, updated_at, was_returned, completion_date, returned_at,
               order:order_id (id, order_id_erp, customer_name, phone, address_json, raw_json, items_json, data_venda, previsao_entrega),
               installer:installer_id (id, name)
             `)
@@ -1692,6 +1692,12 @@ function AssemblyManagementContent() {
                           const addr = order.address_json || {};
                           const statuses = list.map(i => i.status);
                           const derived = statuses.every(s => s === 'cancelled') ? 'cancelled' : (statuses.every(s => s === 'completed') ? 'completed' : 'pending');
+
+                          // Get timestamp from first item (assuming batch update essentially gives same time, or we take latest)
+                          const firstItem = list[0];
+                          const timestamp = firstItem?.completion_date || firstItem?.returned_at;
+                          const formattedTime = timestamp ? new Date(timestamp).toLocaleString('pt-BR') : '-';
+
                           return (
                             <tr key={orderId} className="hover:bg-gray-50">
                               <td className="px-4 py-3 font-medium">{order.order_id_erp || orderId}</td>
@@ -1703,7 +1709,14 @@ function AssemblyManagementContent() {
                                 </div>
                               </td>
                               <td className="px-4 py-3">
-                                <span className={`px-2 py-0.5 rounded-full text-xs font-medium border ${statusColors[derived]}`}>{statusLabel[derived]}</span>
+                                <div className="flex flex-col items-start gap-1">
+                                  <span className={`px-2 py-0.5 rounded-full text-xs font-medium border ${statusColors[derived]}`}>{statusLabel[derived]}</span>
+                                  {timestamp && (
+                                    <span className="text-[10px] text-gray-500 font-medium flex items-center gap-1">
+                                      <Clock className="w-3 h-3" /> {new Date(timestamp).toLocaleString('pt-BR')}
+                                    </span>
+                                  )}
+                                </div>
                               </td>
                               <td className="px-4 py-3 text-right">
                                 <div className="flex items-center justify-end gap-2">

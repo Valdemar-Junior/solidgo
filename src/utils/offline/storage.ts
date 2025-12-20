@@ -16,7 +16,7 @@ const syncQueueStorage = localforage.createInstance({
 
 export interface SyncQueueItem {
   id: string;
-  type: 'delivery_confirmation' | 'order_update' | 'assembly_update' | 'return_revert' | 'assembly_confirmation' | 'assembly_return' | 'assembly_undo';
+  type: 'delivery_confirmation' | 'order_update' | 'assembly_update' | 'return_revert' | 'assembly_confirmation' | 'assembly_return' | 'assembly_undo' | 'delivery_revert';
   data: any;
   timestamp: string;
   attempts: number;

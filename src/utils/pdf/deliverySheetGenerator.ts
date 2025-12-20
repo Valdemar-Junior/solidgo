@@ -390,9 +390,13 @@ export class DeliverySheetGenerator {
     // Add Watermark if route is completed
     if (data.route.status === 'completed') {
       const pages = pdfDoc.getPages();
+      // Determine watermark text based on route type
+      const isPickupRoute = String(data.route.name || '').startsWith('RETIRADA');
+      const watermarkText = isPickupRoute ? 'PEDIDO RETIRADO' : 'ROTA FINALIZADA';
+
       for (const p of pages) {
         const { width, height } = p.getSize();
-        p.drawText('ROTA FINALIZADA', {
+        p.drawText(watermarkText, {
           x: margin + 40,
           y: height / 2 - 50,
           size: 55,

@@ -137,6 +137,7 @@ export interface ReturnReason {
   id: string;
   reason: string;
   description?: string;
+  type?: 'delivery' | 'assembly' | 'both';
 }
 
 export interface DeliveryConfirmation {

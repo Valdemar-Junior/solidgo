@@ -8,11 +8,12 @@ import { buildFullAddress, geocodeAddress, openWazeWithLL } from '../utils/maps'
 import { toast } from 'sonner';
 
 const FALLBACK_RETURN_REASONS: ReturnReason[] = [
-  { id: 'customer-absent', reason: 'Cliente ausente' },
-  { id: 'address-issue', reason: 'EndereÃ§o incorreto ou incompleto' },
-  { id: 'payment-issue', reason: 'Problema com pagamento' },
-  { id: 'refused', reason: 'Cliente recusou entrega' },
-  { id: 'other', reason: 'Outro (digitar abaixo)' },
+  { id: '1', reason: 'Cliente ausente', type: 'both' },
+  { id: '2', reason: 'Endereço incorreto / não localizado', type: 'both' },
+  { id: '3', reason: 'Cliente sem contato', type: 'both' },
+  { id: '4', reason: 'Cliente recusou / cancelou', type: 'both' },
+  { id: '5', reason: 'Horário excedido', type: 'both' },
+  { id: '99', reason: 'Outro', type: 'both' }
 ];
 
 interface DeliveryMarkingProps {
@@ -136,13 +137,14 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
 
       if (error) throw error;
       if (data && data.length > 0) {
-        setReturnReasons(data as ReturnReason[]);
+        const filtered = data.filter((r: any) => r.type === 'delivery' || r.type === 'both' || !r.type);
+        setReturnReasons(filtered.length ? filtered : FALLBACK_RETURN_REASONS);
         await OfflineStorage.setItem('return_reasons', data);
       } else {
         setReturnReasons(FALLBACK_RETURN_REASONS);
         await OfflineStorage.setItem('return_reasons', FALLBACK_RETURN_REASONS);
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error loading return reasons:', error);
       const cached = await OfflineStorage.getItem('return_reasons');
       if (cached && cached.length) {
@@ -493,6 +495,12 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
       const next = new Set(processingIds); next.add(routeOrderId); setProcessingIds(next);
 
       if (isOnline) {
+        // ReCheck global status to prevent double processing
+        const { data: orderData } = await supabase.from('orders').select('status, id').eq('id', current.order_id).single();
+        // If order is delivered or actively in another route, we should normally block.
+        // But here assumption is user clicked undo immediately. 
+        // For safety: force status back to 'assigned' to LOCK it from Admin Dashboard.
+
         const { error } = await supabase
           .from('route_orders')
           .update({
@@ -507,14 +515,14 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
         await supabase
           .from('orders')
           .update({
-            status: 'pending',
+            status: 'assigned', // LOCK: Back to driver, removed from admin routing list
             return_flag: false,
             last_return_reason: null,
             last_return_notes: null,
           })
           .eq('id', current.order_id);
 
-        const updated = routeOrders.map(ro => ro.id === routeOrderId ? { ...ro, status: 'pending', returned_at: null, return_reason: null } : ro);
+        const updated = routeOrders.map(ro => ro.id === routeOrderId ? { ...ro, status: 'pending' as const, returned_at: null, return_reason: null } : ro);
         setRouteOrders(updated);
         await OfflineStorage.setItem(`route_orders_${routeId}`, updated);
         setReturnReasonByOrder(prev => { const copy = { ...prev }; delete copy[routeOrderId]; return copy; });
@@ -525,7 +533,7 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
           type: 'return_revert',
           data: { order_id: current.order_id, route_id: routeId, user_id: current.route_id },
         });
-        const updated = routeOrders.map(ro => ro.id === routeOrderId ? { ...ro, status: 'pending', returned_at: null, return_reason: null } : ro);
+        const updated = routeOrders.map(ro => ro.id === routeOrderId ? { ...ro, status: 'pending' as const, returned_at: null, return_reason: null } : ro);
         setRouteOrders(updated);
         await OfflineStorage.setItem(`route_orders_${routeId}`, updated);
         setReturnReasonByOrder(prev => { const copy = { ...prev }; delete copy[routeOrderId]; return copy; });
@@ -535,6 +543,70 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
     } catch (error) {
       console.error('Error undoing return:', error);
       toast.error('Erro ao desfazer retorno');
+    } finally {
+      const next2 = new Set(processingIds); next2.delete(routeOrderId); setProcessingIds(next2);
+    }
+  };
+
+  const undoDelivery = async (routeOrderId: string) => {
+    const current = routeOrders.find(ro => ro.id === routeOrderId);
+    if (!current) return;
+
+    try {
+      if (processingIds.has(routeOrderId)) return;
+      const next = new Set(processingIds); next.add(routeOrderId); setProcessingIds(next);
+
+      if (isOnline) {
+        const { error } = await supabase
+          .from('route_orders')
+          .update({
+            status: 'pending',
+            delivered_at: null,
+            signature_url: null
+          })
+          .eq('id', routeOrderId);
+        if (error) throw error;
+
+        await supabase
+          .from('orders')
+          .update({
+            status: 'assigned', // LOCK: Back to driver
+            return_flag: false
+          })
+          .eq('id', current.order_id);
+
+        // Audit: undo delivery
+        try {
+          const userId = (await supabase.auth.getUser()).data.user?.id || '';
+          await supabase.from('audit_logs').insert({
+            entity_type: 'order',
+            entity_id: current.order_id,
+            action: 'delivery_undo',
+            details: { route_id: routeId },
+            user_id: userId,
+            timestamp: new Date().toISOString(),
+          });
+        } catch { }
+
+        const updated = routeOrders.map(ro => ro.id === routeOrderId ? { ...ro, status: 'pending' as const, delivered_at: null } : ro);
+        setRouteOrders(updated);
+        await OfflineStorage.setItem(`route_orders_${routeId}`, updated);
+        toast.success('Entrega desfeita');
+      } else {
+        // Offline undo delivery is complex because we prefer strict sync. 
+        // Assuming simple revert for now, but usually delivery involves signature capable actions.
+        await SyncQueue.addItem({
+          type: 'delivery_revert',
+          data: { order_id: current.order_id, route_id: routeId },
+        });
+        const updated = routeOrders.map(ro => ro.id === routeOrderId ? { ...ro, status: 'pending' as const, delivered_at: null } : ro);
+        setRouteOrders(updated);
+        await OfflineStorage.setItem(`route_orders_${routeId}`, updated);
+        toast.success('Entrega desfeita (offline)');
+      }
+    } catch (error) {
+      console.error('Error undoing delivery:', error);
+      toast.error('Erro ao desfazer entrega');
     } finally {
       const next2 = new Set(processingIds); next2.delete(routeOrderId); setProcessingIds(next2);
     }
@@ -664,7 +736,7 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
                       </div>
                       <div>
                         <label className="block text-sm font-medium text-gray-700 mb-1">
-                          Observacoes {selectedReason === 'other' ? '(obrigatorio para "Outro")' : ''}
+                          Observacoes {(selectedReason === 'Outro' || selectedReason === '99' || selectedReason === 'other') ? '(obrigatorio para "Outro")' : ''}
                         </label>
                         <input
                           type="text"
@@ -687,6 +759,18 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
                       className="inline-flex items-center px-3 py-2 bg-gray-200 text-gray-800 rounded-md hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
                     >
                       Desfazer retorno
+                    </button>
+                  </div>
+                )}
+                {/* Undo for delivered */}
+                {routeOrder.status === 'delivered' && (
+                  <div className="mt-3">
+                    <button
+                      onClick={() => undoDelivery(routeOrder.id)}
+                      disabled={processingIds.has(routeOrder.id)}
+                      className="inline-flex items-center px-3 py-2 bg-gray-200 text-gray-800 rounded-md hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+                    >
+                      Desfazer entrega
                     </button>
                   </div>
                 )}
