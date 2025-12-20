@@ -2585,7 +2585,61 @@ function RouteCreationContent() {
                                   await supabase.from('orders').update({ status: 'delivered' }).in('id', oIds);
                                 }
 
-                                // 2. Local State Update (Optimistic)
+                                // 3. Check for assembly products (SAME LOGIC AS DeliveryMarking.tsx)
+                                // This creates assembly_products for orders with has_assembly = 'SIM'
+                                try {
+                                  for (const orderId of oIds) {
+                                    // Fetch full order data with items_json
+                                    const { data: orderData, error: orderError } = await supabase
+                                      .from('orders')
+                                      .select('id, items_json, customer_name, phone, address_json, order_id_erp')
+                                      .eq('id', orderId)
+                                      .single();
+
+                                    if (orderError || !orderData?.items_json) continue;
+
+                                    // Find products with assembly
+                                    const produtosComMontagem = (orderData.items_json || []).filter((item: any) =>
+                                      item.has_assembly === 'SIM' || item.has_assembly === 'sim' ||
+                                      item.possui_montagem === true || item.possui_montagem === 'true'
+                                    );
+
+                                    if (produtosComMontagem.length === 0) continue;
+
+                                    // Check if assembly_products already exist for this order
+                                    const { data: existing } = await supabase
+                                      .from('assembly_products')
+                                      .select('id')
+                                      .eq('order_id', orderData.id);
+
+                                    // Only insert if NO existing records for this order
+                                    if (!existing || existing.length === 0) {
+                                      const assemblyProducts = produtosComMontagem.map((item: any) => ({
+                                        order_id: orderData.id,
+                                        product_name: item.name || item.produto || item.descricao || 'Produto',
+                                        product_sku: item.sku || item.codigo || '',
+                                        customer_name: orderData.customer_name,
+                                        customer_phone: orderData.phone,
+                                        installation_address: orderData.address_json,
+                                        status: 'pending',
+                                        created_at: new Date().toISOString(),
+                                        updated_at: new Date().toISOString()
+                                      }));
+
+                                      const { error: insertError } = await supabase.from('assembly_products').insert(assemblyProducts);
+
+                                      if (!insertError) {
+                                        console.log('[Pickup] Created', assemblyProducts.length, 'assembly products for order', orderData.order_id_erp);
+                                        toast.info(`Pedido ${orderData.order_id_erp} tem ${produtosComMontagem.length} produto(s) com montagem!`);
+                                      }
+                                    }
+                                  }
+                                } catch (assemblyError) {
+                                  // Log but don't fail the pickup - assembly is secondary
+                                  console.error('[Pickup] Error creating assembly products:', assemblyError);
+                                }
+
+                                // 4. Local State Update (Optimistic)
                                 const updated = { ...selectedRoute, status: 'completed' };
                                 updated.route_orders = (updated.route_orders || []).map((ro: any) => ({
                                   ...ro,
