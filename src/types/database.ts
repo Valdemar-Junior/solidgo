@@ -65,6 +65,7 @@ export interface Order {
   sale_date?: string;
   delivery_date?: string;
   driver_name?: string;
+  service_type?: 'troca' | 'assistencia';
 }
 
 export interface Address {

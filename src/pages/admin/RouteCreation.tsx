@@ -30,7 +30,10 @@ import {
   Zap,
   MessageCircle,
   ClipboardList,
-  ClipboardCheck
+  ClipboardCheck,
+  FilePlus,
+  RefreshCw,
+  Wrench
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { DeliverySheetGenerator } from '../../utils/pdf/deliverySheetGenerator';
@@ -161,6 +164,7 @@ function RouteCreationContent() {
   const [filterBrand, setFilterBrand] = useState<string>('');
   const [filterDeadline, setFilterDeadline] = useState<'all' | 'within' | 'out'>('all');
   const [filterReturnedOnly, setFilterReturnedOnly] = useState<boolean>(false);
+  const [filterServiceType, setFilterServiceType] = useState<string>(''); // 'troca', 'assistencia', 'normal'
 
   // Logic specific
   const [selectedExistingRouteId, setSelectedExistingRouteId] = useState<string>('');
@@ -169,6 +173,150 @@ function RouteCreationContent() {
   const showCreateModalRef = useRef<boolean>(false);
   const [mixedConfirmOrders, setMixedConfirmOrders] = useState<Array<{ id: string, pedido: string, otherLocs: string[] }>>([]);
   const [mixedConfirmAction, setMixedConfirmAction] = useState<'create' | 'add' | 'none'>('none');
+
+  // --- SINGLE LAUNCH IMPORT (TROCAS/ASSISTENCIAS) ---
+  const [showLaunchModal, setShowLaunchModal] = useState(false);
+  const [launchNumber, setLaunchNumber] = useState('');
+  const [launchType, setLaunchType] = useState<'troca' | 'assistencia'>('troca');
+  const [launchLoading, setLaunchLoading] = useState(false);
+
+  const handleLaunchSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!launchNumber.trim()) { toast.error('Digite o número do lançamento'); return; }
+
+    setLaunchLoading(true);
+    try {
+      let webhookUrl = import.meta.env.VITE_WEBHOOK_URL_CONSULTA as string | undefined;
+      if (!webhookUrl) {
+        const { data } = await supabase.from('webhook_settings').select('url').eq('key', 'consulta_lancamento').eq('active', true).single();
+        webhookUrl = data?.url;
+      }
+
+      if (!webhookUrl) {
+        webhookUrl = 'https://n8n.lojaodosmoveis.shop/webhook-test/ca7881e9-b639-452c-8eca-33f410358530'; // Fallback
+      }
+      // Sending basic payload as requested
+      const body = {
+        lancamento: launchNumber.trim(),
+        tipo: launchType,
+        timestamp: new Date().toISOString()
+      };
+
+      const response = await fetch(webhookUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+
+      if (!response.ok) throw new Error(`Erro ${response.status}: ${response.statusText}`);
+
+      const text = await response.text();
+      let data: any;
+      try { data = JSON.parse(text); } catch { throw new Error('Resposta inválida do servidor (não é JSON)'); }
+
+      const items = Array.isArray(data) ? data : [data];
+      if (items.length === 0 || !items[0]) {
+        toast.error('Nenhum pedido encontrado com este lançamento');
+        setLaunchLoading(false);
+        return;
+      }
+
+      // Map to DB structure
+      const toDb = items.map((o: any) => {
+        const produtos = Array.isArray(o.produtos) ? o.produtos : (Array.isArray(o.produtos_locais) ? o.produtos_locais : []);
+        const getVal = (v: any) => String(v ?? '').trim();
+
+        const pickZip = (raw: any) => {
+          const candidates = [raw?.destinatario_cep, raw?.cep, raw?.endereco_cep, raw?.codigo_postal, raw?.zip];
+          for (const c of candidates) { const s = String(c || '').trim(); if (s) return s; }
+          return '';
+        };
+
+        const itemsJson = produtos.length > 0 ? produtos.map((p: any) => ({
+          sku: getVal(p.codigo_produto),
+          name: getVal(p.nome_produto),
+          quantity: Number(p.quantidade_volumes ?? 1),
+          volumes_per_unit: Number(p.quantidade_volumes ?? 1),
+          purchased_quantity: Number(p.quantidade_comprada ?? 1),
+          unit_price_real: Number(p.valor_unitario_real ?? p.valor_unitario ?? 0),
+          total_price_real: Number(p.valor_total_real ?? p.valor_total_item ?? 0),
+          unit_price: Number(p.valor_unitario_real ?? p.valor_unitario ?? 0),
+          total_price: Number(p.valor_total_real ?? p.valor_total_item ?? 0),
+          price: Number(p.valor_unitario_real ?? p.valor_unitario ?? 0),
+          location: getVal(p.local_estocagem),
+          has_assembly: getVal(p.tem_montagem),
+          labels: Array.isArray(p.etiquetas) ? p.etiquetas : [],
+          department: getVal(p.departamento),
+          brand: getVal(p.marca),
+        })) : [];
+
+        // Append type suffix to ensure uniqueness and identification
+        let erpId = String(o.numero_lancamento ?? o.lancamento_venda ?? o.codigo_cliente ?? launchNumber);
+        const suffix = launchType === 'troca' ? '-T' : '-A';
+        if (!erpId.endsWith(suffix) && !erpId.endsWith('-T') && !erpId.endsWith('-A')) {
+          erpId = `${erpId}${suffix}`;
+        }
+
+        return {
+          order_id_erp: erpId,
+          customer_name: getVal(o.nome_cliente),
+          phone: getVal(o.cliente_celular),
+          customer_cpf: getVal(o.cpf_cliente),
+          filial_venda: getVal(o.filial_venda),
+          vendedor_nome: getVal(o.nome_vendedor ?? o.vendedor ?? o.vendedor_nome),
+          data_venda: o.data_venda ? new Date(o.data_venda).toISOString() : new Date().toISOString(),
+          observacoes_internas: getVal(o.observacoes_internas),
+          tem_frete_full: getVal(o.tem_frete_full),
+          address_json: {
+            street: getVal(o.destinatario_endereco),
+            neighborhood: getVal(o.destinatario_bairro),
+            city: getVal(o.destinatario_cidade),
+            state: '',
+            zip: pickZip(o),
+            complement: getVal(o.destinatario_complemento),
+            lat: o.lat ?? o.latitude ?? null,
+            lng: o.lng ?? o.longitude ?? o.long ?? null
+          },
+          items_json: itemsJson,
+          status: 'pending',
+          raw_json: o,
+          service_type: launchType,
+          department: String(itemsJson[0]?.department || ''),
+          brand: String(itemsJson[0]?.brand || '')
+        };
+      });
+
+      let insertedCount = 0;
+      let errors = 0;
+
+      for (const order of toDb) {
+        const { error } = await supabase.from('orders').upsert(order, { onConflict: 'order_id_erp' });
+        if (error) {
+          console.error('Erro ao inserir', error);
+          errors++;
+        } else {
+          insertedCount++;
+        }
+      }
+
+      if (errors > 0) {
+        toast.warning(`${insertedCount} importado(s), ${errors} erro(s). Verifique duplicidades.`);
+      } else if (insertedCount > 0) {
+        toast.success(`${insertedCount} lançamento(s) avulso(s) de ${launchType} importado(s)!`);
+        setShowLaunchModal(false);
+        setLaunchNumber('');
+        loadData(false);
+      } else {
+        toast.info('Nenhum dado importado.');
+      }
+
+    } catch (e: any) {
+      console.error(e);
+      toast.error(`Erro: ${e.message}`);
+    } finally {
+      setLaunchLoading(false);
+    }
+  };
 
   // Table Config
   const [columnsConf, setColumnsConf] = useState<Array<{ id: string, label: string, visible: boolean }>>([
@@ -358,6 +506,7 @@ function RouteCreationContent() {
           if ('operation' in f) setFilterOperation(f.operation || '');
           if ('saleDate' in f) setFilterSaleDate(f.saleDate || '');
           if ('brand' in f) setFilterBrand(f.brand || '');
+          if ('serviceType' in f) setFilterServiceType(f.serviceType || '');
         }
       }
     } catch { }
@@ -380,10 +529,11 @@ function RouteCreationContent() {
         operation: filterOperation,
         saleDate: filterSaleDate,
         brand: filterBrand,
+        serviceType: filterServiceType
       };
       localStorage.setItem('rc_filters', JSON.stringify(payload));
     } catch { }
-  }, [filterCity, filterNeighborhood, filterFilialVenda, filterLocalEstocagem, strictLocal, filterSeller, filterClient, filterDepartment, strictDepartment, filterFreightFull, filterHasAssembly, filterOperation, filterSaleDate, filterBrand]);
+  }, [filterCity, filterNeighborhood, filterFilialVenda, filterLocalEstocagem, strictLocal, filterSeller, filterClient, filterDepartment, strictDepartment, filterFreightFull, filterHasAssembly, filterOperation, filterSaleDate, filterBrand, filterServiceType]);
 
   // --- MEMOS (Options) ---
   const cityOptions = useMemo(() => Array.from(new Set((orders || []).map((o: any) => String((o.address_json?.city || o.raw_json?.destinatario_cidade || '')).trim()).filter(Boolean))).sort(), [orders]);
@@ -1045,6 +1195,14 @@ function RouteCreationContent() {
                 Filtros
               </button>
               <button
+                onClick={() => setShowLaunchModal(true)}
+                className="inline-flex items-center px-4 py-2 rounded-lg border border-orange-200 text-orange-700 bg-orange-50 hover:bg-orange-100 text-sm font-medium transition-colors"
+                title="Lançar Troca ou Assistência Avulsa"
+              >
+                <FilePlus className="h-4 w-4 mr-2" />
+                Lançamento Avulso
+              </button>
+              <button
                 onClick={() => loadData(false)}
                 disabled={loading}
                 className="inline-flex items-center px-4 py-2 rounded-lg border text-sm font-medium transition-colors bg-white border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50"
@@ -1222,11 +1380,20 @@ function RouteCreationContent() {
                   <label htmlFor="freturned" className="text-sm text-gray-700">Apenas pedidos retornados</label>
                 </div>
               </div>
+              <div className="space-y-1">
+                <label className="text-xs font-semibold text-gray-500 uppercase">Tipo Serviço</label>
+                <select value={filterServiceType} onChange={(e) => setFilterServiceType(e.target.value)} className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all">
+                  <option value="">Todos</option>
+                  <option value="normal">Venda Normal</option>
+                  <option value="troca">Troca</option>
+                  <option value="assistencia">Assistência</option>
+                </select>
+              </div>
             </div>
 
             <div className="flex justify-end mt-4 pt-4 border-t border-gray-100">
               <button
-                onClick={() => { setFilterCity(''); setFilterNeighborhood(''); setFilterFilialVenda(''); setFilterLocalEstocagem(''); setStrictLocal(false); setFilterSeller(''); setFilterClient(''); setClientQuery(''); setFilterFreightFull(''); setFilterOperation(''); setFilterDepartment(''); setFilterHasAssembly(false); setFilterSaleDate(''); setFilterBrand(''); setFilterReturnedOnly(false); }}
+                onClick={() => { setFilterCity(''); setFilterNeighborhood(''); setFilterFilialVenda(''); setFilterLocalEstocagem(''); setStrictLocal(false); setFilterSeller(''); setFilterClient(''); setClientQuery(''); setFilterFreightFull(''); setFilterOperation(''); setFilterDepartment(''); setFilterHasAssembly(false); setFilterSaleDate(''); setFilterBrand(''); setFilterReturnedOnly(false); setFilterServiceType(''); }}
                 className="text-sm text-red-600 hover:text-red-800 font-medium flex items-center"
               >
                 <X className="h-3 w-3 mr-1" /> Limpar filtros
@@ -1346,6 +1513,14 @@ function RouteCreationContent() {
                         if (filterDeadline === 'within' && st !== 'within') return false;
                         if (filterDeadline === 'out' && st !== 'out') return false;
                       }
+
+                      // Service Type Filter
+                      if (filterServiceType) {
+                        const st = (o.service_type || 'normal').toLowerCase();
+                        if (filterServiceType === 'normal' && o.service_type) return false; // Se quer normal, exclui quem tem service_type
+                        if (filterServiceType !== 'normal' && st !== filterServiceType) return false;
+                      }
+
                       return true;
                     });
 
@@ -1449,6 +1624,18 @@ function RouteCreationContent() {
                                       <AlertTriangle className="h-3.5 w-3.5" />
                                       Retornado
                                       {returnReason ? ` · ${returnReason}` : ''}
+                                    </span>
+                                  )}
+                                  {o.service_type === 'troca' && (
+                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold bg-orange-100 text-orange-800 border border-orange-200 uppercase tracking-wide" title="Pedido de Troca">
+                                      <RefreshCw className="h-3.5 w-3.5" />
+                                      Troca
+                                    </span>
+                                  )}
+                                  {o.service_type === 'assistencia' && (
+                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold bg-blue-100 text-blue-800 border border-blue-200 uppercase tracking-wide" title="Pedido de Assistência">
+                                      <Wrench className="h-3.5 w-3.5" />
+                                      Assistência
                                     </span>
                                   )}
                                   {hasAssembly && (
@@ -1629,234 +1816,372 @@ function RouteCreationContent() {
       {/* --- MODALS --- */}
 
       {/* Create Route Modal */}
-      {showCreateModal && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden">
-            <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
-              <h3 className="text-lg font-bold text-gray-900">Nova Rota / Romaneio</h3>
-              <button onClick={() => { setShowCreateModal(false); showCreateModalRef.current = false; localStorage.setItem('rc_showCreateModal', '0'); }} className="text-gray-400 hover:text-gray-600"><X className="h-5 w-5" /></button>
-            </div>
-            <div className="p-6 space-y-6">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Adicionar a romaneio existente?</label>
-                <select
-                  value={selectedExistingRouteId}
-                  onChange={(e) => setSelectedExistingRouteId(e.target.value)}
-                  className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all"
-                >
-                  <option value="">Não, criar novo romaneio</option>
-                  {routesList.filter(r => r.status === 'pending').map(r => (
-                    <option key={r.id} value={r.id}>{r.name}</option>
-                  ))}
-                </select>
+      {
+        showCreateModal && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden">
+              <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
+                <h3 className="text-lg font-bold text-gray-900">Nova Rota / Romaneio</h3>
+                <button onClick={() => { setShowCreateModal(false); showCreateModalRef.current = false; localStorage.setItem('rc_showCreateModal', '0'); }} className="text-gray-400 hover:text-gray-600"><X className="h-5 w-5" /></button>
               </div>
+              <div className="p-6 space-y-6">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Adicionar a romaneio existente?</label>
+                  <select
+                    value={selectedExistingRouteId}
+                    onChange={(e) => setSelectedExistingRouteId(e.target.value)}
+                    className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all"
+                  >
+                    <option value="">Não, criar novo romaneio</option>
+                    {routesList.filter(r => r.status === 'pending').map(r => (
+                      <option key={r.id} value={r.id}>{r.name}</option>
+                    ))}
+                  </select>
+                </div>
 
-              {!selectedExistingRouteId && (
-                <div className="space-y-4">
+                {!selectedExistingRouteId && (
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Nome da Rota <span className="text-red-500">*</span></label>
+                      <input
+                        type="text"
+                        value={routeName}
+                        onChange={(e) => setRouteName(e.target.value)}
+                        placeholder="Ex: Rota Zona Sul - Manhã"
+                        className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all"
+                      />
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">Motorista <span className="text-red-500">*</span></label>
+                        <select
+                          value={selectedDriver}
+                          onChange={(e) => setSelectedDriver(e.target.value)}
+                          className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all"
+                        >
+                          <option value="">Selecione...</option>
+                          {drivers.map(d => <option key={d.id} value={d.id}>{d.user?.name || d.name || d.id}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">Veículo</label>
+                        <select
+                          value={selectedVehicle}
+                          onChange={(e) => setSelectedVehicle(e.target.value)}
+                          className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all"
+                        >
+                          <option value="">Selecione...</option>
+                          {vehicles.map(v => <option key={v.id} value={v.id}>{v.model} - {v.plate}</option>)}
+                        </select>
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Conferente</label>
+                      <select
+                        value={conferente}
+                        onChange={(e) => setConferente(e.target.value)}
+                        className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all"
+                      >
+                        <option value="">Selecione...</option>
+                        {conferentes.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
+                      </select>
+                    </div>
+                  </div>
+                )}
+
+                <div className="bg-blue-50 p-4 rounded-xl flex items-center justify-between">
+                  <span className="text-blue-900 font-medium">Pedidos Selecionados</span>
+                  <span className="bg-blue-200 text-blue-800 px-3 py-1 rounded-lg font-bold">{selectedOrders.size}</span>
+                </div>
+              </div>
+              <div className="px-6 py-4 border-t border-gray-100 bg-gray-50 flex justify-end gap-3">
+                <button onClick={() => setShowCreateModal(false)} className="px-6 py-2.5 rounded-xl border border-gray-300 text-gray-700 font-medium hover:bg-white transition-colors">Cancelar</button>
+                <button
+                  onClick={() => createRoute()}
+                  disabled={saving || (!selectedExistingRouteId && (!routeName || !selectedDriver))}
+                  className="px-6 py-2.5 rounded-xl bg-blue-600 text-white font-bold hover:bg-blue-700 shadow-lg shadow-blue-200 disabled:opacity-50 disabled:shadow-none transition-all transform active:scale-95"
+                >
+                  {saving ? 'Salvando...' : 'Confirmar Rota'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      }
+
+      {/* --- LAUNCH AVULSO MODAL --- */}
+      {
+        showLaunchModal && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden relative">
+              <button
+                onClick={() => setShowLaunchModal(false)}
+                className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 transition-colors"
+              >
+                <X className="h-5 w-5" />
+              </button>
+
+              <div className="p-8">
+                <div className="w-16 h-16 bg-orange-50 rounded-full flex items-center justify-center mb-6 mx-auto">
+                  <FilePlus className="h-8 w-8 text-orange-600" />
+                </div>
+
+                <h3 className="text-2xl font-bold text-gray-900 text-center mb-2">Lançamento Avulso</h3>
+                <p className="text-center text-gray-500 mb-8">
+                  Importe uma Troca ou Assistência usando o número do lançamento original.
+                </p>
+
+                <form onSubmit={handleLaunchSubmit} className="space-y-5">
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">Nome da Rota <span className="text-red-500">*</span></label>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Número do Lançamento (ERP)</label>
                     <input
                       type="text"
-                      value={routeName}
-                      onChange={(e) => setRouteName(e.target.value)}
-                      placeholder="Ex: Rota Zona Sul - Manhã"
-                      className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all"
+                      value={launchNumber}
+                      onChange={(e) => setLaunchNumber(e.target.value)}
+                      className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none transition-all text-lg font-mono placeholder:font-sans"
+                      placeholder="Ex: 123456"
+                      autoFocus
                     />
                   </div>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">Motorista <span className="text-red-500">*</span></label>
-                      <select
-                        value={selectedDriver}
-                        onChange={(e) => setSelectedDriver(e.target.value)}
-                        className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all"
-                      >
-                        <option value="">Selecione...</option>
-                        {drivers.map(d => <option key={d.id} value={d.id}>{d.user?.name || d.name || d.id}</option>)}
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">Veículo</label>
-                      <select
-                        value={selectedVehicle}
-                        onChange={(e) => setSelectedVehicle(e.target.value)}
-                        className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all"
-                      >
-                        <option value="">Selecione...</option>
-                        {vehicles.map(v => <option key={v.id} value={v.id}>{v.model} - {v.plate}</option>)}
-                      </select>
-                    </div>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">Conferente</label>
-                    <select
-                      value={conferente}
-                      onChange={(e) => setConferente(e.target.value)}
-                      className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all"
-                    >
-                      <option value="">Selecione...</option>
-                      {conferentes.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
-                    </select>
-                  </div>
-                </div>
-              )}
 
-              <div className="bg-blue-50 p-4 rounded-xl flex items-center justify-between">
-                <span className="text-blue-900 font-medium">Pedidos Selecionados</span>
-                <span className="bg-blue-200 text-blue-800 px-3 py-1 rounded-lg font-bold">{selectedOrders.size}</span>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Tipo de Serviço</label>
+                    <div className="grid grid-cols-2 gap-3">
+                      <button
+                        type="button"
+                        onClick={() => setLaunchType('troca')}
+                        className={`px-4 py-3 rounded-xl border flex flex-col items-center gap-2 transition-all ${launchType === 'troca' ? 'bg-orange-50 border-orange-500 text-orange-700 ring-1 ring-orange-500' : 'bg-white border-gray-200 text-gray-600 hover:border-orange-200 hover:bg-orange-50/50'}`}
+                      >
+                        <RefreshCw className="h-5 w-5" />
+                        <span className="font-semibold text-sm">Troca</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setLaunchType('assistencia')}
+                        className={`px-4 py-3 rounded-xl border flex flex-col items-center gap-2 transition-all ${launchType === 'assistencia' ? 'bg-blue-50 border-blue-500 text-blue-700 ring-1 ring-blue-500' : 'bg-white border-gray-200 text-gray-600 hover:border-blue-200 hover:bg-blue-50/50'}`}
+                      >
+                        <Hammer className="h-5 w-5" />
+                        <span className="font-semibold text-sm">Assistência</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="pt-4">
+                    <button
+                      type="submit"
+                      disabled={launchLoading || !launchNumber}
+                      className="w-full px-6 py-4 bg-gray-900 text-white rounded-xl font-bold hover:bg-black transition-all flex items-center justify-center shadow-lg disabled:opacity-70 disabled:cursor-not-allowed group"
+                    >
+                      {launchLoading ? (
+                        <>
+                          <RefreshCw className="animate-spin h-5 w-5 mr-2" />
+                          Buscando...
+                        </>
+                      ) : (
+                        <>
+                          <RefreshCw className="h-5 w-5 mr-2 group-hover:rotate-180 transition-transform duration-500" />
+                          Buscar e Importar
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </form>
               </div>
             </div>
-            <div className="px-6 py-4 border-t border-gray-100 bg-gray-50 flex justify-end gap-3">
-              <button onClick={() => setShowCreateModal(false)} className="px-6 py-2.5 rounded-xl border border-gray-300 text-gray-700 font-medium hover:bg-white transition-colors">Cancelar</button>
-              <button
-                onClick={() => createRoute()}
-                disabled={saving || (!selectedExistingRouteId && (!routeName || !selectedDriver))}
-                className="px-6 py-2.5 rounded-xl bg-blue-600 text-white font-bold hover:bg-blue-700 shadow-lg shadow-blue-200 disabled:opacity-50 disabled:shadow-none transition-all transform active:scale-95"
-              >
-                {saving ? 'Salvando...' : 'Confirmar Rota'}
-              </button>
-            </div>
           </div>
-        </div>
-      )}
+        )
+      }
 
       {/* Columns Modal */}
-      {showColumnsModal && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-md overflow-hidden">
-            <div className="px-5 py-4 border-b border-gray-100 flex justify-between items-center">
-              <h3 className="font-bold text-gray-900">Configurar Colunas</h3>
-              <button onClick={() => setShowColumnsModal(false)}><X className="h-5 w-5 text-gray-400" /></button>
-            </div>
-            <div className="p-2 overflow-y-auto max-h-[60vh]">
-              {columnsConf.map((c, idx) => (
-                <div key={c.id} className="flex items-center justify-between p-3 hover:bg-gray-50 rounded-lg group">
-                  <label className="flex items-center gap-3 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={c.visible}
-                      onChange={() => {
-                        const newCols = [...columnsConf];
-                        newCols[idx].visible = !newCols[idx].visible;
-                        setColumnsConf(newCols);
-                      }}
-                      className="h-4 w-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
-                    />
-                    <span className="text-gray-700">{c.label}</span>
-                  </label>
-                  <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <button
-                      onClick={() => {
-                        if (idx === 0) return;
-                        const newCols = [...columnsConf];
-                        [newCols[idx - 1], newCols[idx]] = [newCols[idx], newCols[idx - 1]];
-                        setColumnsConf(newCols);
-                      }}
-                      className="p-1 hover:bg-gray-200 rounded"
-                    ><ChevronUp className="h-4 w-4" /></button>
-                    <button
-                      onClick={() => {
-                        if (idx === columnsConf.length - 1) return;
-                        const newCols = [...columnsConf];
-                        [newCols[idx + 1], newCols[idx]] = [newCols[idx], newCols[idx + 1]];
-                        setColumnsConf(newCols);
-                      }}
-                      className="p-1 hover:bg-gray-200 rounded"
-                    ><ChevronDown className="h-4 w-4" /></button>
+      {
+        showColumnsModal && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-xl shadow-xl w-full max-w-md overflow-hidden">
+              <div className="px-5 py-4 border-b border-gray-100 flex justify-between items-center">
+                <h3 className="font-bold text-gray-900">Configurar Colunas</h3>
+                <button onClick={() => setShowColumnsModal(false)}><X className="h-5 w-5 text-gray-400" /></button>
+              </div>
+              <div className="p-2 overflow-y-auto max-h-[60vh]">
+                {columnsConf.map((c, idx) => (
+                  <div key={c.id} className="flex items-center justify-between p-3 hover:bg-gray-50 rounded-lg group">
+                    <label className="flex items-center gap-3 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={c.visible}
+                        onChange={() => {
+                          const newCols = [...columnsConf];
+                          newCols[idx].visible = !newCols[idx].visible;
+                          setColumnsConf(newCols);
+                        }}
+                        className="h-4 w-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
+                      />
+                      <span className="text-gray-700">{c.label}</span>
+                    </label>
+                    <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <button
+                        onClick={() => {
+                          if (idx === 0) return;
+                          const newCols = [...columnsConf];
+                          [newCols[idx - 1], newCols[idx]] = [newCols[idx], newCols[idx - 1]];
+                          setColumnsConf(newCols);
+                        }}
+                        className="p-1 hover:bg-gray-200 rounded"
+                      ><ChevronUp className="h-4 w-4" /></button>
+                      <button
+                        onClick={() => {
+                          if (idx === columnsConf.length - 1) return;
+                          const newCols = [...columnsConf];
+                          [newCols[idx + 1], newCols[idx]] = [newCols[idx], newCols[idx + 1]];
+                          setColumnsConf(newCols);
+                        }}
+                        className="p-1 hover:bg-gray-200 rounded"
+                      ><ChevronDown className="h-4 w-4" /></button>
+                    </div>
                   </div>
-                </div>
-              ))}
-            </div>
-            <div className="p-4 border-t border-gray-100 bg-gray-50 text-right">
-              <button
-                onClick={() => {
-                  localStorage.setItem('rc_columns_conf', JSON.stringify(columnsConf));
-                  setShowColumnsModal(false);
-                }}
-                className="px-4 py-2 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700"
-              >
-                Salvar Configuração
-              </button>
+                ))}
+              </div>
+              <div className="p-4 border-t border-gray-100 bg-gray-50 text-right">
+                <button
+                  onClick={() => {
+                    localStorage.setItem('rc_columns_conf', JSON.stringify(columnsConf));
+                    setShowColumnsModal(false);
+                  }}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700"
+                >
+                  Salvar Configuração
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )
+      }
 
       {/* Conference Review Modal */}
-      {showConferenceModal && conferenceRoute && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-5xl max-h-[85vh] flex flex-col overflow-hidden">
-            <div className="px-6 py-4 border-b flex items-center justify-between bg-gray-50">
-              <h4 className="text-lg font-bold text-gray-900">Revisão de Conferência — {conferenceRoute.name}</h4>
-              <button onClick={() => setShowConferenceModal(false)} className="text-gray-500 hover:text-gray-700"><X className="h-5 w-5" /></button>
-            </div>
-            <div className="p-6 overflow-y-auto flex-1">
-              {(() => {
-                const conf = (conferenceRoute as any).conference;
-                const missing: Array<{ code: string; orderId?: string }> = conf?.summary?.missing || [];
-                const notBiped: Array<{ orderId?: string; productCode?: string; reason?: string; notes?: string }> = conf?.summary?.notBipedProducts || [];
-                const byOrder: Record<string, { codes: string[], order: any }> = {};
-                (conferenceRoute.route_orders || []).forEach((ro: any) => {
-                  byOrder[String(ro.order_id)] = byOrder[String(ro.order_id)] || { codes: [], order: ro.order };
-                });
-                missing.forEach((m) => {
-                  const k = String(m.orderId || '');
-                  if (!byOrder[k]) byOrder[k] = { codes: [], order: null } as any;
-                  byOrder[k].codes.push(m.code);
-                });
-                const byOrderProducts: Record<string, Array<{ productCode?: string; reason?: string; notes?: string }>> = {};
-                notBiped.forEach((p) => {
-                  const k = String(p.orderId || '');
-                  byOrderProducts[k] = byOrderProducts[k] || [];
-                  byOrderProducts[k].push({ productCode: p.productCode, reason: p.reason, notes: p.notes });
-                });
-                const authUser = useAuthStore.getState().user;
-                const markResolved = async (removedIds: string[]) => {
-                  try {
-                    if (!conf?.id) { toast.error('Conferência não encontrada'); return; }
-                    const resolutionPayload = { removedOrderIds: removedIds, missingLabelsByOrder: Object.keys(byOrder).reduce((acc: any, k) => { if ((byOrder[k]?.codes || []).length > 0) acc[k] = byOrder[k].codes; return acc; }, {}), notBipedByOrder: byOrderProducts };
-                    const { error: updErr } = await supabase
-                      .from('route_conferences')
-                      .update({ resolved_at: new Date().toISOString(), resolved_by: authUser?.id || null, resolution: resolutionPayload })
-                      .eq('id', conf.id);
-                    if (updErr) throw updErr;
-                    toast.success('Divergência marcada como resolvida');
-                    setShowConferenceModal(false);
-                    loadData();
-                  } catch (e: any) {
-                    console.error(e);
-                    toast.error('Erro ao marcar divergência como resolvida');
-                  }
-                };
-                const orderIds = Object.keys(byOrder).filter(k => byOrder[k].codes.length > 0);
-                if (orderIds.length === 0) {
-                  const pIds = Object.keys(byOrderProducts).filter(k => (byOrderProducts[k] || []).length > 0);
-                  if (pIds.length === 0) return <div className="text-center py-8 text-gray-500 font-medium">Sem faltantes. Conferência OK.</div>;
-                  return (
-                    <div className="space-y-4">
-                      {pIds.map((oid) => {
-                        const info = byOrder[String(oid)] || { order: null, codes: [] } as any;
-                        const cliente = info.order?.customer_name || '—';
-                        const pedido = info.order?.order_id_erp || '—';
-                        const products = byOrderProducts[oid] || [];
-                        return (
-                          <div key={oid} className="border rounded-lg overflow-hidden">
-                            <div className="px-4 py-2 bg-gray-50 border-b flex justify-between items-center">
-                              <div>
-                                <span className="font-bold text-gray-900">Pedido: {pedido}</span>
-                                <span className="mx-2 text-gray-400">|</span>
-                                <span className="text-gray-700">{cliente}</span>
+      {
+        showConferenceModal && conferenceRoute && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-xl shadow-xl w-full max-w-5xl max-h-[85vh] flex flex-col overflow-hidden">
+              <div className="px-6 py-4 border-b flex items-center justify-between bg-gray-50">
+                <h4 className="text-lg font-bold text-gray-900">Revisão de Conferência — {conferenceRoute.name}</h4>
+                <button onClick={() => setShowConferenceModal(false)} className="text-gray-500 hover:text-gray-700"><X className="h-5 w-5" /></button>
+              </div>
+              <div className="p-6 overflow-y-auto flex-1">
+                {(() => {
+                  const conf = (conferenceRoute as any).conference;
+                  const missing: Array<{ code: string; orderId?: string }> = conf?.summary?.missing || [];
+                  const notBiped: Array<{ orderId?: string; productCode?: string; reason?: string; notes?: string }> = conf?.summary?.notBipedProducts || [];
+                  const byOrder: Record<string, { codes: string[], order: any }> = {};
+                  (conferenceRoute.route_orders || []).forEach((ro: any) => {
+                    byOrder[String(ro.order_id)] = byOrder[String(ro.order_id)] || { codes: [], order: ro.order };
+                  });
+                  missing.forEach((m) => {
+                    const k = String(m.orderId || '');
+                    if (!byOrder[k]) byOrder[k] = { codes: [], order: null } as any;
+                    byOrder[k].codes.push(m.code);
+                  });
+                  const byOrderProducts: Record<string, Array<{ productCode?: string; reason?: string; notes?: string }>> = {};
+                  notBiped.forEach((p) => {
+                    const k = String(p.orderId || '');
+                    byOrderProducts[k] = byOrderProducts[k] || [];
+                    byOrderProducts[k].push({ productCode: p.productCode, reason: p.reason, notes: p.notes });
+                  });
+                  const authUser = useAuthStore.getState().user;
+                  const markResolved = async (removedIds: string[]) => {
+                    try {
+                      if (!conf?.id) { toast.error('Conferência não encontrada'); return; }
+                      const resolutionPayload = { removedOrderIds: removedIds, missingLabelsByOrder: Object.keys(byOrder).reduce((acc: any, k) => { if ((byOrder[k]?.codes || []).length > 0) acc[k] = byOrder[k].codes; return acc; }, {}), notBipedByOrder: byOrderProducts };
+                      const { error: updErr } = await supabase
+                        .from('route_conferences')
+                        .update({ resolved_at: new Date().toISOString(), resolved_by: authUser?.id || null, resolution: resolutionPayload })
+                        .eq('id', conf.id);
+                      if (updErr) throw updErr;
+                      toast.success('Divergência marcada como resolvida');
+                      setShowConferenceModal(false);
+                      loadData();
+                    } catch (e: any) {
+                      console.error(e);
+                      toast.error('Erro ao marcar divergência como resolvida');
+                    }
+                  };
+                  const orderIds = Object.keys(byOrder).filter(k => byOrder[k].codes.length > 0);
+                  if (orderIds.length === 0) {
+                    const pIds = Object.keys(byOrderProducts).filter(k => (byOrderProducts[k] || []).length > 0);
+                    if (pIds.length === 0) return <div className="text-center py-8 text-gray-500 font-medium">Sem faltantes. Conferência OK.</div>;
+                    return (
+                      <div className="space-y-4">
+                        {pIds.map((oid) => {
+                          const info = byOrder[String(oid)] || { order: null, codes: [] } as any;
+                          const cliente = info.order?.customer_name || '—';
+                          const pedido = info.order?.order_id_erp || '—';
+                          const products = byOrderProducts[oid] || [];
+                          return (
+                            <div key={oid} className="border rounded-lg overflow-hidden">
+                              <div className="px-4 py-2 bg-gray-50 border-b flex justify-between items-center">
+                                <div>
+                                  <span className="font-bold text-gray-900">Pedido: {pedido}</span>
+                                  <span className="mx-2 text-gray-400">|</span>
+                                  <span className="text-gray-700">{cliente}</span>
+                                </div>
+                              </div>
+                              <div className="p-4 bg-white">
+                                <div className="text-sm font-bold text-red-600 mb-2">Produtos não bipados ({products.length}):</div>
+                                <ul className="space-y-2">
+                                  {products.map((p, idx) => (
+                                    <li key={idx} className="text-sm text-gray-700 bg-red-50 p-2 rounded border border-red-100">
+                                      <span className="font-semibold">Produto:</span> {p.productCode || '—'} • <span className="font-semibold">Motivo:</span> {p.reason || '—'} {p.notes ? `• ${p.notes}` : ''}
+                                    </li>
+                                  ))}
+                                </ul>
                               </div>
                             </div>
+                          );
+                        })}
+                        <div className="flex justify-end space-x-3 pt-4 border-t border-gray-100">
+                          <button
+                            onClick={async () => {
+                              try {
+                                const ids = pIds.filter(Boolean);
+                                if (ids.length === 0) return;
+                                const rid = String(conferenceRoute.id);
+                                const { error: delErr } = await supabase.from('route_orders').delete().eq('route_id', rid).in('order_id', ids);
+                                if (delErr) throw delErr;
+                                const { error: updErr } = await supabase.from('orders').update({ status: 'pending' }).in('id', ids);
+                                if (updErr) throw updErr;
+                                toast.success('Pedidos removidos da rota');
+                                setShowConferenceModal(false);
+                                loadData();
+                              } catch (e: any) {
+                                toast.error('Erro ao remover pedidos da rota');
+                              }
+                            }}
+                            className="px-4 py-2 bg-red-100 text-red-700 hover:bg-red-200 rounded-lg font-medium transition-colors"
+                          >Remover pedidos não bipados</button>
+                          <button
+                            onClick={() => { const ids = pIds.filter(Boolean); markResolved(ids); }}
+                            className="px-4 py-2 bg-teal-600 text-white hover:bg-teal-700 rounded-lg font-medium shadow-sm transition-colors"
+                          >Resolver Divergência</button>
+                        </div>
+                      </div>
+                    );
+                  }
+                  return (
+                    <div className="space-y-4">
+                      {orderIds.map((oid) => {
+                        const info = byOrder[oid];
+                        const cliente = info.order?.customer_name || '—';
+                        const pedido = info.order?.order_id_erp || '—';
+                        return (
+                          <div key={oid} className="border rounded-lg overflow-hidden">
+                            <div className="px-4 py-2 bg-gray-50 border-b">
+                              <div className="font-bold text-gray-900">Pedido: {pedido} • {cliente}</div>
+                            </div>
                             <div className="p-4 bg-white">
-                              <div className="text-sm font-bold text-red-600 mb-2">Produtos não bipados ({products.length}):</div>
-                              <ul className="space-y-2">
-                                {products.map((p, idx) => (
-                                  <li key={idx} className="text-sm text-gray-700 bg-red-50 p-2 rounded border border-red-100">
-                                    <span className="font-semibold">Produto:</span> {p.productCode || '—'} • <span className="font-semibold">Motivo:</span> {p.reason || '—'} {p.notes ? `• ${p.notes}` : ''}
-                                  </li>
+                              <div className="text-sm font-bold text-red-600 mb-2">Volumes faltantes ({info.codes.length}):</div>
+                              <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                                {info.codes.map((c, idx) => (
+                                  <div key={`${c}-${idx}`} className="text-xs px-2 py-1.5 rounded bg-red-50 text-red-700 border border-red-100 font-mono text-center">{c}</div>
                                 ))}
-                              </ul>
+                              </div>
                             </div>
                           </div>
                         );
@@ -1865,14 +2190,14 @@ function RouteCreationContent() {
                         <button
                           onClick={async () => {
                             try {
-                              const ids = pIds.filter(Boolean);
+                              const ids = orderIds.filter(Boolean);
                               if (ids.length === 0) return;
                               const rid = String(conferenceRoute.id);
                               const { error: delErr } = await supabase.from('route_orders').delete().eq('route_id', rid).in('order_id', ids);
                               if (delErr) throw delErr;
                               const { error: updErr } = await supabase.from('orders').update({ status: 'pending' }).in('id', ids);
                               if (updErr) throw updErr;
-                              toast.success('Pedidos removidos da rota');
+                              toast.success('Pedidos faltantes removidos da rota');
                               setShowConferenceModal(false);
                               loadData();
                             } catch (e: any) {
@@ -1880,623 +2205,578 @@ function RouteCreationContent() {
                             }
                           }}
                           className="px-4 py-2 bg-red-100 text-red-700 hover:bg-red-200 rounded-lg font-medium transition-colors"
-                        >Remover pedidos não bipados</button>
+                        >Remover pedidos faltantes</button>
                         <button
-                          onClick={() => { const ids = pIds.filter(Boolean); markResolved(ids); }}
+                          onClick={() => { const ids = orderIds.filter(Boolean); markResolved(ids); }}
                           className="px-4 py-2 bg-teal-600 text-white hover:bg-teal-700 rounded-lg font-medium shadow-sm transition-colors"
                         >Resolver Divergência</button>
                       </div>
                     </div>
                   );
-                }
-                return (
-                  <div className="space-y-4">
-                    {orderIds.map((oid) => {
-                      const info = byOrder[oid];
-                      const cliente = info.order?.customer_name || '—';
-                      const pedido = info.order?.order_id_erp || '—';
-                      return (
-                        <div key={oid} className="border rounded-lg overflow-hidden">
-                          <div className="px-4 py-2 bg-gray-50 border-b">
-                            <div className="font-bold text-gray-900">Pedido: {pedido} • {cliente}</div>
-                          </div>
-                          <div className="p-4 bg-white">
-                            <div className="text-sm font-bold text-red-600 mb-2">Volumes faltantes ({info.codes.length}):</div>
-                            <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                              {info.codes.map((c, idx) => (
-                                <div key={`${c}-${idx}`} className="text-xs px-2 py-1.5 rounded bg-red-50 text-red-700 border border-red-100 font-mono text-center">{c}</div>
-                              ))}
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })}
-                    <div className="flex justify-end space-x-3 pt-4 border-t border-gray-100">
-                      <button
-                        onClick={async () => {
-                          try {
-                            const ids = orderIds.filter(Boolean);
-                            if (ids.length === 0) return;
-                            const rid = String(conferenceRoute.id);
-                            const { error: delErr } = await supabase.from('route_orders').delete().eq('route_id', rid).in('order_id', ids);
-                            if (delErr) throw delErr;
-                            const { error: updErr } = await supabase.from('orders').update({ status: 'pending' }).in('id', ids);
-                            if (updErr) throw updErr;
-                            toast.success('Pedidos faltantes removidos da rota');
-                            setShowConferenceModal(false);
-                            loadData();
-                          } catch (e: any) {
-                            toast.error('Erro ao remover pedidos da rota');
-                          }
-                        }}
-                        className="px-4 py-2 bg-red-100 text-red-700 hover:bg-red-200 rounded-lg font-medium transition-colors"
-                      >Remover pedidos faltantes</button>
-                      <button
-                        onClick={() => { const ids = orderIds.filter(Boolean); markResolved(ids); }}
-                        className="px-4 py-2 bg-teal-600 text-white hover:bg-teal-700 rounded-lg font-medium shadow-sm transition-colors"
-                      >Resolver Divergência</button>
-                    </div>
-                  </div>
-                );
-              })()}
+                })()}
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )
+      }
 
       {/* Route Details Modal */}
 
-      {showRouteModal && selectedRoute && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in zoom-in-95 duration-200">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-6xl max-h-[90vh] flex flex-col overflow-hidden">
-            {/* Re-implementing the header and actions cleanly */}
-            <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
-              <div>
-                <h2 className="text-xl font-bold text-gray-900">{selectedRoute.name}</h2>
-                <p className="text-sm text-gray-500">
-                  {selectedRoute.status === 'pending' ? 'Em Separação' : selectedRoute.status === 'in_progress' ? 'Em Rota' : 'Concluída'}
-                  • {(selectedRoute.driver as any)?.user?.name || selectedRoute.driver?.name}
-                </p>
+      {
+        showRouteModal && selectedRoute && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in zoom-in-95 duration-200">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-6xl max-h-[90vh] flex flex-col overflow-hidden">
+              {/* Re-implementing the header and actions cleanly */}
+              <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
+                <div>
+                  <h2 className="text-xl font-bold text-gray-900">{selectedRoute.name}</h2>
+                  <p className="text-sm text-gray-500">
+                    {selectedRoute.status === 'pending' ? 'Em Separação' : selectedRoute.status === 'in_progress' ? 'Em Rota' : 'Concluída'}
+                    • {(selectedRoute.driver as any)?.user?.name || selectedRoute.driver?.name}
+                  </p>
+                </div>
+                <button onClick={() => { setShowRouteModal(false); showRouteModalRef.current = false; localStorage.setItem('rc_showRouteModal', '0'); }} className="p-2 hover:bg-gray-200 rounded-full text-gray-500"><X className="h-6 w-6" /></button>
               </div>
-              <button onClick={() => { setShowRouteModal(false); showRouteModalRef.current = false; localStorage.setItem('rc_showRouteModal', '0'); }} className="p-2 hover:bg-gray-200 rounded-full text-gray-500"><X className="h-6 w-6" /></button>
-            </div>
 
-            {/* Toolbar */}
-            <div className="px-6 py-3 border-b border-gray-100 bg-white grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-              {/* Add Orders Button */}
-              {selectedRoute?.status === 'pending' && (
+              {/* Toolbar */}
+              <div className="px-6 py-3 border-b border-gray-100 bg-white grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+                {/* Add Orders Button */}
+                {selectedRoute?.status === 'pending' && (
+                  <button
+                    onClick={async () => {
+                      try {
+                        const route = selectedRoute as any;
+                        const { data: roData } = await supabase.from('route_orders').select('order_id,sequence,id').eq('route_id', route.id).order('sequence');
+                        const existingIds = new Set<string>((roData || []).map((r: any) => String(r.order_id)));
+                        const toAddIds = Array.from(selectedOrders).filter((id) => !existingIds.has(String(id)));
+                        if (toAddIds.length === 0) { toast.info('Nenhum novo pedido selecionado'); return; }
+                        const startSeq = (roData && roData.length > 0) ? Math.max(...(roData || []).map((r: any) => Number(r.sequence || 0))) + 1 : 1;
+                        const rows = toAddIds.map((orderId, idx) => ({ route_id: route.id, order_id: orderId, sequence: startSeq + idx, status: 'pending' }));
+                        const { error: insErr } = await supabase.from('route_orders').insert(rows);
+                        if (insErr) throw insErr;
+                        const { error: updErr } = await supabase.from('orders').update({ status: 'assigned' }).in('id', toAddIds);
+                        if (updErr) throw updErr;
+                        toast.success('Pedidos adicionados à rota');
+                        loadData();
+                      } catch {
+                        toast.error('Falha ao adicionar pedidos');
+                      }
+                    }}
+                    className="flex items-center justify-center px-4 py-2 bg-green-50 text-green-700 hover:bg-green-100 rounded-lg font-medium text-sm transition-colors border border-green-200"
+                  >
+                    <Plus className="h-4 w-4 mr-2" /> Adicionar Pedidos
+                  </button>
+                )}
+                {/* Start Route Button */}
+                <button
+                  onClick={async () => {
+                    if (!selectedRoute) return;
+                    try {
+                      if (selectedRoute.status !== 'pending') { toast.error('A rota ja foi iniciada'); return; }
+                      const conf: any = (selectedRoute as any).conference;
+                      const cStatus = String(conf?.status || '').toLowerCase();
+                      const ok = conf?.result_ok === true || cStatus === 'completed';
+                      if (requireConference && !ok) { toast.error('Finalize a conferencia para iniciar a rota'); return; }
+                      const { error } = await supabase.from('routes').update({ status: 'in_progress' }).eq('id', selectedRoute.id);
+                      if (error) throw error;
+                      const updated = { ...selectedRoute, status: 'in_progress' } as any;
+                      setSelectedRoute(updated);
+                      toast.success('Rota iniciada');
+                      loadData();
+                    } catch (e) {
+                      toast.error('Falha ao iniciar rota');
+                    }
+                  }}
+                  disabled={
+                    selectedRoute.status !== 'pending' ||
+                    (requireConference && !((selectedRoute as any)?.conference?.result_ok === true || String((selectedRoute as any)?.conference?.status || '').toLowerCase() === 'completed'))
+                  }
+                  title={
+                    selectedRoute.status !== 'pending'
+                      ? 'A rota ja foi iniciada'
+                      : ((requireConference && !((selectedRoute as any)?.conference?.result_ok === true || String((selectedRoute as any)?.conference?.status || '').toLowerCase() === 'completed')) ? 'Finalize a conferencia para iniciar' : '')
+                  }
+                  className="flex items-center justify-center px-4 py-2 bg-yellow-50 text-yellow-700 hover:bg-yellow-100 rounded-lg font-medium text-sm transition-colors border border-yellow-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Clock className="h-4 w-4 mr-2" /> Iniciar Rota
+                </button>
+
+                {/* WhatsApp Button (cliente) */}
+                <button
+                  onClick={async () => {
+                    if (!selectedRoute) return;
+                    setWaSending(true);
+                    try {
+                      const route = selectedRoute as any;
+                      const { data: roForNotify } = await supabase.from('route_orders').select('*, order:orders(*)').eq('route_id', route.id).order('sequence');
+                      const contatos = (roForNotify || []).map((ro: any) => {
+                        const o = ro.order || {};
+                        const address = o.address_json || {};
+                        const zip = String(address.zip || o.raw_json?.destinatario_cep || '');
+                        const street = String(address.street || o.raw_json?.destinatario_endereco || '');
+                        const neighborhood = String(address.neighborhood || o.raw_json?.destinatario_bairro || '');
+                        const city = String(address.city || o.raw_json?.destinatario_cidade || '');
+                        const endereco_completo = [zip, street, neighborhood && `- ${neighborhood}`, city].filter(Boolean).join(', ').replace(', -', ' -');
+                        const items = Array.isArray(o.items_json) ? o.items_json : [];
+                        const produtos = items.map((it: any) => `${String(it.sku || '')} - ${String(it.name || '')}`).join(', ');
+                        return {
+                          lancamento_venda: Number(o.order_id_erp || ro.order_id || 0),
+                          cliente_nome: String(o.customer_name || o.raw_json?.nome_cliente || ''),
+                          cliente_celular: String(o.phone || o.raw_json?.cliente_celular || ''),
+                          endereco_completo,
+                          produtos,
+                        };
+                      });
+                      let webhookUrl = import.meta.env.VITE_WEBHOOK_WHATSAPP_URL as string | undefined;
+                      if (!webhookUrl) {
+                        const { data } = await supabase.from('webhook_settings').select('url').eq('key', 'envia_mensagem').eq('active', true).single();
+                        webhookUrl = data?.url || 'https://n8n.lojaodosmoveis.shop/webhook-test/envia_mensagem';
+                      }
+                      const payload = { contatos, tipo_de_romaneio: 'entrega' };
+                      try {
+                        await fetch(String(webhookUrl), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+                      } catch {
+                        const fd = new FormData();
+                        for (const c of contatos) fd.append('contatos[]', JSON.stringify(c));
+                        await fetch(String(webhookUrl), { method: 'POST', body: fd });
+                      }
+                      toast.success('WhatsApp solicitado');
+                    } catch (e) {
+                      toast.error('Erro ao enviar WhatsApp');
+                    } finally {
+                      setWaSending(false);
+                    }
+                  }}
+                  disabled={waSending || selectedRoute?.status === 'completed'}
+                  className="flex items-center justify-center px-4 py-2 bg-gray-50 text-gray-700 hover:bg-gray-100 rounded-lg font-medium text-sm transition-colors border border-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <WhatsAppIcon className="h-4 w-4 mr-2" /> {waSending ? 'Enviando...' : 'Enviar cliente'}
+                </button>
+
+                {/* Group Button */}
+                <button
+                  onClick={async () => {
+                    if (!selectedRoute) return;
+                    setGroupSending(true);
+                    try {
+                      const route = selectedRoute as any;
+                      const { data: roForGroup } = await supabase.from('route_orders').select('*, order:orders(*)').eq('route_id', route.id).order('sequence');
+                      const route_name = String(route.name || '');
+                      const driver_name = String(route.driver?.user?.name || '');
+                      const conferente_name = String(route.conferente || '');
+                      const status = String(route.status || '');
+                      let vehicle_text = '';
+                      try {
+                        let v = route.vehicle || null;
+                        if (!v && route.vehicle_id) {
+                          const { data: vData } = await supabase.from('vehicles').select('*').eq('id', route.vehicle_id).single();
+                          v = vData || null;
+                        }
+                        if (v) vehicle_text = `${String(v.model || '')}${v.plate ? ' • ' + String(v.plate) : ''}`;
+                      } catch { }
+                      const observations = String(route.observations || '');
+                      const documentos = (roForGroup || []).map((ro: any) => String(ro.order?.order_id_erp || ro.order_id || '')).filter(Boolean);
+                      if (documentos.length === 0) { toast.error('Nenhum número de lançamento encontrado'); setGroupSending(false); return; }
+                      let webhookUrl = import.meta.env.VITE_WEBHOOK_ENVIA_GRUPO_URL as string | undefined;
+                      if (!webhookUrl) {
+                        try {
+                          const { data } = await supabase.from('webhook_settings').select('url').eq('key', 'envia_grupo').eq('active', true).single();
+                          webhookUrl = data?.url || 'https://n8n.lojaodosmoveis.shop/webhook-test/envia_grupo';
+                        } catch {
+                          webhookUrl = 'https://n8n.lojaodosmoveis.shop/webhook-test/envia_grupo';
+                        }
+                      }
+                      const payload = { route_name, driver_name, conferente: conferente_name, documentos, status, vehicle: vehicle_text, observations, tipo_de_romaneio: 'entrega' };
+                      try {
+                        const resp = await fetch(String(webhookUrl), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+                        if (!resp.ok) {
+                          const text = await resp.text();
+                          if (resp.status === 404 && text.includes('envia_grupo')) {
+                            toast.error('Webhook de teste não está ativo.');
+                          } else {
+                            toast.error('Falha ao enviar informativo');
+                          }
+                          setGroupSending(false);
+                          return;
+                        }
+                      } catch {
+                        const fd = new FormData();
+                        fd.append('route_name', route_name);
+                        fd.append('driver_name', driver_name);
+                        fd.append('conferente', conferente_name);
+                        fd.append('status', status);
+                        fd.append('vehicle', vehicle_text);
+                        fd.append('observations', observations);
+                        for (const d of documentos) fd.append('documentos[]', d);
+                        await fetch(String(webhookUrl), { method: 'POST', body: fd });
+                      }
+                      toast.success('Rota enviada ao grupo');
+                    } catch (e) {
+                      toast.error('Erro ao enviar rota em grupo');
+                    } finally {
+                      setGroupSending(false);
+                    }
+                  }}
+                  disabled={groupSending || selectedRoute?.status === 'completed'}
+                  className="flex items-center justify-center px-4 py-2 bg-gray-50 text-gray-700 hover:bg-gray-100 rounded-lg font-medium text-sm transition-colors border border-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <WhatsAppIcon className="h-4 w-4 mr-2" /> {groupSending ? 'Enviando...' : 'Enviar grupo'}
+                </button>
+
+                {/* PDF Romaneio Button */}
                 <button
                   onClick={async () => {
                     try {
                       const route = selectedRoute as any;
-                      const { data: roData } = await supabase.from('route_orders').select('order_id,sequence,id').eq('route_id', route.id).order('sequence');
-                      const existingIds = new Set<string>((roData || []).map((r: any) => String(r.order_id)));
-                      const toAddIds = Array.from(selectedOrders).filter((id) => !existingIds.has(String(id)));
-                      if (toAddIds.length === 0) { toast.info('Nenhum novo pedido selecionado'); return; }
-                      const startSeq = (roData && roData.length > 0) ? Math.max(...(roData || []).map((r: any) => Number(r.sequence || 0))) + 1 : 1;
-                      const rows = toAddIds.map((orderId, idx) => ({ route_id: route.id, order_id: orderId, sequence: startSeq + idx, status: 'pending' }));
-                      const { error: insErr } = await supabase.from('route_orders').insert(rows);
-                      if (insErr) throw insErr;
-                      const { error: updErr } = await supabase.from('orders').update({ status: 'assigned' }).in('id', toAddIds);
-                      if (updErr) throw updErr;
-                      toast.success('Pedidos adicionados à rota');
-                      loadData();
-                    } catch {
-                      toast.error('Falha ao adicionar pedidos');
+                      const { data: roData, error: roErr } = await supabase.from('route_orders').select('*, order:orders(*)').eq('route_id', route.id).order('sequence');
+                      if (roErr) throw roErr;
+                      const routeOrders = (roData || []).map((ro: any) => ({
+                        id: ro.id, route_id: ro.route_id, order_id: ro.order_id, sequence: ro.sequence, status: ro.status, created_at: ro.created_at, updated_at: ro.updated_at,
+                      }));
+                      const orders = (roData || []).map((ro: any) => {
+                        const o = ro.order || {};
+                        const address = o.address_json || {};
+                        const itemsRaw = Array.isArray(o.items_json) ? o.items_json : [];
+                        const prodLoc = o.raw_json?.produtos_locais || [];
+                        const norm = (s: any) => String(s ?? '').toLowerCase().trim();
+                        const items = itemsRaw.map((it: any, idx: number) => {
+                          if (it && !it.location) {
+                            let loc = '';
+                            if (Array.isArray(prodLoc) && prodLoc.length > 0) {
+                              const byCode = prodLoc.find((p: any) => norm(p?.codigo_produto) === norm(it?.sku));
+                              const byName = prodLoc.find((p: any) => norm(p?.nome_produto) === norm(it?.name));
+                              if (byCode?.local_estocagem) loc = String(byCode.local_estocagem);
+                              else if (byName?.local_estocagem) loc = String(byName.local_estocagem);
+                              else if (prodLoc[idx]?.local_estocagem) loc = String(prodLoc[idx].local_estocagem);
+                              else if (prodLoc[0]?.local_estocagem) loc = String(prodLoc[0].local_estocagem);
+                            }
+                            return { ...it, location: loc };
+                          }
+                          return it;
+                        });
+                        return {
+                          id: o.id || ro.order_id,
+                          order_id_erp: String(o.order_id_erp || ro.order_id || ''),
+                          customer_name: String(o.customer_name || (o.raw_json?.nome_cliente ?? '')),
+                          phone: String(o.phone || (o.raw_json?.cliente_celular ?? '')),
+                          address_json: {
+                            street: String(address.street || o.raw_json?.destinatario_endereco || ''),
+                            neighborhood: String(address.neighborhood || o.raw_json?.destinatario_bairro || ''),
+                            city: String(address.city || o.raw_json?.destinatario_cidade || ''),
+                            state: String(address.state || ''),
+                            zip: String(address.zip || o.raw_json?.destinatario_cep || ''),
+                            complement: address.complement || o.raw_json?.destinatario_complemento || '',
+                          },
+                          items_json: items,
+                          raw_json: o.raw_json || null,
+                          total: Number(o.total || 0),
+                          status: o.status || 'imported',
+                          observations: o.observations || '',
+                          created_at: o.created_at || new Date().toISOString(),
+                          updated_at: o.updated_at || new Date().toISOString(),
+                        } as any;
+                      });
+                      let driverObj = route.driver;
+                      if (!driverObj) {
+                        const { data: dData } = await supabase.from('drivers').select('*, user:users!user_id(*)').eq('id', route.driver_id).single();
+                        driverObj = dData || null;
+                      }
+                      let vehicleObj = route.vehicle;
+                      if (!vehicleObj && route.vehicle_id) {
+                        const { data: vData } = await supabase.from('vehicles').select('*').eq('id', route.vehicle_id).single();
+                        vehicleObj = vData || null;
+                      }
+                      const data = {
+                        route: { id: route.id, name: route.name, driver_id: route.driver_id, vehicle_id: route.vehicle_id, conferente: route.conferente, observations: route.observations, status: route.status, created_at: route.created_at, updated_at: route.updated_at, },
+                        routeOrders,
+                        driver: driverObj || { id: '', user_id: '', cpf: '', active: true, user: { id: '', email: '', name: '', role: 'driver', created_at: '' } },
+                        vehicle: vehicleObj || undefined,
+                        orders,
+                        generatedAt: new Date().toISOString(),
+                      };
+                      const pdfBytes = await DeliverySheetGenerator.generateDeliverySheet(data);
+                      DeliverySheetGenerator.openPDFInNewTab(pdfBytes);
+                    } catch (e: any) {
+                      toast.error('Erro ao gerar romaneio em PDF');
                     }
                   }}
-                  className="flex items-center justify-center px-4 py-2 bg-green-50 text-green-700 hover:bg-green-100 rounded-lg font-medium text-sm transition-colors border border-green-200"
+                  className="flex items-center justify-center px-4 py-2 bg-blue-50 text-blue-700 hover:bg-blue-100 rounded-lg font-medium text-sm transition-colors border border-blue-200"
                 >
-                  <Plus className="h-4 w-4 mr-2" /> Adicionar Pedidos
+                  <FileText className="h-4 w-4 mr-2" /> Romaneio
                 </button>
-              )}
-              {/* Start Route Button */}
-              <button
-                onClick={async () => {
-                  if (!selectedRoute) return;
-                  try {
-                    if (selectedRoute.status !== 'pending') { toast.error('A rota ja foi iniciada'); return; }
-                    const conf: any = (selectedRoute as any).conference;
-                    const cStatus = String(conf?.status || '').toLowerCase();
-                    const ok = conf?.result_ok === true || cStatus === 'completed';
-                    if (requireConference && !ok) { toast.error('Finalize a conferencia para iniciar a rota'); return; }
-                    const { error } = await supabase.from('routes').update({ status: 'in_progress' }).eq('id', selectedRoute.id);
-                    if (error) throw error;
-                    const updated = { ...selectedRoute, status: 'in_progress' } as any;
-                    setSelectedRoute(updated);
-                    toast.success('Rota iniciada');
-                    loadData();
-                  } catch (e) {
-                    toast.error('Falha ao iniciar rota');
-                  }
-                }}
-                disabled={
-                  selectedRoute.status !== 'pending' ||
-                  (requireConference && !((selectedRoute as any)?.conference?.result_ok === true || String((selectedRoute as any)?.conference?.status || '').toLowerCase() === 'completed'))
-                }
-                title={
-                  selectedRoute.status !== 'pending'
-                    ? 'A rota ja foi iniciada'
-                    : ((requireConference && !((selectedRoute as any)?.conference?.result_ok === true || String((selectedRoute as any)?.conference?.status || '').toLowerCase() === 'completed')) ? 'Finalize a conferencia para iniciar' : '')
-                }
-                className="flex items-center justify-center px-4 py-2 bg-yellow-50 text-yellow-700 hover:bg-yellow-100 rounded-lg font-medium text-sm transition-colors border border-yellow-200 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <Clock className="h-4 w-4 mr-2" /> Iniciar Rota
-              </button>
 
-              {/* WhatsApp Button (cliente) */}
-              <button
-                onClick={async () => {
-                  if (!selectedRoute) return;
-                  setWaSending(true);
-                  try {
-                    const route = selectedRoute as any;
-                    const { data: roForNotify } = await supabase.from('route_orders').select('*, order:orders(*)').eq('route_id', route.id).order('sequence');
-                    const contatos = (roForNotify || []).map((ro: any) => {
-                      const o = ro.order || {};
-                      const address = o.address_json || {};
-                      const zip = String(address.zip || o.raw_json?.destinatario_cep || '');
-                      const street = String(address.street || o.raw_json?.destinatario_endereco || '');
-                      const neighborhood = String(address.neighborhood || o.raw_json?.destinatario_bairro || '');
-                      const city = String(address.city || o.raw_json?.destinatario_cidade || '');
-                      const endereco_completo = [zip, street, neighborhood && `- ${neighborhood}`, city].filter(Boolean).join(', ').replace(', -', ' -');
-                      const items = Array.isArray(o.items_json) ? o.items_json : [];
-                      const produtos = items.map((it: any) => `${String(it.sku || '')} - ${String(it.name || '')}`).join(', ');
-                      return {
-                        lancamento_venda: Number(o.order_id_erp || ro.order_id || 0),
-                        cliente_nome: String(o.customer_name || o.raw_json?.nome_cliente || ''),
-                        cliente_celular: String(o.phone || o.raw_json?.cliente_celular || ''),
-                        endereco_completo,
-                        produtos,
-                      };
-                    });
-                    let webhookUrl = import.meta.env.VITE_WEBHOOK_WHATSAPP_URL as string | undefined;
-                    if (!webhookUrl) {
-                      const { data } = await supabase.from('webhook_settings').select('url').eq('key', 'envia_mensagem').eq('active', true).single();
-                      webhookUrl = data?.url || 'https://n8n.lojaodosmoveis.shop/webhook-test/envia_mensagem';
-                    }
-                    const payload = { contatos, tipo_de_romaneio: 'entrega' };
+                {/* DANFE Button */}
+                <button
+                  onClick={async () => {
+                    if (!selectedRoute) return;
+                    setNfLoading(true);
                     try {
-                      await fetch(String(webhookUrl), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-                    } catch {
-                      const fd = new FormData();
-                      for (const c of contatos) fd.append('contatos[]', JSON.stringify(c));
-                      await fetch(String(webhookUrl), { method: 'POST', body: fd });
-                    }
-                    toast.success('WhatsApp solicitado');
-                  } catch (e) {
-                    toast.error('Erro ao enviar WhatsApp');
-                  } finally {
-                    setWaSending(false);
-                  }
-                }}
-                disabled={waSending || selectedRoute?.status === 'completed'}
-                className="flex items-center justify-center px-4 py-2 bg-gray-50 text-gray-700 hover:bg-gray-100 rounded-lg font-medium text-sm transition-colors border border-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <WhatsAppIcon className="h-4 w-4 mr-2" /> {waSending ? 'Enviando...' : 'Enviar cliente'}
-              </button>
-
-              {/* Group Button */}
-              <button
-                onClick={async () => {
-                  if (!selectedRoute) return;
-                  setGroupSending(true);
-                  try {
-                    const route = selectedRoute as any;
-                    const { data: roForGroup } = await supabase.from('route_orders').select('*, order:orders(*)').eq('route_id', route.id).order('sequence');
-                    const route_name = String(route.name || '');
-                    const driver_name = String(route.driver?.user?.name || '');
-                    const conferente_name = String(route.conferente || '');
-                    const status = String(route.status || '');
-                    let vehicle_text = '';
-                    try {
-                      let v = route.vehicle || null;
-                      if (!v && route.vehicle_id) {
-                        const { data: vData } = await supabase.from('vehicles').select('*').eq('id', route.vehicle_id).single();
-                        v = vData || null;
-                      }
-                      if (v) vehicle_text = `${String(v.model || '')}${v.plate ? ' • ' + String(v.plate) : ''}`;
-                    } catch { }
-                    const observations = String(route.observations || '');
-                    const documentos = (roForGroup || []).map((ro: any) => String(ro.order?.order_id_erp || ro.order_id || '')).filter(Boolean);
-                    if (documentos.length === 0) { toast.error('Nenhum número de lançamento encontrado'); setGroupSending(false); return; }
-                    let webhookUrl = import.meta.env.VITE_WEBHOOK_ENVIA_GRUPO_URL as string | undefined;
-                    if (!webhookUrl) {
-                      try {
-                        const { data } = await supabase.from('webhook_settings').select('url').eq('key', 'envia_grupo').eq('active', true).single();
-                        webhookUrl = data?.url || 'https://n8n.lojaodosmoveis.shop/webhook-test/envia_grupo';
-                      } catch {
-                        webhookUrl = 'https://n8n.lojaodosmoveis.shop/webhook-test/envia_grupo';
-                      }
-                    }
-                    const payload = { route_name, driver_name, conferente: conferente_name, documentos, status, vehicle: vehicle_text, observations, tipo_de_romaneio: 'entrega' };
-                    try {
-                      const resp = await fetch(String(webhookUrl), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-                      if (!resp.ok) {
-                        const text = await resp.text();
-                        if (resp.status === 404 && text.includes('envia_grupo')) {
-                          toast.error('Webhook de teste não está ativo.');
-                        } else {
-                          toast.error('Falha ao enviar informativo');
+                      const route = selectedRoute as any;
+                      const { data: roData, error: roErr } = await supabase.from('route_orders').select('*, order:orders(*)').eq('route_id', route.id).order('sequence');
+                      if (roErr) throw roErr;
+                      const allHaveDanfe = (roData || []).every((ro: any) => !!ro.order?.danfe_base64);
+                      if (allHaveDanfe) {
+                        const base64Existing = (roData || []).map((ro: any) => String(ro.order.danfe_base64)).filter((b: string) => b && b.startsWith('JVBER'));
+                        const merged1 = await PDFDocument.create();
+                        for (const b64 of base64Existing) {
+                          const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+                          const src = await PDFDocument.load(bytes);
+                          const pages = await merged1.copyPages(src, src.getPageIndices());
+                          pages.forEach((p) => merged1.addPage(p));
                         }
-                        setGroupSending(false);
+                        const result = await merged1.save();
+                        DeliverySheetGenerator.openPDFInNewTab(result);
+                        setNfLoading(false);
                         return;
                       }
-                    } catch {
-                      const fd = new FormData();
-                      fd.append('route_name', route_name);
-                      fd.append('driver_name', driver_name);
-                      fd.append('conferente', conferente_name);
-                      fd.append('status', status);
-                      fd.append('vehicle', vehicle_text);
-                      fd.append('observations', observations);
-                      for (const d of documentos) fd.append('documentos[]', d);
-                      await fetch(String(webhookUrl), { method: 'POST', body: fd });
-                    }
-                    toast.success('Rota enviada ao grupo');
-                  } catch (e) {
-                    toast.error('Erro ao enviar rota em grupo');
-                  } finally {
-                    setGroupSending(false);
-                  }
-                }}
-                disabled={groupSending || selectedRoute?.status === 'completed'}
-                className="flex items-center justify-center px-4 py-2 bg-gray-50 text-gray-700 hover:bg-gray-100 rounded-lg font-medium text-sm transition-colors border border-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <WhatsAppIcon className="h-4 w-4 mr-2" /> {groupSending ? 'Enviando...' : 'Enviar grupo'}
-              </button>
-
-              {/* PDF Romaneio Button */}
-              <button
-                onClick={async () => {
-                  try {
-                    const route = selectedRoute as any;
-                    const { data: roData, error: roErr } = await supabase.from('route_orders').select('*, order:orders(*)').eq('route_id', route.id).order('sequence');
-                    if (roErr) throw roErr;
-                    const routeOrders = (roData || []).map((ro: any) => ({
-                      id: ro.id, route_id: ro.route_id, order_id: ro.order_id, sequence: ro.sequence, status: ro.status, created_at: ro.created_at, updated_at: ro.updated_at,
-                    }));
-                    const orders = (roData || []).map((ro: any) => {
-                      const o = ro.order || {};
-                      const address = o.address_json || {};
-                      const itemsRaw = Array.isArray(o.items_json) ? o.items_json : [];
-                      const prodLoc = o.raw_json?.produtos_locais || [];
-                      const norm = (s: any) => String(s ?? '').toLowerCase().trim();
-                      const items = itemsRaw.map((it: any, idx: number) => {
-                        if (it && !it.location) {
-                          let loc = '';
-                          if (Array.isArray(prodLoc) && prodLoc.length > 0) {
-                            const byCode = prodLoc.find((p: any) => norm(p?.codigo_produto) === norm(it?.sku));
-                            const byName = prodLoc.find((p: any) => norm(p?.nome_produto) === norm(it?.name));
-                            if (byCode?.local_estocagem) loc = String(byCode.local_estocagem);
-                            else if (byName?.local_estocagem) loc = String(byName.local_estocagem);
-                            else if (prodLoc[idx]?.local_estocagem) loc = String(prodLoc[idx].local_estocagem);
-                            else if (prodLoc[0]?.local_estocagem) loc = String(prodLoc[0].local_estocagem);
-                          }
-                          return { ...it, location: loc };
+                      const missing = (roData || []).filter((ro: any) => !ro.order?.danfe_base64);
+                      const docs = missing.map((ro: any) => {
+                        let xmlText = '';
+                        if (ro.order?.xml_documento) xmlText = String(ro.order.xml_documento);
+                        else if (ro.order?.raw_json?.xmls_documentos || ro.order?.raw_json?.xmls) {
+                          const arr = ro.order.raw_json.xmls_documentos || ro.order.raw_json.xmls || [];
+                          const first = Array.isArray(arr) ? arr[0] : null;
+                          xmlText = first ? (typeof first === 'string' ? first : (first?.xml || '')) : '';
                         }
-                        return it;
-                      });
-                      return {
-                        id: o.id || ro.order_id,
-                        order_id_erp: String(o.order_id_erp || ro.order_id || ''),
-                        customer_name: String(o.customer_name || (o.raw_json?.nome_cliente ?? '')),
-                        phone: String(o.phone || (o.raw_json?.cliente_celular ?? '')),
-                        address_json: {
-                          street: String(address.street || o.raw_json?.destinatario_endereco || ''),
-                          neighborhood: String(address.neighborhood || o.raw_json?.destinatario_bairro || ''),
-                          city: String(address.city || o.raw_json?.destinatario_cidade || ''),
-                          state: String(address.state || ''),
-                          zip: String(address.zip || o.raw_json?.destinatario_cep || ''),
-                          complement: address.complement || o.raw_json?.destinatario_complemento || '',
-                        },
-                        items_json: items,
-                        raw_json: o.raw_json || null,
-                        total: Number(o.total || 0),
-                        status: o.status || 'imported',
-                        observations: o.observations || '',
-                        created_at: o.created_at || new Date().toISOString(),
-                        updated_at: o.updated_at || new Date().toISOString(),
-                      } as any;
-                    });
-                    let driverObj = route.driver;
-                    if (!driverObj) {
-                      const { data: dData } = await supabase.from('drivers').select('*, user:users!user_id(*)').eq('id', route.driver_id).single();
-                      driverObj = dData || null;
-                    }
-                    let vehicleObj = route.vehicle;
-                    if (!vehicleObj && route.vehicle_id) {
-                      const { data: vData } = await supabase.from('vehicles').select('*').eq('id', route.vehicle_id).single();
-                      vehicleObj = vData || null;
-                    }
-                    const data = {
-                      route: { id: route.id, name: route.name, driver_id: route.driver_id, vehicle_id: route.vehicle_id, conferente: route.conferente, observations: route.observations, status: route.status, created_at: route.created_at, updated_at: route.updated_at, },
-                      routeOrders,
-                      driver: driverObj || { id: '', user_id: '', cpf: '', active: true, user: { id: '', email: '', name: '', role: 'driver', created_at: '' } },
-                      vehicle: vehicleObj || undefined,
-                      orders,
-                      generatedAt: new Date().toISOString(),
-                    };
-                    const pdfBytes = await DeliverySheetGenerator.generateDeliverySheet(data);
-                    DeliverySheetGenerator.openPDFInNewTab(pdfBytes);
-                  } catch (e: any) {
-                    toast.error('Erro ao gerar romaneio em PDF');
-                  }
-                }}
-                className="flex items-center justify-center px-4 py-2 bg-blue-50 text-blue-700 hover:bg-blue-100 rounded-lg font-medium text-sm transition-colors border border-blue-200"
-              >
-                <FileText className="h-4 w-4 mr-2" /> Romaneio
-              </button>
-
-              {/* DANFE Button */}
-              <button
-                onClick={async () => {
-                  if (!selectedRoute) return;
-                  setNfLoading(true);
-                  try {
-                    const route = selectedRoute as any;
-                    const { data: roData, error: roErr } = await supabase.from('route_orders').select('*, order:orders(*)').eq('route_id', route.id).order('sequence');
-                    if (roErr) throw roErr;
-                    const allHaveDanfe = (roData || []).every((ro: any) => !!ro.order?.danfe_base64);
-                    if (allHaveDanfe) {
-                      const base64Existing = (roData || []).map((ro: any) => String(ro.order.danfe_base64)).filter((b: string) => b && b.startsWith('JVBER'));
-                      const merged1 = await PDFDocument.create();
-                      for (const b64 of base64Existing) {
+                        return { order_id: ro.order_id, numero: String(ro.order?.order_id_erp || ro.order_id || ''), xml: xmlText };
+                      }).filter((d: any) => d.xml && d.xml.includes('<'));
+                      if (docs.length === 0) { toast.error('Nenhum XML encontrado nos pedidos faltantes'); setNfLoading(false); return; }
+                      let nfWebhook = 'https://n8n.lojaodosmoveis.shop/webhook-test/gera_nf';
+                      try {
+                        const { data: s } = await supabase.from('webhook_settings').select('url').eq('key', 'gera_nf').eq('active', true).single();
+                        if (s?.url) nfWebhook = s.url;
+                      } catch { }
+                      const resp = await fetch(nfWebhook, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ route_id: route.id, documentos: docs, count: docs.length }) });
+                      const text = await resp.text();
+                      let payload: any = null; try { payload = JSON.parse(text); } catch { payload = { error: text }; }
+                      if (!resp.ok) { toast.error('Erro ao gerar notas fiscais'); setNfLoading(false); return; }
+                      const base64List: string[] = [];
+                      const mapByOrderId = new Map<string, string>();
+                      const pushData = (val: any) => { if (typeof val === 'string' && val.startsWith('JVBER')) base64List.push(val); };
+                      if (payload?.pdf) pushData(payload.pdf);
+                      if (payload?.data) pushData(payload.data);
+                      if (Array.isArray(payload?.pdfs)) payload.pdfs.forEach((b: any) => pushData(b));
+                      if (Array.isArray(payload)) payload.forEach((d: any) => { if (d?.data?.startsWith('JVBER')) pushData(d.data); if (d?.order_id && d?.data?.startsWith('JVBER')) mapByOrderId.set(String(d.order_id), d.data); });
+                      if (Array.isArray(payload?.documentos)) payload.documentos.forEach((d: any) => { if (d?.data?.startsWith('JVBER')) pushData(d.data); if (d?.order_id) mapByOrderId.set(String(d.order_id), d.data); });
+                      if (Array.isArray(payload?.arquivos)) payload.arquivos.forEach((d: any) => { if (d?.data?.startsWith('JVBER')) pushData(d.data); if (d?.order_id) mapByOrderId.set(String(d.order_id), d.data); });
+                      if (base64List.length === 0) { toast.error('Resposta não contém PDFs em base64'); setNfLoading(false); return; }
+                      try {
+                        if (mapByOrderId.size > 0) {
+                          for (const [orderId, b64] of mapByOrderId.entries()) {
+                            await supabase.from('orders').update({ danfe_base64: b64, danfe_gerada_em: new Date().toISOString() }).eq('id', orderId);
+                            const updated = { ...selectedRoute } as any;
+                            updated.route_orders = (updated.route_orders || []).map((ro: any) => ro.order_id === orderId ? { ...ro, order: { ...(ro.order || {}), danfe_base64: b64, danfe_gerada_em: new Date().toISOString() } } : ro);
+                            setSelectedRoute(updated);
+                          }
+                        } else if (base64List.length === docs.length) {
+                          for (let i = 0; i < docs.length; i++) {
+                            const orderId = docs[i].order_id; const b64 = base64List[i];
+                            await supabase.from('orders').update({ danfe_base64: b64, danfe_gerada_em: new Date().toISOString() }).eq('id', orderId);
+                          }
+                        }
+                      } catch (e) { console.warn('Falha ao salvar DANFE:', e); }
+                      const existing = (roData || []).map((ro: any) => String(ro.order?.danfe_base64)).filter((b: string) => b && b.startsWith('JVBER'));
+                      const allB64 = [...existing, ...base64List];
+                      const merged = await PDFDocument.create();
+                      for (const b64 of allB64) {
                         const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
                         const src = await PDFDocument.load(bytes);
-                        const pages = await merged1.copyPages(src, src.getPageIndices());
-                        pages.forEach((p) => merged1.addPage(p));
+                        const pages = await merged.copyPages(src, src.getPageIndices()); pages.forEach((p) => merged.addPage(p));
                       }
-                      const result = await merged1.save();
-                      DeliverySheetGenerator.openPDFInNewTab(result);
-                      setNfLoading(false);
-                      return;
-                    }
-                    const missing = (roData || []).filter((ro: any) => !ro.order?.danfe_base64);
-                    const docs = missing.map((ro: any) => {
-                      let xmlText = '';
-                      if (ro.order?.xml_documento) xmlText = String(ro.order.xml_documento);
-                      else if (ro.order?.raw_json?.xmls_documentos || ro.order?.raw_json?.xmls) {
-                        const arr = ro.order.raw_json.xmls_documentos || ro.order.raw_json.xmls || [];
-                        const first = Array.isArray(arr) ? arr[0] : null;
-                        xmlText = first ? (typeof first === 'string' ? first : (first?.xml || '')) : '';
-                      }
-                      return { order_id: ro.order_id, numero: String(ro.order?.order_id_erp || ro.order_id || ''), xml: xmlText };
-                    }).filter((d: any) => d.xml && d.xml.includes('<'));
-                    if (docs.length === 0) { toast.error('Nenhum XML encontrado nos pedidos faltantes'); setNfLoading(false); return; }
-                    let nfWebhook = 'https://n8n.lojaodosmoveis.shop/webhook-test/gera_nf';
-                    try {
-                      const { data: s } = await supabase.from('webhook_settings').select('url').eq('key', 'gera_nf').eq('active', true).single();
-                      if (s?.url) nfWebhook = s.url;
-                    } catch { }
-                    const resp = await fetch(nfWebhook, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ route_id: route.id, documentos: docs, count: docs.length }) });
-                    const text = await resp.text();
-                    let payload: any = null; try { payload = JSON.parse(text); } catch { payload = { error: text }; }
-                    if (!resp.ok) { toast.error('Erro ao gerar notas fiscais'); setNfLoading(false); return; }
-                    const base64List: string[] = [];
-                    const mapByOrderId = new Map<string, string>();
-                    const pushData = (val: any) => { if (typeof val === 'string' && val.startsWith('JVBER')) base64List.push(val); };
-                    if (payload?.pdf) pushData(payload.pdf);
-                    if (payload?.data) pushData(payload.data);
-                    if (Array.isArray(payload?.pdfs)) payload.pdfs.forEach((b: any) => pushData(b));
-                    if (Array.isArray(payload)) payload.forEach((d: any) => { if (d?.data?.startsWith('JVBER')) pushData(d.data); if (d?.order_id && d?.data?.startsWith('JVBER')) mapByOrderId.set(String(d.order_id), d.data); });
-                    if (Array.isArray(payload?.documentos)) payload.documentos.forEach((d: any) => { if (d?.data?.startsWith('JVBER')) pushData(d.data); if (d?.order_id) mapByOrderId.set(String(d.order_id), d.data); });
-                    if (Array.isArray(payload?.arquivos)) payload.arquivos.forEach((d: any) => { if (d?.data?.startsWith('JVBER')) pushData(d.data); if (d?.order_id) mapByOrderId.set(String(d.order_id), d.data); });
-                    if (base64List.length === 0) { toast.error('Resposta não contém PDFs em base64'); setNfLoading(false); return; }
-                    try {
-                      if (mapByOrderId.size > 0) {
-                        for (const [orderId, b64] of mapByOrderId.entries()) {
-                          await supabase.from('orders').update({ danfe_base64: b64, danfe_gerada_em: new Date().toISOString() }).eq('id', orderId);
-                          const updated = { ...selectedRoute } as any;
-                          updated.route_orders = (updated.route_orders || []).map((ro: any) => ro.order_id === orderId ? { ...ro, order: { ...(ro.order || {}), danfe_base64: b64, danfe_gerada_em: new Date().toISOString() } } : ro);
-                          setSelectedRoute(updated);
-                        }
-                      } else if (base64List.length === docs.length) {
-                        for (let i = 0; i < docs.length; i++) {
-                          const orderId = docs[i].order_id; const b64 = base64List[i];
-                          await supabase.from('orders').update({ danfe_base64: b64, danfe_gerada_em: new Date().toISOString() }).eq('id', orderId);
-                        }
-                      }
-                    } catch (e) { console.warn('Falha ao salvar DANFE:', e); }
-                    const existing = (roData || []).map((ro: any) => String(ro.order?.danfe_base64)).filter((b: string) => b && b.startsWith('JVBER'));
-                    const allB64 = [...existing, ...base64List];
-                    const merged = await PDFDocument.create();
-                    for (const b64 of allB64) {
-                      const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
-                      const src = await PDFDocument.load(bytes);
-                      const pages = await merged.copyPages(src, src.getPageIndices()); pages.forEach((p) => merged.addPage(p));
-                    }
-                    const result = await merged.save(); DeliverySheetGenerator.openPDFInNewTab(result);
-                  } catch (e: any) {
-                    console.error('Erro ao gerar/imprimir NFs:', e); toast.error('Erro ao gerar notas fiscais');
-                  } finally { setNfLoading(false); }
-                }}
-                disabled={nfLoading}
-                className="flex items-center justify-center px-4 py-2 bg-gray-50 text-gray-700 hover:bg-gray-100 rounded-lg font-medium text-sm transition-colors border border-gray-200 disabled:opacity-50"
-              >
-                <FileSpreadsheet className="h-4 w-4 mr-2" /> {nfLoading ? '...' : ((selectedRoute?.route_orders || []).every((ro: any) => !!ro.order?.danfe_base64) ? 'Imprimir Notas' : 'Gerar Notas')}
-              </button>
+                      const result = await merged.save(); DeliverySheetGenerator.openPDFInNewTab(result);
+                    } catch (e: any) {
+                      console.error('Erro ao gerar/imprimir NFs:', e); toast.error('Erro ao gerar notas fiscais');
+                    } finally { setNfLoading(false); }
+                  }}
+                  disabled={nfLoading}
+                  className="flex items-center justify-center px-4 py-2 bg-gray-50 text-gray-700 hover:bg-gray-100 rounded-lg font-medium text-sm transition-colors border border-gray-200 disabled:opacity-50"
+                >
+                  <FileSpreadsheet className="h-4 w-4 mr-2" /> {nfLoading ? '...' : ((selectedRoute?.route_orders || []).every((ro: any) => !!ro.order?.danfe_base64) ? 'Imprimir Notas' : 'Gerar Notas')}
+                </button>
 
-              {/* Complete Route Button REMOVED as per user request (auto-complete logic exists) */}
-            </div>
+                {/* Complete Route Button REMOVED as per user request (auto-complete logic exists) */}
+              </div>
 
-            <div className="flex-1 overflow-auto p-6 bg-gray-50">
-              {/* Table of items in route */}
-              <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-                <table className="min-w-full text-sm">
-                  <thead className="bg-gray-50 border-b border-gray-100">
-                    <tr>
-                      <th className="px-4 py-3 text-left font-semibold text-gray-600">Seq</th>
-                      <th className="px-4 py-3 text-left font-semibold text-gray-600">Pedido</th>
-                      <th className="px-4 py-3 text-left font-semibold text-gray-600">Cliente</th>
-                      <th className="px-4 py-3 text-left font-semibold text-gray-600">Status</th>
-                      <th className="px-4 py-3 text-right font-semibold text-gray-600">Ações</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-100">
-                    {selectedRoute.route_orders?.map(ro => {
-                      const returnReason = (ro as any)?.return_reason?.reason || (ro as any)?.return_reason || (ro as any)?.order?.last_return_reason || '';
-                      const returnNotes = (ro as any)?.return_notes || (ro as any)?.order?.last_return_notes || '';
-                      const returnInfo = [returnReason, returnNotes].filter(Boolean).join(' • ');
-                      return (
-                        <tr key={ro.id} className="hover:bg-gray-50">
-                          <td className="px-4 py-3">{ro.sequence}</td>
-                          <td className="px-4 py-3 font-medium">{ro.order?.order_id_erp || '—'}</td>
-                          <td className="px-4 py-3">{ro.order?.customer_name || '—'}</td>
-                          <td className="px-4 py-3">
-                            <div className="flex flex-col gap-1">
-                              <span className={`px-2 py-1 rounded text-xs font-bold ${ro.status === 'delivered' ? 'bg-green-100 text-green-700' :
-                                ro.status === 'returned' ? 'bg-red-100 text-red-700' :
-                                  'bg-yellow-100 text-yellow-700'
-                                }`}>
-                                {ro.status === 'delivered' ? `Entregue ${ro.delivered_at ? new Date(ro.delivered_at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''}` : ro.status === 'returned' ? 'Retornado' : 'Pendente'}
-                              </span>
-                              {ro.status === 'returned' && (returnReason || returnNotes) && (
-                                <span className="text-xs text-red-700" title={returnInfo}>
-                                  {returnReason || 'Retornado'}{returnNotes ? ` · ${returnNotes}` : ''}
+              <div className="flex-1 overflow-auto p-6 bg-gray-50">
+                {/* Table of items in route */}
+                <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                  <table className="min-w-full text-sm">
+                    <thead className="bg-gray-50 border-b border-gray-100">
+                      <tr>
+                        <th className="px-4 py-3 text-left font-semibold text-gray-600">Seq</th>
+                        <th className="px-4 py-3 text-left font-semibold text-gray-600">Pedido</th>
+                        <th className="px-4 py-3 text-left font-semibold text-gray-600">Cliente</th>
+                        <th className="px-4 py-3 text-left font-semibold text-gray-600">Status</th>
+                        <th className="px-4 py-3 text-right font-semibold text-gray-600">Ações</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {selectedRoute.route_orders?.map(ro => {
+                        const returnReason = (ro as any)?.return_reason?.reason || (ro as any)?.return_reason || (ro as any)?.order?.last_return_reason || '';
+                        const returnNotes = (ro as any)?.return_notes || (ro as any)?.order?.last_return_notes || '';
+                        const returnInfo = [returnReason, returnNotes].filter(Boolean).join(' • ');
+                        return (
+                          <tr key={ro.id} className="hover:bg-gray-50">
+                            <td className="px-4 py-3">{ro.sequence}</td>
+                            <td className="px-4 py-3 font-medium">{ro.order?.order_id_erp || '—'}</td>
+                            <td className="px-4 py-3">{ro.order?.customer_name || '—'}</td>
+                            <td className="px-4 py-3">
+                              <div className="flex flex-col gap-1">
+                                <span className={`px-2 py-1 rounded text-xs font-bold ${ro.status === 'delivered' ? 'bg-green-100 text-green-700' :
+                                  ro.status === 'returned' ? 'bg-red-100 text-red-700' :
+                                    'bg-yellow-100 text-yellow-700'
+                                  }`}>
+                                  {ro.status === 'delivered' ? `Entregue ${ro.delivered_at ? new Date(ro.delivered_at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''}` : ro.status === 'returned' ? 'Retornado' : 'Pendente'}
                                 </span>
+                                {ro.status === 'returned' && (returnReason || returnNotes) && (
+                                  <span className="text-xs text-red-700" title={returnInfo}>
+                                    {returnReason || 'Retornado'}{returnNotes ? ` · ${returnNotes}` : ''}
+                                  </span>
+                                )}
+                              </div>
+                            </td>
+                            <td className="px-4 py-3 text-right flex items-center justify-end gap-2">
+                              {selectedRoute?.status === 'pending' && (
+                                <button
+                                  className="p-1 text-red-500 hover:text-red-700 hover:bg-red-50 rounded transition-colors"
+                                  title="Remover da rota"
+                                  onClick={async () => {
+                                    try {
+                                      const { error: delErr } = await supabase.from('route_orders').delete().eq('id', ro.id);
+                                      if (delErr) throw delErr;
+                                      const { error: updErr } = await supabase.from('orders').update({ status: 'pending' }).eq('id', ro.order_id);
+                                      if (updErr) throw updErr;
+                                      toast.success('Pedido removido da rota');
+                                      const updated = { ...selectedRoute } as any;
+                                      updated.route_orders = (updated.route_orders || []).filter((x: any) => x.id !== ro.id);
+                                      setSelectedRoute(updated);
+                                      loadData();
+                                    } catch {
+                                      toast.error('Falha ao remover pedido');
+                                    }
+                                  }}
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </button>
                               )}
-                            </div>
-                          </td>
-                          <td className="px-4 py-3 text-right flex items-center justify-end gap-2">
-                            {selectedRoute?.status === 'pending' && (
-                              <button
-                                className="p-1 text-red-500 hover:text-red-700 hover:bg-red-50 rounded transition-colors"
-                                title="Remover da rota"
-                                onClick={async () => {
-                                  try {
-                                    const { error: delErr } = await supabase.from('route_orders').delete().eq('id', ro.id);
-                                    if (delErr) throw delErr;
-                                    const { error: updErr } = await supabase.from('orders').update({ status: 'pending' }).eq('id', ro.order_id);
-                                    if (updErr) throw updErr;
-                                    toast.success('Pedido removido da rota');
-                                    const updated = { ...selectedRoute } as any;
-                                    updated.route_orders = (updated.route_orders || []).filter((x: any) => x.id !== ro.id);
-                                    setSelectedRoute(updated);
-                                    loadData();
-                                  } catch {
-                                    toast.error('Falha ao remover pedido');
-                                  }
-                                }}
-                              >
-                                <Trash2 className="h-4 w-4" />
-                              </button>
-                            )}
-                            {ro.order?.danfe_base64 ? (
-                              <button
-                                className="p-1 text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded transition-colors"
-                                title="Imprimir DANFE"
-                                onClick={async () => {
-                                  try {
-                                    const b64 = String(ro.order?.danfe_base64);
-                                    const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
-                                    const doc = await PDFDocument.load(bytes);
-                                    const merged = await PDFDocument.create();
-                                    const pages = await merged.copyPages(doc, doc.getPageIndices());
-                                    pages.forEach((p) => merged.addPage(p));
-                                    const out = await merged.save();
-                                    DeliverySheetGenerator.openPDFInNewTab(out);
-                                  } catch {
-                                    toast.error('Falha ao abrir DANFE');
-                                  }
-                                }}
-                              >
-                                <FileSpreadsheet className="h-4 w-4" />
-                              </button>
-                            ) : (
-                              <button
-                                className="p-1 text-green-600 hover:text-green-800 hover:bg-green-50 rounded transition-colors"
-                                title="Gerar DANFE individual"
-                                onClick={async () => {
-                                  try {
-                                    const xml = ro.order?.xml_documento
-                                      ? String(ro.order.xml_documento)
-                                      : (() => {
-                                        const arr = ro.order?.raw_json?.xmls_documentos || ro.order?.raw_json?.xmls || [];
-                                        const first = Array.isArray(arr) ? arr[0] : null;
-                                        return first ? (typeof first === 'string' ? first : (first?.xml || '')) : '';
-                                      })();
-                                    if (!xml || !xml.includes('<')) { toast.error('XML não encontrado'); return; }
-                                    const webhookUrl = 'https://n8n.lojaodosmoveis.shop/webhook-test/gera_nf';
-                                    const resp = await fetch(webhookUrl, {
-                                      method: 'POST', headers: { 'Content-Type': 'application/json' },
-                                      body: JSON.stringify({ route_id: selectedRoute.id, documentos: [{ order_id: ro.order_id, numero: String(ro.order?.order_id_erp || ro.order_id || ''), xml }], count: 1 })
-                                    });
-                                    const text = await resp.text();
-                                    let payload: any = null; try { payload = JSON.parse(text); } catch { payload = { error: text }; }
-                                    if (!resp.ok) { toast.error('Erro ao gerar DANFE'); return; }
-                                    let b64: string | null = null;
-                                    if (typeof payload?.data === 'string' && payload.data.startsWith('JVBER')) b64 = payload.data;
-                                    else if (Array.isArray(payload?.documentos)) { const item = payload.documentos.find((d: any) => String(d?.order_id) === String(ro.order_id)); if (item?.data?.startsWith('JVBER')) b64 = item.data; }
-                                    else if (Array.isArray(payload)) { const item = payload.find((d: any) => String(d?.order_id) === String(ro.order_id)); if (item?.data?.startsWith('JVBER')) b64 = item.data; }
-                                    if (!b64) { toast.error('DANFE não retornada pelo webhook'); return; }
-                                    await supabase.from('orders').update({ danfe_base64: b64, danfe_gerada_em: new Date().toISOString() }).eq('id', ro.order_id);
-                                    const updated = { ...selectedRoute } as any;
-                                    updated.route_orders = (updated.route_orders || []).map((x: any) => x.id === ro.id ? { ...x, order: { ...(x.order || {}), danfe_base64: b64, danfe_gerada_em: new Date().toISOString() } } : x);
-                                    setSelectedRoute(updated);
-                                    const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
-                                    const doc = await PDFDocument.load(bytes);
-                                    const merged = await PDFDocument.create();
-                                    const pages = await merged.copyPages(doc, doc.getPageIndices());
-                                    pages.forEach((p) => merged.addPage(p));
-                                    const out = await merged.save();
-                                    DeliverySheetGenerator.openPDFInNewTab(out);
-                                    toast.success('DANFE gerada e salva');
-                                  } catch (e) {
-                                    console.error(e);
-                                    toast.error('Falha ao gerar DANFE');
-                                  }
-                                }}
-                              >
-                                <FileSpreadsheet className="h-4 w-4" />
-                              </button>
-                            )}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+                              {ro.order?.danfe_base64 ? (
+                                <button
+                                  className="p-1 text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded transition-colors"
+                                  title="Imprimir DANFE"
+                                  onClick={async () => {
+                                    try {
+                                      const b64 = String(ro.order?.danfe_base64);
+                                      const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+                                      const doc = await PDFDocument.load(bytes);
+                                      const merged = await PDFDocument.create();
+                                      const pages = await merged.copyPages(doc, doc.getPageIndices());
+                                      pages.forEach((p) => merged.addPage(p));
+                                      const out = await merged.save();
+                                      DeliverySheetGenerator.openPDFInNewTab(out);
+                                    } catch {
+                                      toast.error('Falha ao abrir DANFE');
+                                    }
+                                  }}
+                                >
+                                  <FileSpreadsheet className="h-4 w-4" />
+                                </button>
+                              ) : (
+                                <button
+                                  className="p-1 text-green-600 hover:text-green-800 hover:bg-green-50 rounded transition-colors"
+                                  title="Gerar DANFE individual"
+                                  onClick={async () => {
+                                    try {
+                                      const xml = ro.order?.xml_documento
+                                        ? String(ro.order.xml_documento)
+                                        : (() => {
+                                          const arr = ro.order?.raw_json?.xmls_documentos || ro.order?.raw_json?.xmls || [];
+                                          const first = Array.isArray(arr) ? arr[0] : null;
+                                          return first ? (typeof first === 'string' ? first : (first?.xml || '')) : '';
+                                        })();
+                                      if (!xml || !xml.includes('<')) { toast.error('XML não encontrado'); return; }
+                                      const webhookUrl = 'https://n8n.lojaodosmoveis.shop/webhook-test/gera_nf';
+                                      const resp = await fetch(webhookUrl, {
+                                        method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({ route_id: selectedRoute.id, documentos: [{ order_id: ro.order_id, numero: String(ro.order?.order_id_erp || ro.order_id || ''), xml }], count: 1 })
+                                      });
+                                      const text = await resp.text();
+                                      let payload: any = null; try { payload = JSON.parse(text); } catch { payload = { error: text }; }
+                                      if (!resp.ok) { toast.error('Erro ao gerar DANFE'); return; }
+                                      let b64: string | null = null;
+                                      if (typeof payload?.data === 'string' && payload.data.startsWith('JVBER')) b64 = payload.data;
+                                      else if (Array.isArray(payload?.documentos)) { const item = payload.documentos.find((d: any) => String(d?.order_id) === String(ro.order_id)); if (item?.data?.startsWith('JVBER')) b64 = item.data; }
+                                      else if (Array.isArray(payload)) { const item = payload.find((d: any) => String(d?.order_id) === String(ro.order_id)); if (item?.data?.startsWith('JVBER')) b64 = item.data; }
+                                      if (!b64) { toast.error('DANFE não retornada pelo webhook'); return; }
+                                      await supabase.from('orders').update({ danfe_base64: b64, danfe_gerada_em: new Date().toISOString() }).eq('id', ro.order_id);
+                                      const updated = { ...selectedRoute } as any;
+                                      updated.route_orders = (updated.route_orders || []).map((x: any) => x.id === ro.id ? { ...x, order: { ...(x.order || {}), danfe_base64: b64, danfe_gerada_em: new Date().toISOString() } } : x);
+                                      setSelectedRoute(updated);
+                                      const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+                                      const doc = await PDFDocument.load(bytes);
+                                      const merged = await PDFDocument.create();
+                                      const pages = await merged.copyPages(doc, doc.getPageIndices());
+                                      pages.forEach((p) => merged.addPage(p));
+                                      const out = await merged.save();
+                                      DeliverySheetGenerator.openPDFInNewTab(out);
+                                      toast.success('DANFE gerada e salva');
+                                    } catch (e) {
+                                      console.error(e);
+                                      toast.error('Falha ao gerar DANFE');
+                                    }
+                                  }}
+                                >
+                                  <FileSpreadsheet className="h-4 w-4" />
+                                </button>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             </div>
           </div>
-        </div>
-      )}
+        )
+      }
 
       {/* Mixed Confirm Modal */}
-      {mixedConfirmOpen && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl shadow-xl max-w-lg w-full p-6">
-            <div className="flex items-center gap-3 mb-4 text-yellow-600">
-              <AlertTriangle className="h-8 w-8" />
-              <h3 className="text-lg font-bold text-gray-900">Confirmação Necessária</h3>
-            </div>
-            <p className="text-gray-600 mb-4">
-              Alguns pedidos selecionados possuem itens em locais diferentes do filtro atual (<strong>{filterLocalEstocagem}</strong>).
-              Deseja continuar e incluir todos os itens destes pedidos na rota?
-            </p>
-            <div className="bg-gray-50 rounded-lg p-3 mb-6 max-h-40 overflow-auto text-sm">
-              {mixedConfirmOrders.map(m => (
-                <div key={m.id} className="flex justify-between py-1 border-b border-gray-200 last:border-0">
-                  <span className="font-medium">#{m.pedido}</span>
-                  <span className="text-gray-500">{m.otherLocs.join(', ')}</span>
-                </div>
-              ))}
-            </div>
-            <div className="flex justify-end gap-3">
-              <button onClick={() => setMixedConfirmOpen(false)} className="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50">Cancelar</button>
-              <button
-                onClick={() => { setMixedConfirmOpen(false); if (mixedConfirmAction === 'create') createRoute(true); }}
-                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
-              >
-                Sim, Continuar
-              </button>
+      {
+        mixedConfirmOpen && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-xl shadow-xl max-w-lg w-full p-6">
+              <div className="flex items-center gap-3 mb-4 text-yellow-600">
+                <AlertTriangle className="h-8 w-8" />
+                <h3 className="text-lg font-bold text-gray-900">Confirmação Necessária</h3>
+              </div>
+              <p className="text-gray-600 mb-4">
+                Alguns pedidos selecionados possuem itens em locais diferentes do filtro atual (<strong>{filterLocalEstocagem}</strong>).
+                Deseja continuar e incluir todos os itens destes pedidos na rota?
+              </p>
+              <div className="bg-gray-50 rounded-lg p-3 mb-6 max-h-40 overflow-auto text-sm">
+                {mixedConfirmOrders.map(m => (
+                  <div key={m.id} className="flex justify-between py-1 border-b border-gray-200 last:border-0">
+                    <span className="font-medium">#{m.pedido}</span>
+                    <span className="text-gray-500">{m.otherLocs.join(', ')}</span>
+                  </div>
+                ))}
+              </div>
+              <div className="flex justify-end gap-3">
+                <button onClick={() => setMixedConfirmOpen(false)} className="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50">Cancelar</button>
+                <button
+                  onClick={() => { setMixedConfirmOpen(false); if (mixedConfirmAction === 'create') createRoute(true); }}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
+                >
+                  Sim, Continuar
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )
+      }
 
-    </div>
+    </div >
   );
 }
 
