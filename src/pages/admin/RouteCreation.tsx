@@ -34,7 +34,9 @@ import {
   FilePlus,
   RefreshCw,
   Wrench,
-  Store
+  Store,
+  Ban,
+  PackageX
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { DeliverySheetGenerator } from '../../utils/pdf/deliverySheetGenerator';
@@ -175,14 +177,25 @@ function RouteCreationContent() {
   const [mixedConfirmOrders, setMixedConfirmOrders] = useState<Array<{ id: string, pedido: string, otherLocs: string[] }>>([]);
   const [mixedConfirmAction, setMixedConfirmAction] = useState<'create' | 'add' | 'none'>('none');
 
-  // Tabs State
-  const [activeRoutesTab, setActiveRoutesTab] = useState<'deliveries' | 'pickups'>('deliveries');
+  // Tabs State - expandido para incluir bloqueados e coletas
+  const [activeRoutesTab, setActiveRoutesTab] = useState<'deliveries' | 'pickups' | 'blocked' | 'pickupOrders'>('deliveries');
 
   // Pickup Modal State
   const [showPickupModal, setShowPickupModal] = useState(false);
   const [pickupConferente, setPickupConferente] = useState(''); // Conferente ID for pickup
   const [pickupObservations, setPickupObservations] = useState('');
   const [pickupSaving, setPickupSaving] = useState(false);
+
+  // Estados para pedidos bloqueados e coletas pendentes
+  const [blockedOrders, setBlockedOrders] = useState<Order[]>([]);
+  const [pickupPendingOrders, setPickupPendingOrders] = useState<Order[]>([]);
+
+  // Estados para modal de coleta individual
+  const [showPickupOrderModal, setShowPickupOrderModal] = useState(false);
+  const [selectedPickupOrder, setSelectedPickupOrder] = useState<Order | null>(null);
+  const [pickupOrderLoading, setPickupOrderLoading] = useState(false);
+  const [pickupOrderConferente, setPickupOrderConferente] = useState('');
+  const [pickupOrderObservations, setPickupOrderObservations] = useState('');
 
   // Motorista placeholder para retiradas - não será mostrado na UI
   const PICKUP_PLACEHOLDER_DRIVER_ID = '6bb1d41b-0a88-4468-8902-c42402fc0aeb';
@@ -793,12 +806,17 @@ function RouteCreationContent() {
         conferentesRes,
         routesRes,
         activeRouteOrdersRes,
+        // Pedidos bloqueados (cancelados/devolvidos via n8n)
+        blockedOrdersRes,
+        // Pedidos que precisam de coleta (foram entregues e depois devolvidos)
+        pickupPendingRes,
       ] = await Promise.all([
-        // Orders (pending or returned)
+        // Orders (pending or returned) - EXCLUINDO BLOQUEADOS
         supabase
           .from('orders')
           .select('*')
           .in('status', ['pending', 'returned'])
+          .is('blocked_at', null)  // Só pedidos NÃO bloqueados
           .order('created_at', { ascending: false }),
 
         // Vehicles
@@ -838,6 +856,23 @@ function RouteCreationContent() {
           .from('route_orders')
           .select('order_id, route:routes!inner(status)')
           .neq('route.status', 'completed'),
+
+        // Pedidos bloqueados (para aba "Bloqueados")
+        supabase
+          .from('orders')
+          .select('*')
+          .not('blocked_at', 'is', null)
+          .order('blocked_at', { ascending: false })
+          .limit(100),
+
+        // Pedidos que precisam de coleta (para aba "Coletas Pendentes")
+        supabase
+          .from('orders')
+          .select('*')
+          .eq('requires_pickup', true)
+          .is('pickup_created_at', null)
+          .order('blocked_at', { ascending: false })
+          .limit(100),
       ]);
 
       // Identify locked orders (belonging to active routes)
@@ -861,6 +896,16 @@ function RouteCreationContent() {
             return o;
           });
         setOrders(processedOrders);
+      }
+
+      // Processar pedidos bloqueados
+      if (blockedOrdersRes.data) {
+        setBlockedOrders(blockedOrdersRes.data as Order[]);
+      }
+
+      // Processar pedidos que precisam de coleta
+      if (pickupPendingRes.data) {
+        setPickupPendingOrders(pickupPendingRes.data as Order[]);
       }
 
       // Conference setting
@@ -1174,6 +1219,120 @@ function RouteCreationContent() {
       toast.error('Erro: ' + error.message);
     } finally {
       setPickupSaving(false);
+    }
+  };
+
+  // Função para criar ordem de coleta de devolução
+  const createPickupOrder = async () => {
+    if (!selectedPickupOrder) return;
+    if (!pickupOrderConferente) {
+      toast.error('Selecione o conferente responsável');
+      return;
+    }
+
+    setPickupOrderLoading(true);
+    try {
+      const order = selectedPickupOrder;
+      const conferenteName = conferentes.find(c => c.id === pickupOrderConferente)?.name || 'Conferente';
+
+      // 1. Gerar DANFE da nota de devolução via webhook
+      toast.info('Gerando nota fiscal de devolução...');
+
+      let nfWebhook = 'https://n8n.lojaodosmoveis.shop/webhook-test/gera_nf';
+      try {
+        const { data: s } = await supabase.from('webhook_settings').select('url').eq('key', 'gera_nf').eq('active', true).single();
+        if (s?.url) nfWebhook = s.url;
+      } catch { }
+
+      // Usar o XML de devolução que veio do ERP
+      const xmlDevolucao = order.return_nfe_xml || '';
+      if (!xmlDevolucao) {
+        toast.warning('XML de devolução não encontrado. Continuando sem DANFE.');
+      }
+
+      let danfeBase64 = '';
+      if (xmlDevolucao) {
+        try {
+          const resp = await fetch(nfWebhook, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              route_id: `COLETA-${order.order_id_erp}`,
+              documentos: [{ order_id: order.id, numero: order.return_nfe_number || order.order_id_erp, xml: xmlDevolucao }],
+              count: 1,
+              tipo: 'devolucao'
+            })
+          });
+          if (resp.ok) {
+            const payload = await resp.json();
+            const items = Array.isArray(payload) ? payload : [payload];
+            if (items[0]?.pdf_base64) {
+              danfeBase64 = items[0].pdf_base64;
+            }
+          }
+        } catch (e) {
+          console.warn('Falha ao gerar DANFE de devolução:', e);
+        }
+      }
+
+      // 2. Criar rota de coleta
+      const routeName = `COLETA-${order.return_nfe_number || order.order_id_erp}-${new Date().toLocaleDateString('pt-BR').replace(/\//g, '')}`;
+
+      const { data: routeData, error: routeError } = await supabase
+        .from('routes')
+        .insert({
+          name: routeName,
+          driver_id: PICKUP_PLACEHOLDER_DRIVER_ID,
+          vehicle_id: null,
+          status: 'pending',
+          observations: `Coleta de devolução. NF: ${order.return_nfe_number || '-'}. Resp: ${conferenteName}. ${pickupOrderObservations}`.trim()
+        })
+        .select()
+        .single();
+
+      if (routeError) throw routeError;
+
+      // 3. Criar route_order
+      const { error: roError } = await supabase.from('route_orders').insert({
+        route_id: routeData.id,
+        order_id: order.id,
+        sequence: 1,
+        status: 'pending',
+        delivery_observations: `Coleta de devolução. NF: ${order.return_nfe_number || '-'}. Motivo: ${order.blocked_reason || '-'}`
+      });
+      if (roError) throw roError;
+
+      // 4. Atualizar o pedido
+      const updateData: any = {
+        pickup_created_at: new Date().toISOString()
+      };
+      if (danfeBase64) {
+        // Salvar DANFE de devolução em campo separado (não sobrescrever a de venda)
+        updateData.return_danfe_base64 = danfeBase64;
+      }
+
+      const { error: ordError } = await supabase.from('orders').update(updateData).eq('id', order.id);
+      if (ordError) throw ordError;
+
+      toast.success('Coleta de devolução criada com sucesso!');
+
+      // Limpar e fechar modal
+      setShowPickupOrderModal(false);
+      setSelectedPickupOrder(null);
+      setPickupOrderConferente('');
+      setPickupOrderObservations('');
+
+      // Recarregar dados
+      await loadData(false);
+
+      // Mudar para aba de retiradas
+      setActiveRoutesTab('pickups');
+
+    } catch (error: any) {
+      console.error('Error creating pickup order:', error);
+      toast.error('Erro ao criar coleta: ' + error.message);
+    } finally {
+      setPickupOrderLoading(false);
     }
   };
 
@@ -1822,7 +1981,7 @@ function RouteCreationContent() {
         {/* Routes List Section */}
         <div ref={routesSectionRef} className="space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-gray-200 pb-2">
-            <div className="flex items-center gap-1 bg-gray-100/80 p-1 rounded-xl">
+            <div className="flex items-center gap-1 bg-gray-100/80 p-1 rounded-xl flex-wrap">
               <button
                 onClick={() => setActiveRoutesTab('deliveries')}
                 className={`px-4 py-2 rounded-lg text-sm font-bold transition-all flex items-center gap-2 ${activeRoutesTab === 'deliveries' ? 'bg-white shadow-sm text-blue-700' : 'text-gray-500 hover:text-gray-700'}`}
@@ -1837,164 +1996,421 @@ function RouteCreationContent() {
                 <Store className="h-4 w-4" />
                 Retiradas em Loja
               </button>
+              <button
+                onClick={() => setActiveRoutesTab('blocked')}
+                className={`px-4 py-2 rounded-lg text-sm font-bold transition-all flex items-center gap-2 ${activeRoutesTab === 'blocked' ? 'bg-white shadow-sm text-red-700' : 'text-gray-500 hover:text-gray-700'}`}
+              >
+                <Ban className="h-4 w-4" />
+                Bloqueados
+                {blockedOrders.length > 0 && (
+                  <span className="bg-red-500 text-white text-xs px-1.5 py-0.5 rounded-full">{blockedOrders.length}</span>
+                )}
+              </button>
+              <button
+                onClick={() => setActiveRoutesTab('pickupOrders')}
+                className={`px-4 py-2 rounded-lg text-sm font-bold transition-all flex items-center gap-2 ${activeRoutesTab === 'pickupOrders' ? 'bg-white shadow-sm text-orange-700' : 'text-gray-500 hover:text-gray-700'}`}
+              >
+                <PackageX className="h-4 w-4" />
+                Coletas Pendentes
+                {pickupPendingOrders.length > 0 && (
+                  <span className="bg-orange-500 text-white text-xs px-1.5 py-0.5 rounded-full">{pickupPendingOrders.length}</span>
+                )}
+              </button>
             </div>
 
             {(() => {
-              const filtered = routesList.filter(r => {
-                const isPkp = String(r.name || '').startsWith('RETIRADA');
-                return activeRoutesTab === 'pickups' ? isPkp : !isPkp;
-              });
+              let count = 0;
+              if (activeRoutesTab === 'deliveries' || activeRoutesTab === 'pickups') {
+                const filtered = routesList.filter(r => {
+                  const isPkp = String(r.name || '').startsWith('RETIRADA');
+                  return activeRoutesTab === 'pickups' ? isPkp : !isPkp;
+                });
+                count = filtered.length;
+              } else if (activeRoutesTab === 'blocked') {
+                count = blockedOrders.length;
+              } else if (activeRoutesTab === 'pickupOrders') {
+                count = pickupPendingOrders.length;
+              }
               return (
                 <span className="bg-gray-100 text-gray-600 px-3 py-1 rounded-full text-xs font-bold self-start sm:self-center">
-                  {filtered.length} registros
+                  {count} registros
                 </span>
               );
             })()}
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
-            {filteredRoutesList.length === 0 ? (
-              <div className="col-span-full bg-white rounded-xl border border-dashed border-gray-300 p-12 text-center">
-                <div className="mx-auto w-16 h-16 bg-gray-50 rounded-full flex items-center justify-center mb-4">
-                  {activeRoutesTab === 'pickups' ? <Store className="h-8 w-8 text-gray-400" /> : <Truck className="h-8 w-8 text-gray-400" />}
+          {/* Conteúdo condicional baseado na aba ativa */}
+          {(activeRoutesTab === 'deliveries' || activeRoutesTab === 'pickups') && (
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+              {filteredRoutesList.length === 0 ? (
+                <div className="col-span-full bg-white rounded-xl border border-dashed border-gray-300 p-12 text-center">
+                  <div className="mx-auto w-16 h-16 bg-gray-50 rounded-full flex items-center justify-center mb-4">
+                    {activeRoutesTab === 'pickups' ? <Store className="h-8 w-8 text-gray-400" /> : <Truck className="h-8 w-8 text-gray-400" />}
+                  </div>
+                  <h3 className="text-lg font-medium text-gray-900">Nenhum registro encontrado</h3>
+                  <p className="text-gray-500">
+                    {activeRoutesTab === 'pickups' ? 'Nenhuma retirada registrada recentemente.' : 'Crie sua primeira rota selecionando pedidos acima.'}
+                  </p>
                 </div>
-                <h3 className="text-lg font-medium text-gray-900">Nenhum registro encontrado</h3>
-                <p className="text-gray-500">
-                  {activeRoutesTab === 'pickups' ? 'Nenhuma retirada registrada recentemente.' : 'Crie sua primeira rota selecionando pedidos acima.'}
-                </p>
-              </div>
-            ) : (
-              filteredRoutesList.map(route => {
-                const total = route.route_orders?.length || 0;
-                const pending = route.route_orders?.filter(r => r.status === 'pending').length || 0;
-                const delivered = route.route_orders?.filter(r => r.status === 'delivered').length || 0;
-                const returned = route.route_orders?.filter(r => r.status === 'returned').length || 0;
+              ) : (
+                filteredRoutesList.map(route => {
+                  const total = route.route_orders?.length || 0;
+                  const pending = route.route_orders?.filter(r => r.status === 'pending').length || 0;
+                  const delivered = route.route_orders?.filter(r => r.status === 'delivered').length || 0;
+                  const returned = route.route_orders?.filter(r => r.status === 'returned').length || 0;
 
-                const statusColors = {
-                  pending: 'bg-yellow-50 text-yellow-700 border-yellow-200',
-                  in_progress: 'bg-blue-50 text-blue-700 border-blue-200',
-                  completed: 'bg-green-50 text-green-700 border-green-200'
-                };
-                const statusLabel = {
-                  pending: 'Em Separação',
-                  in_progress: 'Em Rota',
-                  completed: 'Finalizada'
-                };
+                  const statusColors = {
+                    pending: 'bg-yellow-50 text-yellow-700 border-yellow-200',
+                    in_progress: 'bg-blue-50 text-blue-700 border-blue-200',
+                    completed: 'bg-green-50 text-green-700 border-green-200'
+                  };
+                  const statusLabel = {
+                    pending: 'Em Separação',
+                    in_progress: 'Em Rota',
+                    completed: 'Finalizada'
+                  };
 
-                return (
-                  <div key={route.id} className="bg-white rounded-xl shadow-sm border border-gray-200 hover:shadow-md transition-shadow group flex flex-col">
-                    <div className="p-5 flex-1">
-                      <div className="flex flex-col items-center gap-2 mb-4">
-                        <div className="text-center">
-                          <h3 className="font-bold text-gray-900 text-lg group-hover:text-blue-600 transition-colors">{route.name}</h3>
-                          <p className="text-xs text-gray-500 mt-1 flex items-center justify-center">
-                            <Calendar className="h-3 w-3 mr-1" />
-                            {formatDate(route.created_at)}
-                          </p>
+                  return (
+                    <div key={route.id} className="bg-white rounded-xl shadow-sm border border-gray-200 hover:shadow-md transition-shadow group flex flex-col">
+                      <div className="p-5 flex-1">
+                        <div className="flex flex-col items-center gap-2 mb-4">
+                          <div className="text-center">
+                            <h3 className="font-bold text-gray-900 text-lg group-hover:text-blue-600 transition-colors">{route.name}</h3>
+                            <p className="text-xs text-gray-500 mt-1 flex items-center justify-center">
+                              <Calendar className="h-3 w-3 mr-1" />
+                              {formatDate(route.created_at)}
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className={`px-2 py-0.5 rounded-full text-[11px] font-semibold border ${statusColors[route.status] || 'bg-gray-100'}`}>
+                              {statusLabel[route.status] || route.status}
+                            </span>
+                            {(() => {
+                              const conf: any = (route as any).conference;
+                              const cStatus = String(conf?.status || '').toLowerCase();
+                              const ok = conf?.result_ok === true || cStatus === 'completed';
+                              const badgeClass = ok
+                                ? 'bg-green-50 text-green-700 border-green-200'
+                                : (cStatus === 'in_progress' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-yellow-50 text-yellow-700 border-yellow-200');
+                              const label = ok ? 'Conferência: Finalizada' : (cStatus === 'in_progress' ? 'Conferência: Em curso' : 'Conferência: Aguardando');
+                              return (
+                                <span className={`px-2 py-0.5 rounded-full text-[11px] font-semibold border inline-flex items-center gap-1 ${badgeClass}`} title="Status de conferência">
+                                  {ok ? <ClipboardCheck className="h-3 w-3" /> : <ClipboardList className="h-3 w-3" />}
+                                  {label}
+                                </span>
+                              );
+                            })()}
+                          </div>
                         </div>
-                        <div className="flex items-center gap-2">
-                          <span className={`px-2 py-0.5 rounded-full text-[11px] font-semibold border ${statusColors[route.status] || 'bg-gray-100'}`}>
-                            {statusLabel[route.status] || route.status}
-                          </span>
+
+                        <div className="space-y-3 mb-6">
+                          {/* Para retiradas: mostrar conferente como Responsável, esconder motorista e veículo */}
                           {(() => {
-                            const conf: any = (route as any).conference;
-                            const cStatus = String(conf?.status || '').toLowerCase();
-                            const ok = conf?.result_ok === true || cStatus === 'completed';
-                            const badgeClass = ok
-                              ? 'bg-green-50 text-green-700 border-green-200'
-                              : (cStatus === 'in_progress' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-yellow-50 text-yellow-700 border-yellow-200');
-                            const label = ok ? 'Conferência: Finalizada' : (cStatus === 'in_progress' ? 'Conferência: Em curso' : 'Conferência: Aguardando');
+                            const isPickupRoute = String(route.name || '').startsWith('RETIRADA');
+
+                            if (isPickupRoute) {
+                              return (
+                                <div className="flex items-center text-sm text-gray-600">
+                                  <ClipboardList className="h-4 w-4 mr-2 text-gray-400" />
+                                  <span className="font-medium text-purple-700">Responsável:</span>&nbsp;
+                                  {String((route as any)?.conferente || '').trim() || 'Não informado'}
+                                </div>
+                              );
+                            }
+
+                            // Para rotas normais de entrega
                             return (
-                              <span className={`px-2 py-0.5 rounded-full text-[11px] font-semibold border inline-flex items-center gap-1 ${badgeClass}`} title="Status de conferência">
-                                {ok ? <ClipboardCheck className="h-3 w-3" /> : <ClipboardList className="h-3 w-3" />}
-                                {label}
-                              </span>
+                              <>
+                                <div className="flex items-center text-sm text-gray-600">
+                                  <User className="h-4 w-4 mr-2 text-gray-400" />
+                                  {(route as any)?.driver_name || (route as any)?.driver?.user?.name || (route as any)?.driver?.name || 'Sem motorista'}
+                                </div>
+                                <div className="flex items-center text-sm text-gray-600">
+                                  <ClipboardList className="h-4 w-4 mr-2 text-gray-400" />
+                                  {String((route as any)?.conferente || '').trim() || 'Sem conferente'}
+                                </div>
+                                <div className="flex items-center text-sm text-gray-600">
+                                  <Truck className="h-4 w-4 mr-2 text-gray-400" />
+                                  {route.vehicle ? `${route.vehicle.model} (${route.vehicle.plate})` : 'Sem veículo'}
+                                </div>
+                              </>
                             );
                           })()}
                         </div>
+
+                        {/* Mini Stats */}
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-2">
+                          <div className="bg-gray-50 rounded-lg p-2 text-center">
+                            <span className="block text-lg font-bold text-gray-900">{total}</span>
+                            <span className="text-[10px] uppercase text-gray-500 font-bold">Total</span>
+                          </div>
+                          <div className="bg-blue-50 rounded-lg p-2 text-center">
+                            <span className="block text-lg font-bold text-blue-700">{delivered}</span>
+                            <span className="text-[10px] uppercase text-blue-600 font-bold">Entregues</span>
+                          </div>
+                          <div className="bg-yellow-50 rounded-lg p-2 text-center">
+                            <span className="block text-lg font-bold text-yellow-700">{pending}</span>
+                            <span className="text-[10px] uppercase text-yellow-600 font-bold">Pendentes</span>
+                          </div>
+                          <div className="bg-red-50 rounded-lg p-2 text-center">
+                            <span className="block text-lg font-bold text-red-700">{returned}</span>
+                            <span className="text-[10px] uppercase text-red-600 font-bold">Retornados</span>
+                          </div>
+                        </div>
                       </div>
 
-                      <div className="space-y-3 mb-6">
-                        {/* Para retiradas: mostrar conferente como Responsável, esconder motorista e veículo */}
-                        {(() => {
-                          const isPickupRoute = String(route.name || '').startsWith('RETIRADA');
-
-                          if (isPickupRoute) {
-                            return (
-                              <div className="flex items-center text-sm text-gray-600">
-                                <ClipboardList className="h-4 w-4 mr-2 text-gray-400" />
-                                <span className="font-medium text-purple-700">Responsável:</span>&nbsp;
-                                {String((route as any)?.conferente || '').trim() || 'Não informado'}
-                              </div>
-                            );
-                          }
-
-                          // Para rotas normais de entrega
-                          return (
-                            <>
-                              <div className="flex items-center text-sm text-gray-600">
-                                <User className="h-4 w-4 mr-2 text-gray-400" />
-                                {(route as any)?.driver_name || (route as any)?.driver?.user?.name || (route as any)?.driver?.name || 'Sem motorista'}
-                              </div>
-                              <div className="flex items-center text-sm text-gray-600">
-                                <ClipboardList className="h-4 w-4 mr-2 text-gray-400" />
-                                {String((route as any)?.conferente || '').trim() || 'Sem conferente'}
-                              </div>
-                              <div className="flex items-center text-sm text-gray-600">
-                                <Truck className="h-4 w-4 mr-2 text-gray-400" />
-                                {route.vehicle ? `${route.vehicle.model} (${route.vehicle.plate})` : 'Sem veículo'}
-                              </div>
-                            </>
-                          );
-                        })()}
-                      </div>
-
-                      {/* Mini Stats */}
-                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-2">
-                        <div className="bg-gray-50 rounded-lg p-2 text-center">
-                          <span className="block text-lg font-bold text-gray-900">{total}</span>
-                          <span className="text-[10px] uppercase text-gray-500 font-bold">Total</span>
-                        </div>
-                        <div className="bg-blue-50 rounded-lg p-2 text-center">
-                          <span className="block text-lg font-bold text-blue-700">{delivered}</span>
-                          <span className="text-[10px] uppercase text-blue-600 font-bold">Entregues</span>
-                        </div>
-                        <div className="bg-yellow-50 rounded-lg p-2 text-center">
-                          <span className="block text-lg font-bold text-yellow-700">{pending}</span>
-                          <span className="text-[10px] uppercase text-yellow-600 font-bold">Pendentes</span>
-                        </div>
-                        <div className="bg-red-50 rounded-lg p-2 text-center">
-                          <span className="block text-lg font-bold text-red-700">{returned}</span>
-                          <span className="text-[10px] uppercase text-red-600 font-bold">Retornados</span>
-                        </div>
+                      <div className="p-4 border-t border-gray-100 bg-gray-50/50 rounded-b-xl flex gap-3">
+                        <button
+                          onClick={() => {
+                            selectedRouteIdRef.current = String(route.id);
+                            localStorage.setItem('rc_selectedRouteId', String(route.id));
+                            setSelectedRoute(route);
+                            showRouteModalRef.current = true;
+                            localStorage.setItem('rc_showRouteModal', '1');
+                            setShowRouteModal(true);
+                          }}
+                          className="flex-1 inline-flex items-center justify-center px-4 py-2 bg-white border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors shadow-sm"
+                        >
+                          <Eye className="h-4 w-4 mr-2" /> Detalhes
+                        </button>
                       </div>
                     </div>
+                  );
+                })
+              )}
+            </div>
+          )}
 
-                    <div className="p-4 border-t border-gray-100 bg-gray-50/50 rounded-b-xl flex gap-3">
-                      <button
-                        onClick={() => {
-                          selectedRouteIdRef.current = String(route.id);
-                          localStorage.setItem('rc_selectedRouteId', String(route.id));
-                          setSelectedRoute(route);
-                          showRouteModalRef.current = true;
-                          localStorage.setItem('rc_showRouteModal', '1');
-                          setShowRouteModal(true);
-                        }}
-                        className="flex-1 inline-flex items-center justify-center px-4 py-2 bg-white border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors shadow-sm"
-                      >
-                        <Eye className="h-4 w-4 mr-2" /> Detalhes
-                      </button>
-                    </div>
+          {/* Aba: Pedidos Bloqueados */}
+          {activeRoutesTab === 'blocked' && (
+            <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+              {blockedOrders.length === 0 ? (
+                <div className="p-12 text-center">
+                  <div className="mx-auto w-16 h-16 bg-green-50 rounded-full flex items-center justify-center mb-4">
+                    <CheckCircle2 className="h-8 w-8 text-green-500" />
                   </div>
-                );
-              })
-            )}
-          </div>
+                  <h3 className="text-lg font-medium text-gray-900">Nenhum pedido bloqueado</h3>
+                  <p className="text-gray-500">Todos os pedidos estão disponíveis para roteamento.</p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead className="bg-gray-50 border-b border-gray-200">
+                      <tr>
+                        <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">Pedido</th>
+                        <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">Cliente</th>
+                        <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">Status ERP</th>
+                        <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">Motivo</th>
+                        <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">Data Bloqueio</th>
+                        <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">NF Devolução</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {blockedOrders.map((order) => (
+                        <tr key={order.id} className="hover:bg-gray-50">
+                          <td className="px-4 py-3 font-medium text-gray-900">{order.order_id_erp}</td>
+                          <td className="px-4 py-3 text-gray-600">{order.customer_name}</td>
+                          <td className="px-4 py-3">
+                            <span className={`px-2 py-1 rounded-full text-xs font-bold ${order.erp_status === 'devolvido' ? 'bg-red-100 text-red-700' : 'bg-orange-100 text-orange-700'
+                              }`}>
+                              {order.erp_status?.toUpperCase() || '-'}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 text-gray-600 text-sm">{order.blocked_reason || '-'}</td>
+                          <td className="px-4 py-3 text-gray-500 text-sm">
+                            {order.blocked_at ? new Date(order.blocked_at).toLocaleString('pt-BR') : '-'}
+                          </td>
+                          <td className="px-4 py-3 text-gray-600">{order.return_nfe_number || '-'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Aba: Coletas Pendentes */}
+          {activeRoutesTab === 'pickupOrders' && (
+            <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+              {pickupPendingOrders.length === 0 ? (
+                <div className="p-12 text-center">
+                  <div className="mx-auto w-16 h-16 bg-green-50 rounded-full flex items-center justify-center mb-4">
+                    <CheckCircle2 className="h-8 w-8 text-green-500" />
+                  </div>
+                  <h3 className="text-lg font-medium text-gray-900">Nenhuma coleta pendente</h3>
+                  <p className="text-gray-500">Não há pedidos aguardando coleta no momento.</p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead className="bg-gray-50 border-b border-gray-200">
+                      <tr>
+                        <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">Pedido</th>
+                        <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">Cliente</th>
+                        <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">Endereço</th>
+                        <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">NF Devolução</th>
+                        <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">Data Devolução</th>
+                        <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">Ações</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {pickupPendingOrders.map((order) => (
+                        <tr key={order.id} className="hover:bg-gray-50">
+                          <td className="px-4 py-3 font-medium text-gray-900">{order.order_id_erp}</td>
+                          <td className="px-4 py-3 text-gray-600">{order.customer_name}</td>
+                          <td className="px-4 py-3 text-gray-600 text-sm">
+                            {order.address_json?.street}, {order.address_json?.neighborhood} - {order.address_json?.city}
+                          </td>
+                          <td className="px-4 py-3">
+                            <span className="bg-blue-100 text-blue-700 px-2 py-1 rounded-full text-xs font-bold">
+                              NF {order.return_nfe_number || '-'}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 text-gray-500 text-sm">
+                            {order.return_date ? new Date(order.return_date).toLocaleDateString('pt-BR') : '-'}
+                          </td>
+                          <td className="px-4 py-3">
+                            <button
+                              onClick={() => {
+                                setSelectedPickupOrder(order);
+                                setPickupOrderConferente('');
+                                setPickupOrderObservations('');
+                                setShowPickupOrderModal(true);
+                              }}
+                              className="inline-flex items-center px-3 py-1.5 bg-orange-500 text-white text-xs font-bold rounded-lg hover:bg-orange-600 transition-colors"
+                            >
+                              <PackageX className="h-3 w-3 mr-1" />
+                              Criar Coleta
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
       </div>
 
       {/* --- MODALS --- */}
+
+      {/* Modal de Coleta de Devolução */}
+      {showPickupOrderModal && selectedPickupOrder && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden">
+            <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-orange-50">
+              <div>
+                <h3 className="text-lg font-bold text-gray-900 flex items-center gap-2">
+                  <PackageX className="h-5 w-5 text-orange-600" />
+                  Criar Coleta de Devolução
+                </h3>
+                <p className="text-sm text-gray-500 mt-1">Pedido #{selectedPickupOrder.order_id_erp}</p>
+              </div>
+              <button
+                onClick={() => { setShowPickupOrderModal(false); setSelectedPickupOrder(null); }}
+                className="text-gray-400 hover:text-gray-600"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              {/* Info do Pedido */}
+              <div className="bg-gray-50 rounded-lg p-4 space-y-2">
+                <div className="flex justify-between">
+                  <span className="text-sm text-gray-500">Cliente:</span>
+                  <span className="text-sm font-medium text-gray-900">{selectedPickupOrder.customer_name}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-sm text-gray-500">Endereço:</span>
+                  <span className="text-sm text-gray-900">
+                    {selectedPickupOrder.address_json?.street}, {selectedPickupOrder.address_json?.neighborhood}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-sm text-gray-500">NF Devolução:</span>
+                  <span className="text-sm font-bold text-blue-600">{selectedPickupOrder.return_nfe_number || '-'}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-sm text-gray-500">Motivo:</span>
+                  <span className="text-sm text-red-600">{selectedPickupOrder.blocked_reason || '-'}</span>
+                </div>
+              </div>
+
+              {/* Conferente */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Conferente Responsável *
+                </label>
+                <select
+                  value={pickupOrderConferente}
+                  onChange={(e) => setPickupOrderConferente(e.target.value)}
+                  className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none transition-all"
+                >
+                  <option value="">Selecione o conferente...</option>
+                  {conferentes.map(c => (
+                    <option key={c.id} value={c.id}>{c.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Observações */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Observações (opcional)
+                </label>
+                <textarea
+                  value={pickupOrderObservations}
+                  onChange={(e) => setPickupOrderObservations(e.target.value)}
+                  placeholder="Ex: Entrar em contato antes de ir..."
+                  className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none transition-all resize-none"
+                  rows={3}
+                />
+              </div>
+
+              {/* Info sobre DANFE */}
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 flex items-start gap-2">
+                <Info className="h-5 w-5 text-blue-500 flex-shrink-0 mt-0.5" />
+                <div className="text-sm text-blue-700">
+                  <p className="font-medium">Nota Fiscal de Devolução</p>
+                  <p className="text-blue-600">O sistema irá gerar automaticamente a DANFE de devolução para ser levada na coleta.</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="px-6 py-4 bg-gray-50 border-t border-gray-100 flex justify-end gap-3">
+              <button
+                onClick={() => { setShowPickupOrderModal(false); setSelectedPickupOrder(null); }}
+                className="px-4 py-2 text-gray-700 font-medium rounded-lg hover:bg-gray-100 transition-colors"
+                disabled={pickupOrderLoading}
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={createPickupOrder}
+                disabled={pickupOrderLoading || !pickupOrderConferente}
+                className="px-6 py-2 bg-orange-600 text-white font-bold rounded-lg hover:bg-orange-700 transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {pickupOrderLoading ? (
+                  <>
+                    <RefreshCw className="h-4 w-4 animate-spin" />
+                    Criando...
+                  </>
+                ) : (
+                  <>
+                    <PackageX className="h-4 w-4" />
+                    Criar Coleta
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Create Route Modal */}
       {
@@ -2957,9 +3373,17 @@ function RouteCreationContent() {
                     try {
                       const { data: roData, error: roErr } = await supabase.from('route_orders').select('*, order:orders(*)').eq('route_id', routeId).order('sequence');
                       if (roErr) throw roErr;
-                      const allHaveDanfe = (roData || []).every((ro: any) => !!ro.order?.danfe_base64);
+
+                      // Verificar se é rota de coleta (usa DANFE de devolução)
+                      const isPickupRoute = String(selectedRoute.name || '').startsWith('COLETA-');
+
+                      // Para coletas, usar return_danfe_base64; para entregas, usar danfe_base64
+                      const getDanfe = (order: any) => isPickupRoute ? order?.return_danfe_base64 : order?.danfe_base64;
+                      const getXml = (order: any) => isPickupRoute ? order?.return_nfe_xml : (order?.xml_documento || '');
+
+                      const allHaveDanfe = (roData || []).every((ro: any) => !!getDanfe(ro.order));
                       if (allHaveDanfe) {
-                        const base64Existing = (roData || []).map((ro: any) => String(ro.order.danfe_base64)).filter((b: string) => b && b.startsWith('JVBER'));
+                        const base64Existing = (roData || []).map((ro: any) => String(getDanfe(ro.order))).filter((b: string) => b && b.startsWith('JVBER'));
                         const merged1 = await PDFDocument.create();
                         for (const b64 of base64Existing) {
                           const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
@@ -2972,14 +3396,16 @@ function RouteCreationContent() {
                         setNfLoading(false);
                         return;
                       }
-                      const missing = (roData || []).filter((ro: any) => !ro.order?.danfe_base64);
+                      const missing = (roData || []).filter((ro: any) => !getDanfe(ro.order));
                       const docs = missing.map((ro: any) => {
-                        let xmlText = '';
-                        if (ro.order?.xml_documento) xmlText = String(ro.order.xml_documento);
-                        else if (ro.order?.raw_json?.xmls_documentos || ro.order?.raw_json?.xmls) {
-                          const arr = ro.order.raw_json.xmls_documentos || ro.order.raw_json.xmls || [];
-                          const first = Array.isArray(arr) ? arr[0] : null;
-                          xmlText = first ? (typeof first === 'string' ? first : (first?.xml || '')) : '';
+                        let xmlText = getXml(ro.order);
+                        if (!xmlText && !isPickupRoute) {
+                          // Fallback para entregas normais
+                          if (ro.order?.raw_json?.xmls_documentos || ro.order?.raw_json?.xmls) {
+                            const arr = ro.order.raw_json.xmls_documentos || ro.order.raw_json.xmls || [];
+                            const first = Array.isArray(arr) ? arr[0] : null;
+                            xmlText = first ? (typeof first === 'string' ? first : (first?.xml || '')) : '';
+                          }
                         }
                         return { order_id: ro.order_id, numero: String(ro.order?.order_id_erp || ro.order_id || ''), xml: xmlText };
                       }).filter((d: any) => d.xml && d.xml.includes('<'));
@@ -3004,19 +3430,25 @@ function RouteCreationContent() {
                       if (Array.isArray(payload?.arquivos)) payload.arquivos.forEach((d: any) => { if (d?.data?.startsWith('JVBER')) pushData(d.data); if (d?.order_id) mapByOrderId.set(String(d.order_id), d.data); });
                       if (base64List.length === 0) { toast.error('Resposta não contém PDFs em base64'); setNfLoading(false); return; }
                       try {
-                        // Just save DANFE to database - don't update local state to avoid stale closure issues
+                        // Salvar DANFE no campo correto baseado no tipo de rota
+                        const danfeField = isPickupRoute ? 'return_danfe_base64' : 'danfe_base64';
                         if (mapByOrderId.size > 0) {
                           for (const [orderId, b64] of mapByOrderId.entries()) {
-                            await supabase.from('orders').update({ danfe_base64: b64, danfe_gerada_em: new Date().toISOString() }).eq('id', orderId);
+                            const updateData: any = { [danfeField]: b64 };
+                            if (!isPickupRoute) updateData.danfe_gerada_em = new Date().toISOString();
+                            await supabase.from('orders').update(updateData).eq('id', orderId);
                           }
                         } else if (base64List.length === docs.length) {
                           for (let i = 0; i < docs.length; i++) {
                             const orderId = docs[i].order_id; const b64 = base64List[i];
-                            await supabase.from('orders').update({ danfe_base64: b64, danfe_gerada_em: new Date().toISOString() }).eq('id', orderId);
+                            const updateData: any = { [danfeField]: b64 };
+                            if (!isPickupRoute) updateData.danfe_gerada_em = new Date().toISOString();
+                            await supabase.from('orders').update(updateData).eq('id', orderId);
                           }
                         }
                       } catch (e) { console.warn('Falha ao salvar DANFE:', e); }
-                      const existing = (roData || []).map((ro: any) => String(ro.order?.danfe_base64)).filter((b: string) => b && b.startsWith('JVBER'));
+                      // Buscar DANFEs existentes do campo correto
+                      const existing = (roData || []).map((ro: any) => String(getDanfe(ro.order))).filter((b: string) => b && b.startsWith('JVBER'));
                       const allB64 = [...existing, ...base64List];
                       const merged = await PDFDocument.create();
                       for (const b64 of allB64) {

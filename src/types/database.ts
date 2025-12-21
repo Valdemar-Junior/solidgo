@@ -66,6 +66,21 @@ export interface Order {
   delivery_date?: string;
   driver_name?: string;
   service_type?: 'troca' | 'assistencia';
+
+  // Campos de controle de bloqueio/devolução (preenchidos via n8n)
+  erp_status?: string;           // Status do ERP: 'devolvido', 'cancelado'
+  blocked_at?: string;           // Data/hora do bloqueio - se preenchido, pedido está bloqueado
+  blocked_reason?: string;       // Motivo do bloqueio
+  requires_pickup?: boolean;     // TRUE = precisa coletar no cliente
+  pickup_created_at?: string;    // Data/hora em que a rota de coleta foi criada
+
+  // Dados da nota de devolução (para DANFE de coleta)
+  return_nfe_number?: string;    // Número da NF-e de devolução
+  return_nfe_key?: string;       // Chave de acesso da NF-e (44 dígitos)
+  return_nfe_xml?: string;       // XML completo da NF-e de devolução
+  return_date?: string;          // Data da devolução no ERP
+  return_type?: string;          // Tipo: 'NOTA DE DEVOLUCAO'
+  return_danfe_base64?: string;  // PDF da DANFE de devolução em Base64
 }
 
 export interface Address {
