@@ -207,10 +207,10 @@ function RouteCreationContent() {
     });
   }, [routesList, activeRoutesTab]);
 
-  // --- SINGLE LAUNCH IMPORT (TROCAS/ASSISTENCIAS) ---
+  // --- SINGLE LAUNCH IMPORT (TROCAS/ASSISTENCIAS/VENDAS) ---
   const [showLaunchModal, setShowLaunchModal] = useState(false);
   const [launchNumber, setLaunchNumber] = useState('');
-  const [launchType, setLaunchType] = useState<'troca' | 'assistencia'>('troca');
+  const [launchType, setLaunchType] = useState<'troca' | 'assistencia' | 'venda'>('troca');
   const [launchLoading, setLaunchLoading] = useState(false);
 
   const handleLaunchSubmit = async (e: React.FormEvent) => {
@@ -284,10 +284,13 @@ function RouteCreationContent() {
         })) : [];
 
         // Append type suffix to ensure uniqueness and identification
+        // Para vendas, NÃO adiciona sufixo (é o pedido original)
         let erpId = String(o.numero_lancamento ?? o.lancamento_venda ?? o.codigo_cliente ?? launchNumber);
-        const suffix = launchType === 'troca' ? '-T' : '-A';
-        if (!erpId.endsWith(suffix) && !erpId.endsWith('-T') && !erpId.endsWith('-A')) {
-          erpId = `${erpId}${suffix}`;
+        if (launchType !== 'venda') {
+          const suffix = launchType === 'troca' ? '-T' : '-A';
+          if (!erpId.endsWith(suffix) && !erpId.endsWith('-T') && !erpId.endsWith('-A')) {
+            erpId = `${erpId}${suffix}`;
+          }
         }
 
         return {
@@ -298,6 +301,8 @@ function RouteCreationContent() {
           filial_venda: getVal(o.filial_venda),
           vendedor_nome: getVal(o.nome_vendedor ?? o.vendedor ?? o.vendedor_nome),
           data_venda: o.data_venda ? new Date(o.data_venda).toISOString() : new Date().toISOString(),
+          previsao_entrega: o.previsao_entrega ? new Date(o.previsao_entrega).toISOString() : null,
+          observacoes_publicas: getVal(o.observacoes_publicas),
           observacoes_internas: getVal(o.observacoes_internas),
           tem_frete_full: getVal(o.tem_frete_full),
           address_json: {
@@ -313,29 +318,57 @@ function RouteCreationContent() {
           items_json: itemsJson,
           status: 'pending',
           raw_json: o,
-          service_type: launchType,
+          service_type: launchType === 'venda' ? undefined : launchType,
           department: String(itemsJson[0]?.department || ''),
           brand: String(itemsJson[0]?.brand || '')
         };
       });
 
+      // Para vendas, verificar se o pedido já existe ANTES de importar
+      if (launchType === 'venda') {
+        const erpIds = toDb.map((o: any) => o.order_id_erp);
+        const { data: existingOrders } = await supabase
+          .from('orders')
+          .select('order_id_erp')
+          .in('order_id_erp', erpIds);
+
+        if (existingOrders && existingOrders.length > 0) {
+          const existingIds = existingOrders.map((o: any) => o.order_id_erp).join(', ');
+          toast.error(`Pedido(s) já existe(m) no sistema: ${existingIds}`);
+          setLaunchLoading(false);
+          return;
+        }
+      }
+
       let insertedCount = 0;
       let errors = 0;
 
       for (const order of toDb) {
-        const { error } = await supabase.from('orders').upsert(order, { onConflict: 'order_id_erp' });
-        if (error) {
-          console.error('Erro ao inserir', error);
-          errors++;
+        // Para vendas, usar insert ao invés de upsert para garantir que não sobrescreve
+        if (launchType === 'venda') {
+          const { error } = await supabase.from('orders').insert(order);
+          if (error) {
+            console.error('Erro ao inserir', error);
+            errors++;
+          } else {
+            insertedCount++;
+          }
         } else {
-          insertedCount++;
+          const { error } = await supabase.from('orders').upsert(order, { onConflict: 'order_id_erp' });
+          if (error) {
+            console.error('Erro ao inserir', error);
+            errors++;
+          } else {
+            insertedCount++;
+          }
         }
       }
 
       if (errors > 0) {
         toast.warning(`${insertedCount} importado(s), ${errors} erro(s). Verifique duplicidades.`);
       } else if (insertedCount > 0) {
-        toast.success(`${insertedCount} lançamento(s) avulso(s) de ${launchType} importado(s)!`);
+        const tipoLabel = launchType === 'venda' ? 'pedido(s) de venda' : `lançamento(s) avulso(s) de ${launchType}`;
+        toast.success(`${insertedCount} ${tipoLabel} importado(s)!`);
         setShowLaunchModal(false);
         setLaunchNumber('');
         loadData(false);
@@ -2525,7 +2558,7 @@ function RouteCreationContent() {
 
                 <h3 className="text-2xl font-bold text-gray-900 text-center mb-2">Lançamento Avulso</h3>
                 <p className="text-center text-gray-500 mb-8">
-                  Importe uma Troca ou Assistência usando o número do lançamento original.
+                  Importe uma Troca, Assistência ou Pedido de Venda antigo usando o número do lançamento.
                 </p>
 
                 <form onSubmit={handleLaunchSubmit} className="space-y-5">
@@ -2543,24 +2576,37 @@ function RouteCreationContent() {
 
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-2">Tipo de Serviço</label>
-                    <div className="grid grid-cols-2 gap-3">
+                    <div className="grid grid-cols-3 gap-2">
                       <button
                         type="button"
                         onClick={() => setLaunchType('troca')}
-                        className={`px-4 py-3 rounded-xl border flex flex-col items-center gap-2 transition-all ${launchType === 'troca' ? 'bg-orange-50 border-orange-500 text-orange-700 ring-1 ring-orange-500' : 'bg-white border-gray-200 text-gray-600 hover:border-orange-200 hover:bg-orange-50/50'}`}
+                        className={`px-3 py-3 rounded-xl border flex flex-col items-center gap-1.5 transition-all ${launchType === 'troca' ? 'bg-orange-50 border-orange-500 text-orange-700 ring-1 ring-orange-500' : 'bg-white border-gray-200 text-gray-600 hover:border-orange-200 hover:bg-orange-50/50'}`}
                       >
                         <RefreshCw className="h-5 w-5" />
-                        <span className="font-semibold text-sm">Troca</span>
+                        <span className="font-semibold text-xs">Troca</span>
                       </button>
                       <button
                         type="button"
                         onClick={() => setLaunchType('assistencia')}
-                        className={`px-4 py-3 rounded-xl border flex flex-col items-center gap-2 transition-all ${launchType === 'assistencia' ? 'bg-blue-50 border-blue-500 text-blue-700 ring-1 ring-blue-500' : 'bg-white border-gray-200 text-gray-600 hover:border-blue-200 hover:bg-blue-50/50'}`}
+                        className={`px-3 py-3 rounded-xl border flex flex-col items-center gap-1.5 transition-all ${launchType === 'assistencia' ? 'bg-blue-50 border-blue-500 text-blue-700 ring-1 ring-blue-500' : 'bg-white border-gray-200 text-gray-600 hover:border-blue-200 hover:bg-blue-50/50'}`}
                       >
                         <Hammer className="h-5 w-5" />
-                        <span className="font-semibold text-sm">Assistência</span>
+                        <span className="font-semibold text-xs">Assistência</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setLaunchType('venda')}
+                        className={`px-3 py-3 rounded-xl border flex flex-col items-center gap-1.5 transition-all ${launchType === 'venda' ? 'bg-emerald-50 border-emerald-500 text-emerald-700 ring-1 ring-emerald-500' : 'bg-white border-gray-200 text-gray-600 hover:border-emerald-200 hover:bg-emerald-50/50'}`}
+                      >
+                        <Package className="h-5 w-5" />
+                        <span className="font-semibold text-xs">Pedido Venda</span>
                       </button>
                     </div>
+                    {launchType === 'venda' && (
+                      <p className="mt-2 text-xs text-emerald-600 bg-emerald-50 p-2 rounded-lg border border-emerald-100">
+                        💡 Use para pedidos antigos aguardando liberação do cliente (reformas, etc.)
+                      </p>
+                    )}
                   </div>
 
                   <div className="pt-4">

@@ -65,7 +65,7 @@ export interface Order {
   sale_date?: string;
   delivery_date?: string;
   driver_name?: string;
-  service_type?: 'troca' | 'assistencia';
+  service_type?: 'troca' | 'assistencia' | 'venda';
 
   // Campos de controle de bloqueio/devolução (preenchidos via n8n)
   erp_status?: string;           // Status do ERP: 'devolvido', 'cancelado'
