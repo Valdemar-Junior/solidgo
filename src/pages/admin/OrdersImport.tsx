@@ -586,8 +586,12 @@ export default function OrdersImport() {
                   <ul className="space-y-3">
                     {selectedOrder.items_json.map((p: any, idx: number) => {
                       const hasAssembly = String(p?.has_assembly || '').toLowerCase().includes('sim');
+                      // Verifica Frete Full: 1) campo direto, 2) observações internas com *frete full*
                       const freteRaw = String(selectedOrder.tem_frete_full || selectedOrder.raw_json?.tem_frete_full || '').toLowerCase();
-                      const isFreteFull = ['sim', 'true', '1', 'y', 'yes'].some(v => freteRaw.includes(v));
+                      const hasFreteFullCampo = ['sim', 'true', '1', 'y', 'yes'].some(v => freteRaw.includes(v));
+                      const obsInternas = String(selectedOrder.observacoes_internas || selectedOrder.raw_json?.observacoes_internas || '').toLowerCase();
+                      const hasFreteFullObs = obsInternas.includes('*frete full*');
+                      const isFreteFull = hasFreteFullCampo || hasFreteFullObs;
                       return (
                         <li key={idx} className="flex items-start justify-between bg-white p-3 rounded-lg border border-gray-100 shadow-sm">
                           <div>

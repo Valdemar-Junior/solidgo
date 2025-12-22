@@ -764,6 +764,23 @@ function RouteCreationContent() {
     return s === 'true' || s === '1' || s === 'sim' || s === 's' || s === 'y' || s === 'yes' || s === 't';
   };
 
+  // Verifica se o pedido tem Frete Full
+  // Prioridade 1: Campo tem_frete_full
+  // Prioridade 2: Observações internas contendo *frete full* (entre asteriscos)
+  const hasFreteFull = (order: any) => {
+    const raw = order?.raw_json || {};
+    // Prioridade 1: Campo direto
+    if (isTrueGlobal(order?.tem_frete_full) || isTrueGlobal(raw?.tem_frete_full)) {
+      return true;
+    }
+    // Prioridade 2: Observações internas com *frete full*
+    const obsInternas = String(order?.observacoes_internas || raw?.observacoes_internas || '').toLowerCase();
+    if (obsInternas.includes('*frete full*')) {
+      return true;
+    }
+    return false;
+  };
+
   const getFilteredOrderIds = (): Set<string> => {
     try {
       const filtered = (orders || []).filter((o: any) => {
@@ -778,7 +795,7 @@ function RouteCreationContent() {
         if (filterCity && !city.includes(filterCity.toLowerCase())) return false;
         if (filterNeighborhood && !nb.includes(filterNeighborhood.toLowerCase())) return false;
         if (clientQuery && !client.includes(clientQuery.toLowerCase())) return false;
-        if (filterFreightFull && !isTrueGlobal(o.tem_frete_full || raw?.tem_frete_full)) return false;
+        if (filterFreightFull && !hasFreteFull(o)) return false;
         if (filterOperation && !String(raw.operacoes || '').toLowerCase().includes(filterOperation.toLowerCase())) return false;
         if (filterFilialVenda && filial !== filterFilialVenda.toLowerCase()) return false;
         if (filterSeller && !seller.includes(filterSeller.toLowerCase())) return false;
@@ -1832,7 +1849,7 @@ function RouteCreationContent() {
                       if (filterCity && !city.includes(filterCity.toLowerCase())) return false;
                       if (filterNeighborhood && !nb.includes(filterNeighborhood.toLowerCase())) return false;
                       if (clientQuery && !client.includes(clientQuery.toLowerCase())) return false;
-                      if (filterFreightFull && !isTrue(o.tem_frete_full || raw?.tem_frete_full)) return false;
+                      if (filterFreightFull && !hasFreteFull(o)) return false;
                       if (filterOperation && !String(raw.operacoes || '').toLowerCase().includes(filterOperation.toLowerCase())) return false;
                       if (filterFilialVenda && filial !== filterFilialVenda.toLowerCase()) return false;
                       if (filterSeller && !seller.includes(filterSeller.toLowerCase())) return false;
@@ -1882,7 +1899,7 @@ function RouteCreationContent() {
                       const isSelected = selectedOrders.has(o.id);
                       const raw: any = o.raw_json || {};
                       const addr: any = o.address_json || {};
-                      const temFreteFull = isTrue(o.tem_frete_full) || isTrue(raw?.tem_frete_full);
+                      const temFreteFull = hasFreteFull(o);
                       const hasAssembly = isTrue(it?.has_assembly);
                       const isReturned = Boolean(o.return_flag) || String(o.status) === 'returned';
                       const returnReason = (o.last_return_reason || (raw as any).return_reason || '') as string;
