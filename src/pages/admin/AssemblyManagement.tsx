@@ -37,6 +37,8 @@ import {
 import { toast } from 'sonner';
 import { DeliverySheetGenerator } from '../../utils/pdf/deliverySheetGenerator';
 import { useAssemblyDataStore } from '../../stores/assemblyDataStore';
+import { useAuthStore } from '../../stores/authStore';
+import { saveUserPreference, loadUserPreference, mergeColumnsConfig, type ColumnConfig } from '../../utils/userPreferences';
 
 // --- ERROR BOUNDARY ---
 class AssemblyManagementErrorBoundary extends React.Component<
@@ -100,6 +102,7 @@ class AssemblyManagementErrorBoundary extends React.Component<
 
 function AssemblyManagementContent() {
   const navigate = useNavigate();
+  const { user: authUser } = useAuthStore();
 
   // --- LOCAL STATE ---
   const [assemblyRoutes, setAssemblyRoutes] = useState<AssemblyRoute[]>([]);
@@ -208,6 +211,53 @@ function AssemblyManagementContent() {
 
 
   // Restore persisted selections and scroll position
+  useEffect(() => {
+    const loadColumnsFromSupabase = async () => {
+      const defaults: ColumnConfig[] = [
+        { id: 'dataVenda', label: 'Data Venda', visible: true },
+        { id: 'entrega', label: 'Entrega', visible: true },
+        { id: 'previsao', label: 'Previsão', visible: true },
+        { id: 'pedido', label: 'Pedido', visible: true },
+        { id: 'cliente', label: 'Cliente', visible: true },
+        { id: 'telefone', label: 'Telefone', visible: true },
+        { id: 'sinais', label: 'Sinais', visible: true },
+        { id: 'produto', label: 'Produto', visible: true },
+        { id: 'sku', label: 'SKU', visible: true },
+        { id: 'obsPublicas', label: 'Obs. Públicas', visible: true },
+        { id: 'obsInternas', label: 'Obs. Internas', visible: true },
+        { id: 'cidade', label: 'Cidade', visible: true },
+        { id: 'bairro', label: 'Bairro', visible: true },
+        { id: 'endereco', label: 'Endereço', visible: true },
+      ];
+
+      try {
+        // Load columns config from Supabase (or localStorage fallback)
+        if (authUser?.id) {
+          const savedCols = await loadUserPreference<ColumnConfig[]>(authUser.id, 'am_columns_conf');
+          if (savedCols) {
+            const merged = mergeColumnsConfig(savedCols, defaults);
+            setColumnsConf(merged);
+          }
+        } else {
+          // Fallback to localStorage if not authenticated
+          const cols = localStorage.getItem('am_columns_conf');
+          if (cols) {
+            const parsed = JSON.parse(cols);
+            if (Array.isArray(parsed)) {
+              const merged = mergeColumnsConfig(parsed, defaults);
+              setColumnsConf(merged);
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('[AssemblyManagement] Error loading columns config:', e);
+      }
+    };
+
+    loadColumnsFromSupabase();
+  }, [authUser?.id]);
+
+  // Restore persisted selections and scroll position (original logic)
   useEffect(() => {
     try {
       const saved = localStorage.getItem('am_selectedOrders');
@@ -1198,12 +1248,12 @@ function AssemblyManagementContent() {
       {/* Create Route Modal */}
       {showCreateModal && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden">
-            <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden">
+            <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50 flex-shrink-0">
               <h3 className="text-lg font-bold text-gray-900">Novo Romaneio de Montagem</h3>
               <button onClick={() => { try { localStorage.setItem('am_showCreateModal', '0'); } catch { } setShowCreateModal(false); }} className="text-gray-400 hover:text-gray-600"><X className="h-5 w-5" /></button>
             </div>
-            <div className="p-6 space-y-6">
+            <div className="p-6 space-y-6 overflow-y-auto flex-1">
               {/* Select existing route or create new */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">Adicionar a romaneio existente?</label>
@@ -1292,7 +1342,7 @@ function AssemblyManagementContent() {
                 <span className="bg-blue-200 text-blue-800 px-3 py-1 rounded-lg font-bold">{selectedOrders.size}</span>
               </div>
             </div>
-            <div className="px-6 py-4 border-t border-gray-100 bg-gray-50 flex justify-end gap-3">
+            <div className="px-6 py-4 border-t border-gray-100 bg-gray-50 flex justify-end gap-3 flex-shrink-0">
               <button onClick={() => setShowCreateModal(false)} className="px-6 py-2.5 rounded-xl border border-gray-300 text-gray-700 font-medium hover:bg-white transition-colors">Cancelar</button>
               <button
                 onClick={() => createAssemblyRoute()}
@@ -1355,8 +1405,19 @@ function AssemblyManagementContent() {
             </div>
             <div className="p-4 border-t border-gray-100 bg-gray-50 text-right">
               <button
-                onClick={() => {
-                  localStorage.setItem('am_columns_conf', JSON.stringify(columnsConf));
+                onClick={async () => {
+                  if (authUser?.id) {
+                    const success = await saveUserPreference(authUser.id, 'am_columns_conf', columnsConf);
+                    if (success) {
+                      toast.success('Configuração de colunas salva com sucesso!');
+                    } else {
+                      toast.error('Erro ao salvar configuração. Tente novamente.');
+                    }
+                  } else {
+                    // Fallback to localStorage if not authenticated
+                    localStorage.setItem('am_columns_conf', JSON.stringify(columnsConf));
+                    toast.success('Configuração salva localmente.');
+                  }
                   setShowColumnsModal(false);
                 }}
                 className="px-4 py-2 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700"

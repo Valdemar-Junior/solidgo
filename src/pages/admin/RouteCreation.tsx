@@ -43,6 +43,7 @@ import { DeliverySheetGenerator } from '../../utils/pdf/deliverySheetGenerator';
 import { PDFDocument } from 'pdf-lib';
 import { useAuthStore } from '../../stores/authStore';
 import { useRouteDataStore } from '../../stores/routeDataStore';
+import { saveUserPreference, loadUserPreference, mergeColumnsConfig, type ColumnConfig } from '../../utils/userPreferences';
 
 // --- ERROR BOUNDARY ---
 class RouteCreationErrorBoundary extends React.Component<
@@ -108,6 +109,7 @@ class RouteCreationErrorBoundary extends React.Component<
 
 function RouteCreationContent() {
   const navigate = useNavigate();
+  const { user: authUser } = useAuthStore();
 
   // --- LOCAL STATE ---
   const [orders, setOrders] = useState<Order[]>([]);
@@ -494,62 +496,71 @@ function RouteCreationContent() {
   };
 
   useEffect(() => {
-    try {
-      const rid = localStorage.getItem('rc_selectedRouteId');
-      const showRoutePref = localStorage.getItem('rc_showRouteModal');
-      const showCreatePref = localStorage.getItem('rc_showCreateModal');
-      if (showCreatePref === '1') {
-        setShowCreateModal(true);
-      }
-      if (showRoutePref === '1' && rid) {
-        selectedRouteIdRef.current = rid;
-        showRouteModalRef.current = true;
-        setShowRouteModal(true);
-      }
-      const cols = localStorage.getItem('rc_columns_conf');
-      if (cols) {
-        const parsed = JSON.parse(cols);
-        if (Array.isArray(parsed)) {
-          const migrated = parsed
-            .filter((c: any) => c && typeof c === 'object' && 'id' in c)
-            .map((c: any) => c.id === 'localEstocagem' ? { ...c, label: 'Local de Saída' } : c);
-          if (migrated.length > 0) {
-            // Merge with defaults to ensure no missing columns
-            const defaults = [
-              { id: 'data', label: 'Data', visible: true },
-              { id: 'pedido', label: 'Pedido', visible: true },
-              { id: 'cliente', label: 'Cliente', visible: true },
-              { id: 'telefone', label: 'Telefone', visible: true },
-              { id: 'sku', label: 'SKU', visible: true },
-              { id: 'flags', label: 'Sinais', visible: true },
-              { id: 'produto', label: 'Produto', visible: true },
-              { id: 'quantidade', label: 'Qtd.', visible: true },
-              { id: 'department', label: 'Depto.', visible: true },
-              { id: 'brand', label: 'Marca', visible: true },
-              { id: 'localEstocagem', label: 'Local Saída', visible: true },
-              { id: 'cidade', label: 'Cidade', visible: true },
-              { id: 'bairro', label: 'Bairro', visible: true },
-              { id: 'filialVenda', label: 'Filial', visible: true },
-              { id: 'operacao', label: 'Operação', visible: true },
-              { id: 'vendedor', label: 'Vendedor', visible: true },
-              { id: 'situacao', label: 'Situação', visible: true },
-              { id: 'obsPublicas', label: 'Obs.', visible: true },
-              { id: 'obsInternas', label: 'Obs. Int.', visible: true },
-              { id: 'endereco', label: 'Endereço', visible: true },
-              { id: 'outrosLocs', label: 'Outros Locais', visible: true },
-            ];
-            // Update visibility based on saved, keep default structure
-            const merged = defaults.map(d => {
-              const found = migrated.find((m: any) => m.id === d.id);
-              return found ? { ...d, visible: found.visible, label: found.label || d.label } : d;
-            });
+    const loadColumnsFromSupabase = async () => {
+      const defaults: ColumnConfig[] = [
+        { id: 'data', label: 'Data', visible: true },
+        { id: 'pedido', label: 'Pedido', visible: true },
+        { id: 'cliente', label: 'Cliente', visible: true },
+        { id: 'telefone', label: 'Telefone', visible: true },
+        { id: 'sku', label: 'SKU', visible: true },
+        { id: 'flags', label: 'Sinais', visible: true },
+        { id: 'produto', label: 'Produto', visible: true },
+        { id: 'quantidade', label: 'Qtd.', visible: true },
+        { id: 'department', label: 'Depto.', visible: true },
+        { id: 'brand', label: 'Marca', visible: true },
+        { id: 'localEstocagem', label: 'Local Saída', visible: true },
+        { id: 'cidade', label: 'Cidade', visible: true },
+        { id: 'bairro', label: 'Bairro', visible: true },
+        { id: 'filialVenda', label: 'Filial', visible: true },
+        { id: 'operacao', label: 'Operação', visible: true },
+        { id: 'vendedor', label: 'Vendedor', visible: true },
+        { id: 'situacao', label: 'Situação', visible: true },
+        { id: 'obsPublicas', label: 'Obs.', visible: true },
+        { id: 'obsInternas', label: 'Obs. Int.', visible: true },
+        { id: 'endereco', label: 'Endereço', visible: true },
+        { id: 'outrosLocs', label: 'Outros Locais', visible: true },
+      ];
+
+      try {
+        // Load modal states
+        const rid = localStorage.getItem('rc_selectedRouteId');
+        const showRoutePref = localStorage.getItem('rc_showRouteModal');
+        const showCreatePref = localStorage.getItem('rc_showCreateModal');
+        if (showCreatePref === '1') {
+          setShowCreateModal(true);
+        }
+        if (showRoutePref === '1' && rid) {
+          selectedRouteIdRef.current = rid;
+          showRouteModalRef.current = true;
+          setShowRouteModal(true);
+        }
+
+        // Load columns config from Supabase (or localStorage fallback)
+        if (authUser?.id) {
+          const savedCols = await loadUserPreference<ColumnConfig[]>(authUser.id, 'rc_columns_conf');
+          if (savedCols) {
+            const merged = mergeColumnsConfig(savedCols, defaults);
             setColumnsConf(merged);
           }
+        } else {
+          // Fallback to localStorage if not authenticated
+          const cols = localStorage.getItem('rc_columns_conf');
+          if (cols) {
+            const parsed = JSON.parse(cols);
+            if (Array.isArray(parsed)) {
+              const merged = mergeColumnsConfig(parsed, defaults);
+              setColumnsConf(merged);
+            }
+          }
         }
+        setViewMode('products');
+      } catch (e) {
+        console.warn('[RouteCreation] Error loading columns config:', e);
       }
-      setViewMode('products');
-    } catch { }
-  }, []);
+    };
+
+    loadColumnsFromSupabase();
+  }, [authUser?.id]);
 
   // Persist filters across refresh/tab switch
   useEffect(() => {
@@ -2466,12 +2477,12 @@ function RouteCreationContent() {
       {
         showCreateModal && (
           <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
-            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden">
-              <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden">
+              <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50 flex-shrink-0">
                 <h3 className="text-lg font-bold text-gray-900">Nova Rota / Romaneio</h3>
                 <button onClick={() => { setShowCreateModal(false); showCreateModalRef.current = false; localStorage.setItem('rc_showCreateModal', '0'); }} className="text-gray-400 hover:text-gray-600"><X className="h-5 w-5" /></button>
               </div>
-              <div className="p-6 space-y-6">
+              <div className="p-6 space-y-6 overflow-y-auto flex-1">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">Adicionar a romaneio existente?</label>
                   <select
@@ -2541,7 +2552,7 @@ function RouteCreationContent() {
                   <span className="bg-blue-200 text-blue-800 px-3 py-1 rounded-lg font-bold">{selectedOrders.size}</span>
                 </div>
               </div>
-              <div className="px-6 py-4 border-t border-gray-100 bg-gray-50 flex justify-end gap-3">
+              <div className="px-6 py-4 border-t border-gray-100 bg-gray-50 flex justify-end gap-3 flex-shrink-0">
                 <button onClick={() => setShowCreateModal(false)} className="px-6 py-2.5 rounded-xl border border-gray-300 text-gray-700 font-medium hover:bg-white transition-colors">Cancelar</button>
                 <button
                   onClick={() => createRoute()}
@@ -2822,8 +2833,19 @@ function RouteCreationContent() {
               </div>
               <div className="p-4 border-t border-gray-100 bg-gray-50 text-right">
                 <button
-                  onClick={() => {
-                    localStorage.setItem('rc_columns_conf', JSON.stringify(columnsConf));
+                  onClick={async () => {
+                    if (authUser?.id) {
+                      const success = await saveUserPreference(authUser.id, 'rc_columns_conf', columnsConf);
+                      if (success) {
+                        toast.success('Configuração de colunas salva com sucesso!');
+                      } else {
+                        toast.error('Erro ao salvar configuração. Tente novamente.');
+                      }
+                    } else {
+                      // Fallback to localStorage if not authenticated
+                      localStorage.setItem('rc_columns_conf', JSON.stringify(columnsConf));
+                      toast.success('Configuração salva localmente.');
+                    }
                     setShowColumnsModal(false);
                   }}
                   className="px-4 py-2 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700"
@@ -3570,7 +3592,13 @@ function RouteCreationContent() {
                                         : '';
                                       return isPkp ? `Retirado ${dt}` : `Entregue ${dt}`;
                                     }
-                                    if (ro.status === 'returned') return 'Retornado';
+                                    if (ro.status === 'returned') {
+                                      const dtReturned = (ro as any).returned_at || ro.delivered_at;
+                                      const dt = dtReturned
+                                        ? new Date(dtReturned).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+                                        : '';
+                                      return `Retornado ${dt}`;
+                                    }
                                     return 'Pendente';
                                   })()}
                                 </span>

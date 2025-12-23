@@ -131,8 +131,8 @@ export default function OrderLookup() {
       if (!selectedOrder) return;
       try {
         setLoading(true);
-        // Busca route_orders vinculados ao pedido (sem join de conference para evitar erro de schema)
-        const selectRouteOrder = '*, route:routes(*), order:orders(id, order_id_erp)';
+        // Query com vehicle via join (igual RouteCreation)
+        const selectRouteOrder = '*, route:routes(*, vehicle:vehicles!vehicle_id(id, model, plate)), order:orders(id, order_id_erp)';
 
         // Primeiro tenta pelo order_id (uuid do pedido)
         const { data: roById, error: roErrById } = await supabase
@@ -162,47 +162,48 @@ export default function OrderLookup() {
           }
         }
 
-        // Enriquecer rota com motorista/veículo
+        // Enriquecer com driver (mesma lógica do RouteCreation.tsx)
         if (roData && roData.length > 0) {
-          const routeIds = Array.from(new Set(roData.map((r: any) => r.route_id).filter(Boolean)));
-          const { data: routesInfo } = await supabase
-            .from('routes')
-            .select('id, name, status, driver_id, vehicle_id, conferente, updated_at')
-            .in('id', routeIds);
+          const driverIds = Array.from(new Set((roData as any[]).map((ro: any) => ro.route?.driver_id).filter(Boolean)));
 
-          const driverIds = Array.from(new Set((routesInfo || []).map((r: any) => r.driver_id).filter(Boolean)));
-          const { data: driversInfo } = driverIds.length
-            ? await supabase.from('drivers').select('id, name, user_id').in('id', driverIds)
-            : { data: [] as any[] };
-          const userIds = Array.from(new Set((driversInfo || []).map((d: any) => d.user_id).filter(Boolean)));
-          const { data: usersInfo } = userIds.length
-            ? await supabase.from('users').select('id, name').in('id', userIds)
-            : { data: [] as any[] };
+          if (driverIds.length > 0) {
+            const { data: drvBulk } = await supabase
+              .from('drivers')
+              .select('id, user_id, active')
+              .in('id', driverIds);
 
-          const vehicleIds = Array.from(new Set((routesInfo || []).map((r: any) => r.vehicle_id).filter(Boolean)));
-          const { data: vehiclesInfo } = vehicleIds.length
-            ? await supabase.from('vehicles').select('id, plate, model').in('id', vehicleIds)
-            : { data: [] as any[] };
+            if (drvBulk && drvBulk.length > 0) {
+              const userIds = Array.from(new Set(drvBulk.map((d: any) => String(d.user_id)).filter(Boolean)));
 
-          const mapRoute: Record<string, any> = {};
-          (routesInfo || []).forEach((r: any) => { mapRoute[r.id] = r; });
-          const mapDriver: Record<string, any> = {};
-          (driversInfo || []).forEach((d: any) => {
-            const user = (usersInfo || []).find((u: any) => u.id === d.user_id);
-            mapDriver[d.id] = { ...d, user };
-          });
-          const mapVehicle: Record<string, any> = {};
-          (vehiclesInfo || []).forEach((v: any) => { mapVehicle[v.id] = v; });
+              if (userIds.length > 0) {
+                const { data: usersData } = await supabase
+                  .from('users')
+                  .select('id, name')
+                  .in('id', userIds);
 
-          roData = (roData as any[]).map((r: any) => {
-            const rt = mapRoute[r.route_id] || r.route || {};
-            const drv = rt.driver_id ? mapDriver[rt.driver_id] : null;
-            const veh = rt.vehicle_id ? mapVehicle[rt.vehicle_id] : null;
-            return {
-              ...r,
-              route: { ...rt, driver: drv, vehicle: veh },
-            };
-          }).sort((a: any, b: any) => {
+                const mapU = new Map<string, any>((usersData || []).map((u: any) => [String(u.id), u]));
+                const enrichedDrivers = drvBulk.map((d: any) => ({ ...d, user: mapU.get(String(d.user_id)) || null }));
+                const mapDrv = new Map<string, any>(enrichedDrivers.map((d: any) => [String(d.id), d]));
+
+                // Enriquecer cada route_order com driver
+                roData = (roData as any[]).map((ro: any) => {
+                  const route = ro.route || {};
+                  const d = route.driver_id ? mapDrv.get(String(route.driver_id)) : null;
+                  return {
+                    ...ro,
+                    route: {
+                      ...route,
+                      driver: d,
+                      driver_name: d?.user?.name || d?.name || ''
+                    }
+                  };
+                });
+              }
+            }
+          }
+
+          // Ordenar por data
+          roData = (roData as any[]).sort((a: any, b: any) => {
             const da = new Date(a.delivered_at || a.updated_at || a.created_at || 0).getTime();
             const db = new Date(b.delivered_at || b.updated_at || b.created_at || 0).getTime();
             return db - da;
@@ -412,14 +413,13 @@ export default function OrderLookup() {
                         <p className="text-xs text-gray-500 capitalize">
                           Status: {statusLabelEntrega[ro.status || ''] || statusLabelEntrega[ro.route?.status || ''] || ro.status || ro.route?.status || '-'}
                         </p>
-                        <p className="text-xs text-gray-500">Motorista: {ro.route?.driver?.user?.name || ro.route?.driver?.name || '-'}</p>
-                        <p className="text-xs text-gray-500">Veículo: {ro.route?.vehicle ? `${ro.route?.vehicle?.model || ''} ${ro.route?.vehicle?.plate || ''}`.trim() : '-'}</p>
+                        <p className="text-xs text-gray-500">Motorista: {(ro.route as any)?.driver_name || (ro.route as any)?.driver?.user?.name || (ro.route as any)?.driver?.name || '-'}</p>
+                        <p className="text-xs text-gray-500">Veículo: {ro.route?.vehicle ? `${(ro.route?.vehicle as any)?.model || ''} ${(ro.route?.vehicle as any)?.plate || ''}`.trim() || '-' : '-'}</p>
                         <p className="text-xs text-gray-500">Conferente: {ro.route?.conferente || '-'}</p>
                         <p className="text-xs text-gray-500">
                           {ro.status === 'returned' ? 'Retornado em: ' : 'Entregue em: '}
                           {ro.delivered_at ? formatDate(ro.delivered_at) : formatDate(ro.route?.updated_at)}
                         </p>
-                        <p className="text-xs text-gray-500">Conferência: {ro.route?.conference_status || 'N/A'}</p>
                         <div className="mt-2 flex gap-2">
                           <button
                             onClick={() => {
@@ -481,7 +481,7 @@ export default function OrderLookup() {
                         <p className="text-xs text-gray-500">SKU: {it.sku}</p>
                       </div>
                       <div className="text-right text-sm text-gray-600">
-                        <p>Qtd: {it.quantity || it.purchased_quantity || 1}</p>
+                        <p>Qtd: {it.purchased_quantity}</p>
                         {it.location && <p className="text-xs text-gray-500">Local: {it.location}</p>}
                         {String(it.has_assembly || '').toLowerCase() === 'true' && (
                           <span className="inline-block mt-1 px-2 py-0.5 rounded-full bg-orange-50 text-orange-700 border border-orange-200 text-xs">Montagem</span>
