@@ -516,6 +516,21 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
                     </span>
                   </div>
 
+                  {/* Número do Pedido */}
+                  {firstItem.order?.order_id_erp && (
+                    <div className="text-sm font-medium text-indigo-600 mb-2">
+                      📋 Pedido Nº: {firstItem.order.order_id_erp}
+                    </div>
+                  )}
+
+                  {/* Data/Hora da Montagem (quando concluído) */}
+                  {groupStatus === 'completed' && firstItem.completion_date && (
+                    <div className="text-sm text-green-600 mb-2 flex items-center">
+                      <Clock className="h-4 w-4 mr-1" />
+                      Montado em: {new Date(firstItem.completion_date).toLocaleString('pt-BR')}
+                    </div>
+                  )}
+
                   <div className="text-sm text-gray-600 space-y-1 mb-3">
                     <div className="flex items-center" onClick={() => openMaps(firstItem)} role="button">
                       <MapPin className="h-4 w-4 mr-1 text-blue-500" />
