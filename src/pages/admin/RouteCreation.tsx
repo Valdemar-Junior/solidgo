@@ -344,36 +344,55 @@ function RouteCreationContent() {
 
       let insertedCount = 0;
       let errors = 0;
+      const importedOrderIds: string[] = []; // Rastrear IDs dos pedidos importados para seleção automática
 
       for (const order of toDb) {
         // Para vendas, usar insert ao invés de upsert para garantir que não sobrescreve
         if (launchType === 'venda') {
-          const { error } = await supabase.from('orders').insert(order);
+          const { data: insertedOrder, error } = await supabase.from('orders').insert(order).select('id').single();
           if (error) {
             console.error('Erro ao inserir', error);
             errors++;
           } else {
             insertedCount++;
+            if (insertedOrder?.id) importedOrderIds.push(insertedOrder.id);
           }
         } else {
-          const { error } = await supabase.from('orders').upsert(order, { onConflict: 'order_id_erp' });
+          const { data: upsertedOrder, error } = await supabase.from('orders').upsert(order, { onConflict: 'order_id_erp' }).select('id').single();
           if (error) {
             console.error('Erro ao inserir', error);
             errors++;
           } else {
             insertedCount++;
+            if (upsertedOrder?.id) importedOrderIds.push(upsertedOrder.id);
           }
         }
       }
 
       if (errors > 0) {
         toast.warning(`${insertedCount} importado(s), ${errors} erro(s). Verifique duplicidades.`);
+        // Mesmo com erros, selecionar os que foram importados com sucesso
+        if (importedOrderIds.length > 0) {
+          await loadData(false);
+          setSelectedOrders(prev => {
+            const newSet = new Set(prev);
+            importedOrderIds.forEach(id => newSet.add(id));
+            return newSet;
+          });
+        }
       } else if (insertedCount > 0) {
         const tipoLabel = launchType === 'venda' ? 'pedido(s) de venda' : `lançamento(s) avulso(s) de ${launchType}`;
         toast.success(`${insertedCount} ${tipoLabel} importado(s)!`);
         setShowLaunchModal(false);
         setLaunchNumber('');
-        loadData(false);
+        await loadData(false);
+
+        // Selecionar automaticamente os pedidos importados
+        setSelectedOrders(prev => {
+          const newSet = new Set(prev);
+          importedOrderIds.forEach(id => newSet.add(id));
+          return newSet;
+        });
       } else {
         toast.info('Nenhum dado importado.');
       }
@@ -3191,7 +3210,28 @@ function RouteCreationContent() {
                               const { error: updErr } = await supabase.from('orders').update({ status: 'assigned' }).in('id', toAddIds);
                               if (updErr) throw updErr;
                               toast.success('Pedidos adicionados à rota');
-                              loadData();
+
+                              // Recarregar dados e atualizar selectedRoute para refletir os novos pedidos no modal
+                              await loadData();
+
+                              // Buscar a rota atualizada com os novos pedidos
+                              const { data: updatedRouteData } = await supabase
+                                .from('routes')
+                                .select(`
+                                  *,
+                                  driver:drivers!driver_id(*, user:users!user_id(*)),
+                                  vehicle:vehicles!vehicle_id(*),
+                                  route_orders(*, order:orders!order_id(*))
+                                `)
+                                .eq('id', route.id)
+                                .single();
+
+                              if (updatedRouteData) {
+                                setSelectedRoute(updatedRouteData as any);
+                              }
+
+                              // Limpar seleção de pedidos
+                              setSelectedOrders(new Set());
                             } catch {
                               toast.error('Falha ao adicionar pedidos');
                             }

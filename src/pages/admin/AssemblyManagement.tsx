@@ -32,7 +32,10 @@ import {
   ClipboardList,
   ClipboardCheck,
   Pencil,
-  Save
+  Save,
+  FilePlus,
+  RefreshCw,
+  Wrench
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { DeliverySheetGenerator } from '../../utils/pdf/deliverySheetGenerator';
@@ -153,6 +156,12 @@ function AssemblyManagementContent() {
   const isLoadingRef = useRef(false);
   const isMountedRef = useRef(true);
   const [deliveryInfo, setDeliveryInfo] = useState<Record<string, string>>({});
+
+  // --- SINGLE LAUNCH IMPORT (TROCAS/ASSISTENCIAS/VENDAS) ---
+  const [showLaunchModal, setShowLaunchModal] = useState(false);
+  const [launchNumber, setLaunchNumber] = useState('');
+  const [launchType, setLaunchType] = useState<'troca' | 'assistencia' | 'venda'>('troca');
+  const [launchLoading, setLaunchLoading] = useState(false);
 
   // Filters
   const [filterCity, setFilterCity] = useState<string>('');
@@ -713,6 +722,237 @@ function AssemblyManagementContent() {
     }
   };
 
+  // --- SINGLE LAUNCH IMPORT HANDLER ---
+  // Esta função importa lançamentos avulsos (troca/assistência) diretamente para a tabela assembly_products,
+  // pulando o gatilho normal de entrega. O pedido é salvo em orders com status 'delivered' 
+  // e os produtos são inseridos diretamente em assembly_products com status 'pending'.
+  const handleLaunchSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!launchNumber.trim()) { toast.error('Digite o número do lançamento'); return; }
+
+    setLaunchLoading(true);
+    try {
+      let webhookUrl = import.meta.env.VITE_WEBHOOK_URL_CONSULTA as string | undefined;
+      if (!webhookUrl) {
+        const { data } = await supabase.from('webhook_settings').select('url').eq('key', 'consulta_lancamento').eq('active', true).single();
+        webhookUrl = data?.url;
+      }
+
+      if (!webhookUrl) {
+        webhookUrl = 'https://n8n.lojaodosmoveis.shop/webhook-test/ca7881e9-b639-452c-8eca-33f410358530'; // Fallback
+      }
+
+      const body = {
+        lancamento: launchNumber.trim(),
+        tipo: launchType,
+        timestamp: new Date().toISOString()
+      };
+
+      const response = await fetch(webhookUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+
+      if (!response.ok) throw new Error(`Erro ${response.status}: ${response.statusText}`);
+
+      const text = await response.text();
+      let data: any;
+      try { data = JSON.parse(text); } catch { throw new Error('Resposta inválida do servidor (não é JSON)'); }
+
+      const items = Array.isArray(data) ? data : [data];
+      if (items.length === 0 || !items[0]) {
+        toast.error('Nenhum pedido encontrado com este lançamento');
+        setLaunchLoading(false);
+        return;
+      }
+
+      let insertedProductsCount = 0;
+      let errors = 0;
+      const now = new Date().toISOString();
+      const importedOrderIds: string[] = []; // Rastrear IDs dos pedidos importados para seleção automática
+
+      for (const o of items) {
+        const produtos = Array.isArray(o.produtos) ? o.produtos : (Array.isArray(o.produtos_locais) ? o.produtos_locais : []);
+        const getVal = (v: any) => String(v ?? '').trim();
+
+        const pickZip = (raw: any) => {
+          const candidates = [raw?.destinatario_cep, raw?.cep, raw?.endereco_cep, raw?.codigo_postal, raw?.zip];
+          for (const c of candidates) { const s = String(c || '').trim(); if (s) return s; }
+          return '';
+        };
+
+        // Construir ID do pedido com sufixo para troca/assistência
+        let erpId = String(o.numero_lancamento ?? o.lancamento_venda ?? o.codigo_cliente ?? launchNumber);
+        if (launchType !== 'venda') {
+          const suffix = launchType === 'troca' ? '-T' : '-A';
+          if (!erpId.endsWith(suffix) && !erpId.endsWith('-T') && !erpId.endsWith('-A')) {
+            erpId = `${erpId}${suffix}`;
+          }
+        }
+
+        // Verificar se o pedido já existe no sistema
+        const { data: existingOrder } = await supabase
+          .from('orders')
+          .select('id, order_id_erp')
+          .eq('order_id_erp', erpId)
+          .single();
+
+        let orderId: string;
+
+        if (existingOrder) {
+          // Se o pedido já existe, verificar se já tem produtos de montagem
+          const { data: existingProducts } = await supabase
+            .from('assembly_products')
+            .select('id')
+            .eq('order_id', existingOrder.id);
+
+          if (existingProducts && existingProducts.length > 0) {
+            toast.warning(`Pedido ${erpId} já possui produtos de montagem cadastrados. Pulando...`);
+            continue;
+          }
+          orderId = existingOrder.id;
+        } else {
+          // Criar o pedido na tabela orders com status 'delivered' (pula a roteirização de entrega)
+          const itemsJson = produtos.map((p: any) => ({
+            sku: getVal(p.codigo_produto),
+            name: getVal(p.nome_produto),
+            quantity: Number(p.quantidade_volumes ?? 1),
+            volumes_per_unit: Number(p.quantidade_volumes ?? 1),
+            purchased_quantity: Number(p.quantidade_comprada ?? 1),
+            unit_price_real: Number(p.valor_unitario_real ?? p.valor_unitario ?? 0),
+            total_price_real: Number(p.valor_total_real ?? p.valor_total_item ?? 0),
+            unit_price: Number(p.valor_unitario_real ?? p.valor_unitario ?? 0),
+            total_price: Number(p.valor_total_real ?? p.valor_total_item ?? 0),
+            price: Number(p.valor_unitario_real ?? p.valor_unitario ?? 0),
+            location: getVal(p.local_estocagem),
+            has_assembly: 'SIM', // Forçar montagem para importação avulsa
+            labels: Array.isArray(p.etiquetas) ? p.etiquetas : [],
+            department: getVal(p.departamento),
+            brand: getVal(p.marca),
+          }));
+
+          const orderRecord = {
+            order_id_erp: erpId,
+            customer_name: getVal(o.nome_cliente),
+            phone: getVal(o.cliente_celular),
+            customer_cpf: getVal(o.cpf_cliente),
+            filial_venda: getVal(o.filial_venda),
+            vendedor_nome: getVal(o.nome_vendedor ?? o.vendedor ?? o.vendedor_nome),
+            data_venda: o.data_venda ? new Date(o.data_venda).toISOString() : now,
+            previsao_entrega: o.previsao_entrega ? new Date(o.previsao_entrega).toISOString() : null,
+            observacoes_publicas: getVal(o.observacoes_publicas),
+            observacoes_internas: getVal(o.observacoes_internas),
+            tem_frete_full: getVal(o.tem_frete_full),
+            address_json: {
+              street: getVal(o.destinatario_endereco),
+              neighborhood: getVal(o.destinatario_bairro),
+              city: getVal(o.destinatario_cidade),
+              state: '',
+              zip: pickZip(o),
+              complement: getVal(o.destinatario_complemento),
+              lat: o.lat ?? o.latitude ?? null,
+              lng: o.lng ?? o.longitude ?? o.long ?? null
+            },
+            items_json: itemsJson,
+            status: 'delivered', // IMPORTANTE: Status 'delivered' para pular roteirização de entrega
+            raw_json: o,
+            service_type: launchType === 'venda' ? undefined : launchType,
+            department: String(itemsJson[0]?.department || ''),
+            brand: String(itemsJson[0]?.brand || '')
+          };
+
+          const { data: insertedOrder, error: orderError } = await supabase
+            .from('orders')
+            .insert(orderRecord)
+            .select('id')
+            .single();
+
+          if (orderError) {
+            console.error('Erro ao inserir pedido:', orderError);
+            errors++;
+            continue;
+          }
+
+          orderId = insertedOrder.id;
+        }
+
+        // Agora inserir os produtos diretamente na tabela assembly_products (pulando o gatilho de entrega)
+        const addressJson = {
+          street: getVal(o.destinatario_endereco),
+          neighborhood: getVal(o.destinatario_bairro),
+          city: getVal(o.destinatario_cidade),
+          state: '',
+          zip: pickZip(o),
+          complement: getVal(o.destinatario_complemento)
+        };
+
+        const assemblyProducts = produtos.map((p: any) => ({
+          order_id: orderId,
+          product_name: getVal(p.nome_produto) || 'Produto sem nome',
+          product_sku: getVal(p.codigo_produto) || null,
+          customer_name: getVal(o.nome_cliente),
+          customer_phone: getVal(o.cliente_celular),
+          installation_address: addressJson,
+          status: 'pending',
+          created_at: now,
+          updated_at: now
+        }));
+
+        if (assemblyProducts.length > 0) {
+          const { error: assemblyError } = await supabase
+            .from('assembly_products')
+            .insert(assemblyProducts);
+
+          if (assemblyError) {
+            console.error('Erro ao inserir produtos de montagem:', assemblyError);
+            errors++;
+          } else {
+            insertedProductsCount += assemblyProducts.length;
+            importedOrderIds.push(orderId); // Adicionar para seleção automática
+            console.log(`[AssemblyManagement] Inseridos ${assemblyProducts.length} produtos de montagem para pedido ${erpId}`);
+          }
+        }
+      }
+
+      if (errors > 0 && insertedProductsCount === 0) {
+        toast.error(`Erro ao importar. Verifique se o pedido já existe.`);
+      } else if (errors > 0) {
+        toast.warning(`${insertedProductsCount} produto(s) importado(s), ${errors} erro(s).`);
+        // Mesmo com erros, selecionar os que foram importados com sucesso
+        if (importedOrderIds.length > 0) {
+          await loadData(false);
+          setSelectedOrders(prev => {
+            const newSet = new Set(prev);
+            importedOrderIds.forEach(id => newSet.add(id));
+            return newSet;
+          });
+        }
+      } else if (insertedProductsCount > 0) {
+        const tipoLabel = launchType === 'troca' ? 'Troca' : launchType === 'assistencia' ? 'Assistência' : 'Pedido';
+        toast.success(`${tipoLabel} importado(s) com sucesso! ${insertedProductsCount} produto(s) disponíveis para montagem.`);
+        setShowLaunchModal(false);
+        setLaunchNumber('');
+        await loadData(false);
+
+        // Selecionar automaticamente os pedidos importados
+        setSelectedOrders(prev => {
+          const newSet = new Set(prev);
+          importedOrderIds.forEach(id => newSet.add(id));
+          return newSet;
+        });
+      } else {
+        toast.info('Nenhum produto importado. Verifique se o pedido possui produtos.');
+      }
+
+    } catch (e: any) {
+      console.error(e);
+      toast.error(`Erro: ${e.message}`);
+    } finally {
+      setLaunchLoading(false);
+    }
+  };
+
   // --- RENDER ---
 
 
@@ -822,6 +1062,14 @@ function AssemblyManagementContent() {
               >
                 <Filter className="h-4 w-4 mr-2" />
                 Filtros
+              </button>
+              <button
+                onClick={() => setShowLaunchModal(true)}
+                className="inline-flex items-center px-4 py-2 rounded-lg border text-sm font-medium transition-colors bg-orange-50 border-orange-200 text-orange-700 hover:bg-orange-100"
+                title="Lançar Troca ou Assistência Avulsa"
+              >
+                <FilePlus className="h-4 w-4 mr-2" />
+                Lançamento Avulso
               </button>
               <button
                 onClick={() => loadData(false)}
@@ -1081,22 +1329,12 @@ function AssemblyManagementContent() {
                 ) : (
                   assemblyRoutes.map(route => {
                     const productsInRoute = assemblyInRoutes.filter(ap => ap.assembly_route_id === route.id);
-                    const byOrder: Record<string, AssemblyProductWithDetails[]> = {};
-                    productsInRoute.forEach(p => {
-                      const k = String(p.order_id);
-                      if (!byOrder[k]) byOrder[k] = [];
-                      byOrder[k].push(p);
-                    });
-                    const orderStatuses = Object.values(byOrder).map(list => {
-                      const statuses = list.map(i => i.status);
-                      if (statuses.every(s => s === 'cancelled')) return 'cancelled';
-                      if (statuses.every(s => s === 'completed')) return 'completed';
-                      return 'pending';
-                    });
-                    const totalOrders = orderStatuses.length;
-                    const completed = orderStatuses.filter(s => s === 'completed').length;
-                    const pending = orderStatuses.filter(s => s === 'pending').length;
-                    const returned = orderStatuses.filter(s => s === 'cancelled').length;
+
+                    // Contar PRODUTOS (não pedidos) por status
+                    const totalProducts = productsInRoute.length;
+                    const completed = productsInRoute.filter(p => p.status === 'completed').length;
+                    const pending = productsInRoute.filter(p => p.status === 'pending' || p.status === 'assigned' || p.status === 'in_progress').length;
+                    const returned = productsInRoute.filter(p => p.status === 'cancelled' || (p as any).was_returned === true).length;
 
                     const statusColors = {
                       pending: 'bg-yellow-50 text-yellow-700 border-yellow-200',
@@ -1152,7 +1390,7 @@ function AssemblyManagementContent() {
                           {/* Mini Stats */}
                           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-2">
                             <div className="bg-gray-50 rounded-lg p-2 text-center">
-                              <span className="block text-lg font-bold text-gray-900">{totalOrders}</span>
+                              <span className="block text-lg font-bold text-gray-900">{totalProducts}</span>
                               <span className="text-[10px] uppercase text-gray-500 font-bold">Total</span>
                             </div>
                             <div className="bg-green-50 rounded-lg p-2 text-center">
@@ -1861,6 +2099,100 @@ function AssemblyManagementContent() {
                   </li>
                 ))}
               </ul>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* --- LAUNCH AVULSO MODAL --- */}
+      {showLaunchModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden relative">
+            <button
+              onClick={() => setShowLaunchModal(false)}
+              className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 transition-colors"
+            >
+              <X className="h-5 w-5" />
+            </button>
+
+            <div className="p-8">
+              <div className="w-16 h-16 bg-orange-50 rounded-full flex items-center justify-center mb-6 mx-auto">
+                <FilePlus className="h-8 w-8 text-orange-600" />
+              </div>
+
+              <h3 className="text-2xl font-bold text-gray-900 text-center mb-2">Lançamento Avulso</h3>
+              <p className="text-center text-gray-500 mb-8">
+                Importe uma Troca, Assistência ou Pedido de Venda antigo usando o número do lançamento.
+              </p>
+
+              <form onSubmit={handleLaunchSubmit} className="space-y-5">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Número do Lançamento (ERP)</label>
+                  <input
+                    type="text"
+                    value={launchNumber}
+                    onChange={(e) => setLaunchNumber(e.target.value)}
+                    className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none transition-all text-lg font-mono placeholder:font-sans"
+                    placeholder="Ex: 123456"
+                    autoFocus
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Tipo de Serviço</label>
+                  <div className="grid grid-cols-3 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setLaunchType('troca')}
+                      className={`px-3 py-3 rounded-xl border flex flex-col items-center gap-1.5 transition-all ${launchType === 'troca' ? 'bg-orange-50 border-orange-500 text-orange-700 ring-1 ring-orange-500' : 'bg-white border-gray-200 text-gray-600 hover:border-orange-200 hover:bg-orange-50/50'}`}
+                    >
+                      <RefreshCw className="h-5 w-5" />
+                      <span className="font-semibold text-xs">Troca</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setLaunchType('assistencia')}
+                      className={`px-3 py-3 rounded-xl border flex flex-col items-center gap-1.5 transition-all ${launchType === 'assistencia' ? 'bg-blue-50 border-blue-500 text-blue-700 ring-1 ring-blue-500' : 'bg-white border-gray-200 text-gray-600 hover:border-blue-200 hover:bg-blue-50/50'}`}
+                    >
+                      <Wrench className="h-5 w-5" />
+                      <span className="font-semibold text-xs">Assistência</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setLaunchType('venda')}
+                      className={`px-3 py-3 rounded-xl border flex flex-col items-center gap-1.5 transition-all ${launchType === 'venda' ? 'bg-emerald-50 border-emerald-500 text-emerald-700 ring-1 ring-emerald-500' : 'bg-white border-gray-200 text-gray-600 hover:border-emerald-200 hover:bg-emerald-50/50'}`}
+                    >
+                      <Package className="h-5 w-5" />
+                      <span className="font-semibold text-xs">Pedido Venda</span>
+                    </button>
+                  </div>
+                  {launchType === 'venda' && (
+                    <p className="mt-2 text-xs text-emerald-600 bg-emerald-50 p-2 rounded-lg border border-emerald-100">
+                      💡 Use para pedidos antigos aguardando liberação do cliente (reformas, etc.)
+                    </p>
+                  )}
+                </div>
+
+                <div className="pt-4">
+                  <button
+                    type="submit"
+                    disabled={launchLoading || !launchNumber}
+                    className="w-full px-6 py-4 bg-gray-900 text-white rounded-xl font-bold hover:bg-black transition-all flex items-center justify-center shadow-lg disabled:opacity-70 disabled:cursor-not-allowed group"
+                  >
+                    {launchLoading ? (
+                      <>
+                        <RefreshCw className="animate-spin h-5 w-5 mr-2" />
+                        Buscando...
+                      </>
+                    ) : (
+                      <>
+                        <RefreshCw className="h-5 w-5 mr-2 group-hover:rotate-180 transition-transform duration-500" />
+                        Buscar e Importar
+                      </>
+                    )}
+                  </button>
+                </div>
+              </form>
             </div>
           </div>
         </div>
