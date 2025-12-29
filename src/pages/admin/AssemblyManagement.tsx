@@ -39,6 +39,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { DeliverySheetGenerator } from '../../utils/pdf/deliverySheetGenerator';
+import { AssemblyReportGenerator } from '../../utils/pdf/assemblyReportGenerator';
 import { useAssemblyDataStore } from '../../stores/assemblyDataStore';
 import { useAuthStore } from '../../stores/authStore';
 import { saveUserPreference, loadUserPreference, mergeColumnsConfig, type ColumnConfig } from '../../utils/userPreferences';
@@ -1951,6 +1952,52 @@ function AssemblyManagementContent() {
                     className="inline-flex items-center px-3 py-2 border border-green-200 shadow-sm text-sm font-medium rounded-lg text-green-700 bg-green-50 hover:bg-green-100 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     Enviar grupo
+                  </button>
+                  <button
+                    onClick={async () => {
+                      if (!selectedRoute) return;
+                      const toastId = toast.loading('Gerando resumo...');
+                      try {
+                        const route = selectedRoute as any;
+                        const products = assemblyInRoutes.filter(ap => ap.assembly_route_id === route.id);
+
+                        // Get Installer Name
+                        let installerName = '';
+                        if (route.assembler_id) {
+                          const m = montadores.find(u => u.id === route.assembler_id);
+                          installerName = m ? (m.name || m.email || '') : '';
+                        }
+
+                        // Get Vehicle Info
+                        let vehicleInfo = '';
+                        if (route.vehicle_id) {
+                          const v = vehicles.find(veh => veh.id === route.vehicle_id);
+                          vehicleInfo = v ? `${v.model} (${v.plate})` : '';
+                        }
+
+                        // Use existing products data which already has 'order' details populated from loadData
+                        const pdfBytes = await AssemblyReportGenerator.generateAssemblyReport({
+                          route: route,
+                          products: products,
+                          installerName,
+                          supervisorName: '', // Conferente left blank for signature or could be logged in user
+                          vehicleInfo,
+                          generatedAt: new Date().toISOString()
+                        });
+
+                        const blob = new Blob([pdfBytes as any], { type: 'application/pdf' });
+                        const url = URL.createObjectURL(blob);
+                        window.open(url, '_blank');
+                        toast.success('Resumo gerado!', { id: toastId });
+                      } catch (error) {
+                        console.error('Error generating assembly report:', error);
+                        toast.error('Erro ao gerar resumo da montagem', { id: toastId });
+                      }
+                    }}
+                    disabled={(selectedRoute as any).status !== 'completed' && (selectedRoute as any).status !== 'in_progress' && (selectedRoute as any).status !== 'pending'}
+                    className="inline-flex items-center px-3 py-2 border border-purple-200 shadow-sm text-sm font-medium rounded-lg text-purple-700 bg-purple-50 hover:bg-purple-100"
+                  >
+                    <ClipboardCheck className="h-4 w-4 mr-2" /> Resumo
                   </button>
                   <button onClick={() => { try { localStorage.setItem('am_showRouteModal', '0'); } catch { } setShowRouteModal(false); }} className="p-2 hover:bg-gray-200 rounded-full text-gray-500"><X className="h-6 w-6" /></button>
                 </div>

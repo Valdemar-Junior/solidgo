@@ -40,6 +40,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { DeliverySheetGenerator } from '../../utils/pdf/deliverySheetGenerator';
+import { RouteReportGenerator } from '../../utils/pdf/routeReportGenerator';
 import { PDFDocument } from 'pdf-lib';
 import { useAuthStore } from '../../stores/authStore';
 import { useRouteDataStore } from '../../stores/routeDataStore';
@@ -3590,6 +3591,60 @@ function RouteCreationContent() {
                   className="flex items-center justify-center px-4 py-2 bg-gray-50 text-gray-700 hover:bg-gray-100 rounded-lg font-medium text-sm transition-colors border border-gray-200 disabled:opacity-50"
                 >
                   <FileSpreadsheet className="h-4 w-4 mr-2" /> {nfLoading ? '...' : ((selectedRoute?.route_orders || []).every((ro: any) => !!ro.order?.danfe_base64) ? 'Imprimir Notas' : 'Gerar Notas')}
+                </button>
+
+                {/* Relatório de Fechamento Button */}
+                <button
+                  onClick={async () => {
+                    if (!selectedRoute) return;
+                    try {
+                      const toastId = toast.loading('Gerando resumo...');
+                      const route = selectedRoute as any;
+                      const { data: roData, error: roErr } = await supabase.from('route_orders').select('*, order:orders(*)').eq('route_id', route.id).order('sequence');
+                      if (roErr) throw roErr;
+
+                      // Ensure we have driver details
+                      let driverName = route.driver?.user?.name || route.driver?.name || 'Não informado';
+                      if (!route.driver && route.driver_id) {
+                        const { data: d } = await supabase.from('drivers').select('*, user:users(*)').eq('id', route.driver_id).single();
+                        if (d) driverName = d.user?.name || d.name || driverName;
+                      }
+
+                      // Vehicle
+                      let vehicleInfo = route.vehicle ? `${route.vehicle.model} - ${route.vehicle.plate}` : '-';
+                      if (!route.vehicle && route.vehicle_id) {
+                        const { data: v } = await supabase.from('vehicles').select('*').eq('id', route.vehicle_id).single();
+                        if (v) vehicleInfo = `${v.model} - ${v.plate}`;
+                      }
+
+                      // Populate orders and ensure typing
+                      const routeOrders = (roData || []).map((ro: any) => ({
+                        ...ro,
+                        order: ro.order
+                      }));
+
+                      const data = {
+                        route: { ...route, route_orders: routeOrders },
+                        driverName,
+                        supervisorName: route.conferente || 'Não informado',
+                        vehicleInfo,
+                        generatedAt: new Date().toISOString()
+                      };
+
+                      const pdfBytes = await RouteReportGenerator.generateRouteReport(data);
+                      DeliverySheetGenerator.openPDFInNewTab(pdfBytes);
+                      toast.dismiss(toastId);
+                      toast.success('Resumo gerado!');
+
+                    } catch (e: any) {
+                      console.error(e);
+                      toast.error('Erro ao gerar resumo da rota');
+                    }
+                  }}
+                  className="flex items-center justify-center px-4 py-2 bg-purple-50 text-purple-700 hover:bg-purple-100 rounded-lg font-medium text-sm transition-colors border border-purple-200"
+                  title="Gerar Resumo da Rota"
+                >
+                  <ClipboardCheck className="h-4 w-4 mr-2" /> Resumo da Rota
                 </button>
 
                 {/* Complete Route Button REMOVED as per user request (auto-complete logic exists) */}
