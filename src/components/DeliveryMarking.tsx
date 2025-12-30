@@ -3,7 +3,7 @@ import { supabase } from '../supabase/client';
 import { OfflineStorage, SyncQueue, NetworkStatus } from '../utils/offline/storage';
 import { backgroundSync } from '../utils/offline/backgroundSync';
 import type { RouteOrderWithDetails, Order, ReturnReason } from '../types/database';
-import { Package, CheckCircle, XCircle, Clock, MapPin } from 'lucide-react';
+import { Package, CheckCircle, XCircle, Clock, MapPin, Users } from 'lucide-react';
 import { buildFullAddress, geocodeAddress, openWazeWithLL } from '../utils/maps';
 import { toast } from 'sonner';
 
@@ -30,10 +30,12 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
   // Seleção por pedido para evitar pré-seleção global
   const [returnReasonByOrder, setReturnReasonByOrder] = useState<Record<string, string>>({});
   const [returnObservationsByOrder, setReturnObservationsByOrder] = useState<Record<string, string>>({});
+  const [routeDetails, setRouteDetails] = useState<any>(null);
 
   useEffect(() => {
     loadRouteOrders();
     loadReturnReasons();
+    loadRouteDetails();
 
     const listener = (online: boolean) => {
       setIsOnline(online);
@@ -50,6 +52,7 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
       if (isOnline) {
         await backgroundSync.forceSync();
         await loadRouteOrders();
+        await loadRouteDetails();
       } else {
         await loadRouteOrders();
       }
@@ -153,6 +156,25 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
         setReturnReasons(FALLBACK_RETURN_REASONS);
         await OfflineStorage.setItem('return_reasons', FALLBACK_RETURN_REASONS);
       }
+    }
+  };
+
+  const loadRouteDetails = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('routes')
+        .select(`
+          name, status,
+          driver:drivers(id, user:users(name)),
+          team:teams_user(name),
+          helper:users!routes_helper_id_fkey(name)
+        `)
+        .eq('id', routeId)
+        .single();
+
+      if (data) setRouteDetails(data);
+    } catch (e) {
+      console.error('Error loading route details', e);
     }
   };
 
@@ -641,6 +663,32 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
 
   return (
     <div className="space-y-4">
+      {routeDetails && (
+        <div className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 mb-3 border-b border-gray-100 pb-2">
+            <div className="flex items-center gap-2">
+              <h2 className="text-lg font-bold text-gray-900">{routeDetails.name}</h2>
+              <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${routeDetails.status === 'completed' ? 'bg-green-100 text-green-800' :
+                routeDetails.status === 'in_progress' ? 'bg-blue-100 text-blue-800' : 'bg-yellow-100 text-yellow-800'
+                }`}>
+                {routeDetails.status === 'pending' ? 'Em Separação' : routeDetails.status === 'in_progress' ? 'Em Rota' : routeDetails.status === 'completed' ? 'Finalizada' : routeDetails.status}
+              </span>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+            <div className="flex items-center gap-2 text-gray-700">
+              <Users className="h-4 w-4 text-blue-500" />
+              <span className="font-semibold">Equipe:</span> {routeDetails.team?.name || 'Não informada'}
+            </div>
+            <div className="flex items-center gap-2 text-gray-700">
+              <span className="font-semibold">Motorista:</span> {routeDetails.driver?.user?.name || routeDetails.driver?.name || 'Não informado'}
+            </div>
+            <div className="flex items-center gap-2 text-gray-700">
+              <span className="font-semibold">Ajudante:</span> {routeDetails.helper?.name || 'Não informado'}
+            </div>
+          </div>
+        </div>
+      )}
       {/* Network Status */}
       <div className={`p-3 rounded-lg flex items-center ${isOnline ? 'bg-green-50 text-green-800' : 'bg-yellow-50 text-yellow-800'
         }`}>

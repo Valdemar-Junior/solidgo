@@ -19,6 +19,7 @@ import OrdersImport from './pages/admin/OrdersImport';
 import RouteCreation from './pages/admin/RouteCreation';
 import AssemblyManagement from './pages/admin/AssemblyManagement';
 import OrderLookup from './pages/admin/OrderLookup';
+import Reports from './pages/admin/Reports';
 import AssemblyDashboard from './pages/montador/AssemblyDashboard';
 import AssemblyRouteDetails from './pages/montador/AssemblyRouteDetails';
 import TesteImportacao from './pages/teste-importacao';
@@ -120,6 +121,14 @@ function App() {
             element={
               <ProtectedRoute allowedRoles={['admin']}>
                 <OrderLookup />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/reports"
+            element={
+              <ProtectedRoute allowedRoles={['admin']}>
+                <Reports />
               </ProtectedRoute>
             }
           />

@@ -127,6 +127,10 @@ function RouteCreationContent() {
   const [routeName, setRouteName] = useState<string>('');
   const [conferente, setConferente] = useState<string>('');
   const [observations, setObservations] = useState<string>('');
+  const [teams, setTeams] = useState<any[]>([]);
+  const [helpers, setHelpers] = useState<any[]>([]);
+  const [selectedTeam, setSelectedTeam] = useState<string>('');
+  const [selectedHelper, setSelectedHelper] = useState<string>(''); // helper_id
 
   // UI States
   const [loading, setLoading] = useState(true);
@@ -1021,6 +1025,39 @@ function RouteCreationContent() {
         name: String(u.name || u.id)
       })));
 
+      // Teams and Helpers
+      console.log('Fetching teams and helpers...');
+      const { data: teamsData, error: teamsError } = await supabase
+        .from('teams_user')
+        .select(`
+          id, 
+          name, 
+          driver_user_id, 
+          helper_user_id,
+          driver:users!teams_user_driver_user_id_fkey(id, name),
+          helper:users!teams_user_helper_user_id_fkey(id, name)
+        `);
+
+      if (teamsError) {
+        console.error('Error fetching teams:', teamsError);
+        toast.error('Erro ao carregar equipes: ' + teamsError.message);
+      } else {
+        console.log('Teams loaded:', teamsData);
+        if (teamsData) setTeams(teamsData);
+      }
+
+      const { data: helpersData, error: helpersError } = await supabase
+        .from('users')
+        .select('id, name')
+        .eq('role', 'helper');
+      if (helpersError) {
+        console.error('Error fetching helpers:', helpersError);
+        toast.error('Erro ao carregar ajudantes: ' + helpersError.message);
+      } else {
+        console.log('Helpers loaded:', helpersData);
+        if (helpersData) setHelpers(helpersData);
+      }
+
       // Process routes - enrich with driver names and vehicles
       let processedRoutes: RouteWithDetails[] = routesRes.data || [];
       if (processedRoutes.length > 0) {
@@ -1438,6 +1475,8 @@ function RouteCreationContent() {
             vehicle_id: selectedVehicle || null,
             conferente: conferente.trim() || null,
             observations: observations.trim() || null,
+            team_id: selectedTeam || null,
+            helper_id: selectedHelper || null,
             status: 'pending',
           })
           .select()
@@ -1450,6 +1489,8 @@ function RouteCreationContent() {
         const updatePayload: any = {};
         if (selectedDriver) updatePayload.driver_id = selectedDriver;
         if (selectedVehicle) updatePayload.vehicle_id = selectedVehicle;
+        if (selectedTeam) updatePayload.team_id = selectedTeam;
+        if (selectedHelper) updatePayload.helper_id = selectedHelper;
         if (conferente) updatePayload.conferente = conferente.trim();
         if (Object.keys(updatePayload).length > 0) {
           const { error: updErr } = await supabase.from('routes').update(updatePayload).eq('id', targetRouteId);
@@ -1494,6 +1535,8 @@ function RouteCreationContent() {
       setSelectedVehicle('');
       setConferente('');
       setObservations('');
+      setSelectedTeam('');
+      setSelectedHelper('');
       setSelectedOrders(new Set());
       setSelectedExistingRouteId('');
       showCreateModalRef.current = false;
@@ -2519,6 +2562,44 @@ function RouteCreationContent() {
 
                 {!selectedExistingRouteId && (
                   <div className="space-y-4">
+                    {/* Team Selection */}
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Equipe (Opcional)</label>
+                      <select
+                        value={selectedTeam}
+                        onChange={async (e) => {
+                          const tid = e.target.value;
+                          setSelectedTeam(tid);
+                          if (tid) {
+                            const t = teams.find(x => x.id === tid);
+                            if (t) {
+                              // teams_user has driver_user_id (users.id) and helper_user_id (users.id)
+                              // But driver dropdown expects drivers.id, so we need to convert
+                              if (t.driver_user_id) {
+                                // Find the driver record that corresponds to this user_id
+                                const driver = drivers.find(d => d.user_id === t.driver_user_id);
+                                if (driver) {
+                                  setSelectedDriver(driver.id);
+                                } else {
+                                  console.warn('Driver not found for user_id:', t.driver_user_id);
+                                }
+                              }
+                              // Helper uses user.id directly (no conversion needed)
+                              if (t.helper_user_id) setSelectedHelper(t.helper_user_id);
+                            }
+                          } else {
+                            setSelectedHelper('');
+                          }
+                        }}
+                        className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all"
+                      >
+                        <option value="">Sem equipe definida (Avulso)</option>
+                        {teams.map(t => (
+                          <option key={t.id} value={t.id}>{t.name}</option>
+                        ))}
+                      </select>
+                    </div>
+
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-2">Nome da Rota <span className="text-red-500">*</span></label>
                       <input
@@ -2535,11 +2616,27 @@ function RouteCreationContent() {
                         <select
                           value={selectedDriver}
                           onChange={(e) => setSelectedDriver(e.target.value)}
-                          className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all"
+                          disabled={!!selectedTeam}
+                          className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                           <option value="">Selecione...</option>
                           {drivers.map(d => <option key={d.id} value={d.id}>{d.user?.name || d.name || d.id}</option>)}
                         </select>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">Ajudante</label>
+                        <div className="relative">
+                          <select
+                            value={selectedHelper}
+                            onChange={(e) => setSelectedHelper(e.target.value)}
+                            disabled={!!selectedTeam}
+                            className={`w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all ${!!selectedTeam ? 'bg-gray-100 text-gray-500 cursor-not-allowed' : 'bg-gray-50'} disabled:opacity-50 disabled:cursor-not-allowed`}
+                          >
+                            <option value="">Sem ajudante</option>
+                            {helpers.map(h => <option key={h.id} value={h.id}>{h.name}</option>)}
+                          </select>
+                          {selectedTeam && <Info className="absolute right-3 top-3.5 h-4 w-4 text-gray-400" />}
+                        </div>
                       </div>
                       <div>
                         <label className="block text-sm font-medium text-gray-700 mb-2">Veículo</label>
@@ -3465,6 +3562,28 @@ function RouteCreationContent() {
                         const { data: vData } = await supabase.from('vehicles').select('*').eq('id', route.vehicle_id).single();
                         vehicleObj = vData || null;
                       }
+                      // Resolve team and helper names
+                      let teamName = '';
+                      let helperName = '';
+
+                      if (route.team_id) {
+                        const t = teams.find((x: any) => String(x.id) === String(route.team_id));
+                        if (t) teamName = t.name;
+                        else {
+                          const { data: tData } = await supabase.from('teams_user').select('name').eq('id', route.team_id).single();
+                          if (tData) teamName = tData.name;
+                        }
+                      }
+
+                      if (route.helper_id) {
+                        const h = helpers.find((x: any) => String(x.id) === String(route.helper_id));
+                        if (h) helperName = h.name;
+                        else {
+                          const { data: hData } = await supabase.from('users').select('name').eq('id', route.helper_id).single();
+                          if (hData) helperName = hData.name;
+                        }
+                      }
+
                       const data = {
                         route: { id: route.id, name: route.name, driver_id: route.driver_id, vehicle_id: route.vehicle_id, conferente: route.conferente, observations: route.observations, status: route.status, created_at: route.created_at, updated_at: route.updated_at, },
                         routeOrders,
@@ -3472,6 +3591,8 @@ function RouteCreationContent() {
                         vehicle: vehicleObj || undefined,
                         orders,
                         generatedAt: new Date().toISOString(),
+                        teamName,
+                        helperName,
                       };
                       const pdfBytes = await DeliverySheetGenerator.generateDeliverySheet(data);
                       DeliverySheetGenerator.openPDFInNewTab(pdfBytes);
@@ -3623,11 +3744,34 @@ function RouteCreationContent() {
                         order: ro.order
                       }));
 
+                      // Resolve names
+                      let teamName = '';
+                      if (route.team_id) {
+                        const t = teams.find((x: any) => String(x.id) === String(route.team_id));
+                        if (t) teamName = t.name;
+                        else {
+                          const { data: tData } = await supabase.from('teams_user').select('name').eq('id', route.team_id).single();
+                          if (tData) teamName = tData.name;
+                        }
+                      }
+
+                      let helperName = '';
+                      if (route.helper_id) {
+                        const h = helpers.find((x: any) => String(x.id) === String(route.helper_id));
+                        if (h) helperName = h.name;
+                        else {
+                          const { data: hData } = await supabase.from('users').select('name').eq('id', route.helper_id).single();
+                          if (hData) helperName = hData.name;
+                        }
+                      }
+
                       const data = {
                         route: { ...route, route_orders: routeOrders },
                         driverName,
                         supervisorName: route.conferente || 'Não informado',
                         vehicleInfo,
+                        teamName: teamName || 'Não informada',
+                        helperName: helperName || 'Não informado',
                         generatedAt: new Date().toISOString()
                       };
 

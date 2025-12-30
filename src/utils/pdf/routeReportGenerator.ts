@@ -7,6 +7,8 @@ export interface RouteReportData {
     driverName: string;
     supervisorName: string;
     vehicleInfo: string;
+    teamName: string;
+    helperName: string;
     generatedAt: string;
 }
 
@@ -189,19 +191,23 @@ export class RouteReportGenerator {
         const detailsValuesY = y - 15;
         const colW = (width - margin * 2) / 4;
 
-        const drawDetail = (label: string, value: string, idx: number) => {
-            const x = margin + (idx * colW);
-            page.drawText(label, { x, y: detailsLabelsY, size: 7, font: fontBold, color: rgb(0.6, 0.6, 0.6) });
-
-            // Handle icon + text for values? Just text for now to keep it simple
-            page.drawText(value, { x, y: detailsValuesY, size: 9, font: fontBold, color: rgb(0.2, 0.2, 0.2) });
+        const drawDetail = (label: string, value: string, colIdx: number, rowIdx: number = 0) => {
+            const x = margin + (colIdx * colW);
+            const yOffset = rowIdx * 35; // 35px spacing between rows
+            page.drawText(label, { x, y: detailsLabelsY - yOffset, size: 7, font: fontBold, color: rgb(0.6, 0.6, 0.6) });
+            page.drawText(value, { x, y: detailsValuesY - yOffset, size: 9, font: fontBold, color: rgb(0.2, 0.2, 0.2) });
         };
 
         drawDetail('DATA DA ROTA', dateStr, 0);
-        drawDetail('EQUIPE / MOTORISTA', data.driverName || '-', 1);
-        drawDetail('CONFERENTE', data.supervisorName || '-', 2);
-        drawDetail('VEÍCULO', data.vehicleInfo || '-', 3);
+        drawDetail('EQUIPE', data.teamName || '-', 1);
+        drawDetail('MOTORISTA', data.driverName || '-', 2);
+        drawDetail('AJUDANTE', data.helperName || '-', 3);
 
+        // Second row
+        drawDetail('VEÍCULO', data.vehicleInfo || '-', 0, 1);
+        drawDetail('CONFERENTE', data.supervisorName || '-', 1, 1);
+
+        y -= 35; // Extra spacing for the second row in details section
         y -= 40;
 
         // --- TABLE GENERATION HELPER ---
