@@ -415,6 +415,7 @@ function RouteCreationContent() {
     { id: 'data', label: 'Data', visible: true },
     { id: 'pedido', label: 'Pedido', visible: true },
     { id: 'cliente', label: 'Cliente', visible: true },
+    { id: 'cpf', label: 'CPF', visible: true },
     { id: 'telefone', label: 'Telefone', visible: true },
     { id: 'sku', label: 'SKU', visible: true },
     { id: 'flags', label: 'Sinais', visible: true },
@@ -525,6 +526,7 @@ function RouteCreationContent() {
         { id: 'data', label: 'Data', visible: true },
         { id: 'pedido', label: 'Pedido', visible: true },
         { id: 'cliente', label: 'Cliente', visible: true },
+        { id: 'cpf', label: 'CPF', visible: true },
         { id: 'telefone', label: 'Telefone', visible: true },
         { id: 'sku', label: 'SKU', visible: true },
         { id: 'flags', label: 'Sinais', visible: true },
@@ -896,11 +898,11 @@ function RouteCreationContent() {
         // Pedidos que precisam de coleta (foram entregues e depois devolvidos)
         pickupPendingRes,
       ] = await Promise.all([
-        // Orders (pending or returned) - EXCLUINDO BLOQUEADOS
+        // Orders (pending or returned OR assigned) - EXCLUINDO BLOQUEADOS
         supabase
           .from('orders')
           .select('*')
-          .in('status', ['pending', 'returned'])
+          .in('status', ['pending', 'returned', 'assigned'])
           .is('blocked_at', null)  // Só pedidos NÃO bloqueados
           .order('created_at', { ascending: false }),
 
@@ -975,11 +977,31 @@ function RouteCreationContent() {
         processedOrders = rawOrders
           .filter(o => !lockedOrderIds.has(o.id)) // SAFETY FILTER
           .map((o: any) => {
-            if (String(o.status) === 'returned' && !o.return_flag) {
-              return { ...o, return_flag: true };
+            let updated = { ...o };
+            // Normalização de flags de retorno e auto-repair visual
+            // Se tiver last_return_reason, deveríamos considerar como retornado para fins de UI
+            if ((String(o.status) === 'returned' && !o.return_flag) || (o.last_return_reason && !o.return_flag)) {
+              updated.return_flag = true;
             }
-            return o;
+            // Recuperação de falhas: se estiver 'assigned' mas não bloqueado (passou filtro),
+            // significa que está "solto" (ex: rota concluída mas status não atualizou).
+            // Tratamos como pending para permitir nova roteirização.
+            if (String(o.status) === 'assigned') {
+              updated.status = 'pending';
+            }
+            return updated;
           });
+        // DEBUG: Log orders with return data
+        const withReturnData = processedOrders.filter((o: any) => o.return_flag || o.last_return_reason);
+        if (withReturnData.length > 0) {
+          console.log('[RouteCreation] Orders with return data:', withReturnData.map((o: any) => ({
+            id: o.id,
+            order_id_erp: o.order_id_erp,
+            status: o.status,
+            return_flag: o.return_flag,
+            last_return_reason: o.last_return_reason
+          })));
+        }
         setOrders(processedOrders);
       }
 
@@ -1989,6 +2011,7 @@ function RouteCreationContent() {
                         data: formatDate(o.data_venda || raw.data_venda || o.created_at),
                         pedido: o.order_id_erp || raw.lancamento_venda || '-',
                         cliente: o.customer_name,
+                        cpf: o.customer_cpf || raw.cpf_cnpj || '-',
                         telefone: o.phone,
                         sku: it.sku || '-',
                         produto: it.name || '-',
@@ -2639,7 +2662,7 @@ function RouteCreationContent() {
                         </div>
                       </div>
                       <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-2">Veículo</label>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">Veículo <span className="text-red-500">*</span></label>
                         <select
                           value={selectedVehicle}
                           onChange={(e) => setSelectedVehicle(e.target.value)}
@@ -2651,7 +2674,7 @@ function RouteCreationContent() {
                       </div>
                     </div>
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">Conferente</label>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Conferente <span className="text-red-500">*</span></label>
                       <select
                         value={conferente}
                         onChange={(e) => setConferente(e.target.value)}
@@ -2673,7 +2696,7 @@ function RouteCreationContent() {
                 <button onClick={() => setShowCreateModal(false)} className="px-6 py-2.5 rounded-xl border border-gray-300 text-gray-700 font-medium hover:bg-white transition-colors">Cancelar</button>
                 <button
                   onClick={() => createRoute()}
-                  disabled={saving || (!selectedExistingRouteId && (!routeName || !selectedDriver))}
+                  disabled={saving || (!selectedExistingRouteId && (!routeName || !selectedDriver || !selectedVehicle || !conferente))}
                   className="px-6 py-2.5 rounded-xl bg-blue-600 text-white font-bold hover:bg-blue-700 shadow-lg shadow-blue-200 disabled:opacity-50 disabled:shadow-none transition-all transform active:scale-95"
                 >
                   {saving ? 'Salvando...' : 'Confirmar Rota'}

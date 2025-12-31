@@ -136,7 +136,7 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
         .from('return_reasons')
         .select('*')
         .eq('active', true)
-        .order('reason_text', { ascending: true });
+        .order('reason', { ascending: true });
 
       if (error) throw error;
       if (data && data.length > 0) {
@@ -387,7 +387,7 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
         // Deixar o pedido roteirizavel novamente, sinalizado como retornado
         // Apenas marcar flag de retorno para visibilidade, MAS MANTER status='assigned'
         // A liberação para 'pending' só ocorre ao FINALIZAR A ROTA.
-        await supabase
+        const { error: orderUpdateError } = await supabase
           .from('orders')
           .update({
             // status: 'pending', // <--- REMOVIDO: Só libera no Finalizar Rota
@@ -396,6 +396,12 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
             last_return_notes: confirmation.observations || null,
           })
           .eq('id', order.order_id);
+
+        if (orderUpdateError) {
+          console.error('[DeliveryMarking] Falha ao atualizar return_flag na tabela orders:', orderUpdateError);
+          // Não falhar completamente, mas avisar
+          toast.warning('Retorno registrado na rota, mas flag de retorno pode não ter sido salva.');
+        }
 
         toast.success('Pedido marcado como retornado!');
         setRouteOrders(prev => prev.map(ro => ro.id === order.id ? { ...ro, status: 'returned', returned_at: confirmation.local_timestamp, return_reason: { reason: reasonValue } as any, return_notes: currentObs } : ro));
@@ -626,7 +632,10 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
         if (returnedIds.length > 0) {
           await supabase
             .from('orders')
-            .update({ status: 'pending' }) // AGORA SIM LIBERA
+            .update({
+              status: 'pending',
+              return_flag: true // GARANTIA: Se estava como retornado na rota, tem que ter a flag
+            })
             .in('id', returnedIds);
         }
 
