@@ -324,39 +324,7 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
           console.error('Erro ao verificar montagem:', error);
         }
 
-        try {
-          const { data } = await supabase
-            .from('route_orders')
-            .select('order_id,status')
-            .eq('route_id', routeId);
-          if (data && data.length > 0) {
-            const allDone = data.every((ro: any) => ro.status !== 'pending');
-            if (allDone) {
-              await supabase.from('routes').update({ status: 'completed' }).eq('id', routeId);
-            }
-            const deliveredIds = data.filter((d: any) => d.status === 'delivered').map((d: any) => d.order_id);
-            if (deliveredIds.length) {
-              await supabase
-                .from('orders')
-                .update({ status: 'delivered', return_flag: false, last_return_reason: null, last_return_notes: null })
-                .in('id', deliveredIds);
-              // Auditoria: pedidos marcados como entregues
-              try {
-                const userId = (await supabase.auth.getUser()).data.user?.id || '';
-                const now = new Date().toISOString();
-                const logs = deliveredIds.map((oid: string) => ({
-                  entity_type: 'order',
-                  entity_id: oid,
-                  action: 'delivered',
-                  details: { route_id: routeId },
-                  user_id: userId,
-                  timestamp: now,
-                }));
-                await supabase.from('audit_logs').insert(logs);
-              } catch { }
-            }
-          }
-        } catch { }
+
         if (onUpdated) onUpdated();
       } else {
         await SyncQueue.addItem({ type: 'delivery_confirmation', data: confirmation });
@@ -417,10 +385,12 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
         if (error) throw error;
 
         // Deixar o pedido roteirizavel novamente, sinalizado como retornado
+        // Apenas marcar flag de retorno para visibilidade, MAS MANTER status='assigned'
+        // A liberação para 'pending' só ocorre ao FINALIZAR A ROTA.
         await supabase
           .from('orders')
           .update({
-            status: 'pending',
+            // status: 'pending', // <--- REMOVIDO: Só libera no Finalizar Rota
             return_flag: true,
             last_return_reason: confirmation.return_reason,
             last_return_notes: confirmation.observations || null,
@@ -429,25 +399,7 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
 
         toast.success('Pedido marcado como retornado!');
         setRouteOrders(prev => prev.map(ro => ro.id === order.id ? { ...ro, status: 'returned', returned_at: confirmation.local_timestamp, return_reason: { reason: reasonValue } as any, return_notes: currentObs } : ro));
-        try {
-          const { data } = await supabase
-            .from('route_orders')
-            .select('order_id,status')
-            .eq('route_id', routeId);
-          if (data && data.length > 0) {
-            const allDone = data.every((ro: any) => ro.status !== 'pending');
-            if (allDone) {
-              await supabase.from('routes').update({ status: 'completed' }).eq('id', routeId);
-            }
-            const returnedIds = data.filter((d: any) => d.status === 'returned').map((d: any) => d.order_id);
-            if (returnedIds.length) {
-              await supabase
-                .from('orders')
-                .update({ status: 'pending', return_flag: true })
-                .in('id', returnedIds);
-            }
-          }
-        } catch { }
+
         if (onUpdated) onUpdated();
       } else {
         // Queue for offline sync
@@ -457,8 +409,9 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
         });
 
         // Também marcar pedido como pendente/retornado para roteirização quando offline
+        // queue logic handled above
         await OfflineStorage.setItem(`order_return_${order.order_id}`, {
-          status: 'pending',
+          // status: 'pending', // <--- REMOVIDO
           return_flag: true,
           last_return_reason: confirmation.return_reason,
           last_return_notes: confirmation.observations || null,
@@ -614,12 +567,11 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
         setRouteOrders(updated);
         await OfflineStorage.setItem(`route_orders_${routeId}`, updated);
         toast.success('Entrega desfeita');
+
       } else {
-        // Offline undo delivery is complex because we prefer strict sync. 
-        // Assuming simple revert for now, but usually delivery involves signature capable actions.
         await SyncQueue.addItem({
           type: 'delivery_revert',
-          data: { order_id: current.order_id, route_id: routeId },
+          data: { order_id: current.order_id, route_id: routeId, user_id: current.route_id },
         });
         const updated = routeOrders.map(ro => ro.id === routeOrderId ? { ...ro, status: 'pending' as const, delivered_at: null } : ro);
         setRouteOrders(updated);
@@ -631,6 +583,63 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
       toast.error('Erro ao desfazer entrega');
     } finally {
       const next2 = new Set(processingIds); next2.delete(routeOrderId); setProcessingIds(next2);
+    }
+  };
+
+  const handleFinalizeRoute = async () => {
+    // Verificar se todos foram processados
+    const pending = routeOrders.filter(r => r.status === 'pending');
+    if (pending.length > 0) {
+      toast.error(`Ainda existem ${pending.length} pedidos pendentes na rota.`);
+      return;
+    }
+
+    if (!window.confirm('Confirma a finalização da rota? Os pedidos retornados serão liberados para roteirização.')) {
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const confirmation = {
+        route_id: routeId,
+        local_timestamp: new Date().toISOString(),
+      };
+
+      if (isOnline) {
+        // 1. Marcar rota como concluída
+        const { error } = await supabase.from('routes').update({ status: 'completed' }).eq('id', routeId);
+        if (error) throw error;
+
+        // 2. Liberar pedidos retornados
+        const returnedOrders = routeOrders.filter(r => r.status === 'returned').map(r => r.order_id);
+        if (returnedOrders.length > 0) {
+          await supabase
+            .from('orders')
+            .update({ status: 'pending' }) // AGORA SIM LIBERA
+            .in('id', returnedOrders);
+          // .eq('status', 'assigned') // Safety check?
+        }
+
+        toast.success('Rota finalizada com sucesso!');
+        setRouteDetails((prev: any) => ({ ...prev, status: 'completed' }));
+        if (onUpdated) onUpdated();
+      } else {
+        // Offline: Queue route completion
+        await SyncQueue.addItem({
+          type: 'route_completion',
+          data: confirmation,
+        });
+
+        // Local update
+        setRouteDetails((prev: any) => ({ ...prev, status: 'completed' }));
+        toast.success('Rota finalizada (offline). Será sincronizada quando online.');
+      }
+
+    } catch (error) {
+      console.error('Error finalizing route:', error);
+      toast.error('Erro ao finalizar rota.');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -856,6 +865,35 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
         );
       })}
 
+      <div className="mt-8 pt-4 border-t border-gray-200 sticky bottom-0 bg-gray-50 pb-4 px-4 -mx-4 z-10">
+        <button
+          onClick={handleFinalizeRoute}
+          disabled={loading || processingIds.size > 0 || (routeDetails?.status === 'completed')}
+          className={`w-full py-4 rounded-xl font-bold text-lg shadow-sm transition-all flex items-center justify-center gap-2 ${routeDetails?.status === 'completed'
+            ? 'bg-green-100 text-green-700 cursor-not-allowed border border-green-200'
+            : 'bg-green-600 text-white hover:bg-green-700 hover:shadow-md'
+            }`}
+        >
+          {loading ? (
+            <span className="animate-spin rounded-full h-5 w-5 border-b-2 border-current"></span>
+          ) : routeDetails?.status === 'completed' ? (
+            <>
+              <CheckCircle className="h-6 w-6" />
+              Rota Finalizada
+            </>
+          ) : (
+            <>
+              <CheckCircle className="h-6 w-6" />
+              Finalizar Rota
+            </>
+          )}
+        </button>
+        {routeDetails?.status !== 'completed' && (
+          <p className="text-center text-xs text-gray-500 mt-2">
+            Clique para desbloquear os pedidos retornados e concluir a rota.
+          </p>
+        )}
+      </div>
 
     </div>
   );

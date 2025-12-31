@@ -160,6 +160,9 @@ export class BackgroundSyncService {
       case 'assembly_undo':
         await this.syncAssemblyUndo(item.data);
         break;
+      case 'route_completion':
+        await this.syncRouteCompletion(item.data);
+        break;
       default:
         console.warn(`Unknown sync item type: ${item.type}`);
     }
@@ -312,6 +315,32 @@ export class BackgroundSyncService {
     }
   }
 
+  private async syncRouteCompletion(data: any): Promise<void> {
+    const { route_id } = data;
+    if (!route_id) throw new Error('Invalid route_completion payload');
+
+    // 1. Mark route as completed
+    const { error } = await supabase.from('routes').update({ status: 'completed' }).eq('id', route_id);
+    if (error) throw error;
+
+    // 2. Release returned orders for routing
+    const { data: returnedOrders } = await supabase
+      .from('route_orders')
+      .select('order_id')
+      .eq('route_id', route_id)
+      .eq('status', 'returned');
+
+    if (returnedOrders && returnedOrders.length > 0) {
+      const orderIds = returnedOrders.map(ro => ro.order_id);
+      await supabase
+        .from('orders')
+        .update({ status: 'pending' })
+        .in('id', orderIds);
+    }
+
+    console.log('[BackgroundSync] Route completed and returns released:', route_id);
+  }
+
   private async syncDeliveryConfirmation(data: any): Promise<void> {
     const { order_id, route_id, action, signature, local_timestamp, user_id } = data;
 
@@ -402,7 +431,7 @@ export class BackgroundSyncService {
       const { error: orderError2 } = await supabase
         .from('orders')
         .update({
-          status: 'pending',
+          // status: 'pending', // <--- PREVENT RELEASE UNTIL ROUTE COMPLETION
           return_flag: true,
           last_return_reason: data.return_reason || null,
           last_return_notes: data.observations || null,
@@ -411,23 +440,12 @@ export class BackgroundSyncService {
       if (orderError2) console.warn('Failed to update order status:', orderError2);
     }
 
-    // Verificar se todos os pedidos da rota estão concluídos para atualizar status da rota
+    // Auto-completion check removed in favor of manual finalization
+    /* 
     try {
-      const { data: allOrders } = await supabase
-        .from('route_orders')
-        .select('status')
-        .eq('route_id', route_id);
-
-      if (allOrders && allOrders.length > 0) {
-        const allDone = allOrders.every((ro: any) => ro.status !== 'pending');
-        if (allDone) {
-          await supabase.from('routes').update({ status: 'completed' }).eq('id', route_id);
-          console.log('Route marked as completed:', route_id);
-        }
-      }
-    } catch (routeErr) {
-      console.warn('Failed to check/update route status:', routeErr);
-    }
+       ...
+    } catch (routeErr) { } 
+    */
 
     await this.logSyncAction('delivery_confirmation', order_id, action, user_id);
   }
