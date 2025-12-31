@@ -504,6 +504,36 @@ function AssemblyManagementContent() {
     setSelectedOrders(newSelected);
   };
 
+  // Generate unique route code: RM-DDMMYY-XXX for assembly routes
+  const generateRouteCode = async (): Promise<string> => {
+    const prefix = 'RM';
+    const now = new Date();
+    const day = String(now.getDate()).padStart(2, '0');
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const year = String(now.getFullYear()).slice(-2);
+    const dateCode = `${day}${month}${year}`;
+
+    // Query existing codes for today to get next sequence
+    const pattern = `${prefix}-${dateCode}-%`;
+    const { data: existingRoutes } = await supabase
+      .from('assembly_routes')
+      .select('route_code')
+      .like('route_code', pattern)
+      .order('route_code', { ascending: false })
+      .limit(1);
+
+    let nextSeq = 1;
+    if (existingRoutes && existingRoutes.length > 0 && existingRoutes[0].route_code) {
+      const lastCode = existingRoutes[0].route_code as string;
+      const lastSeq = parseInt(lastCode.split('-')[2], 10);
+      if (!isNaN(lastSeq)) {
+        nextSeq = lastSeq + 1;
+      }
+    }
+
+    return `${prefix}-${dateCode}-${String(nextSeq).padStart(3, '0')}`;
+  };
+
   const createAssemblyRoute = async () => {
     // If creating new route, name is required
     if (!selectedExistingRoute && !routeName.trim()) {
@@ -549,6 +579,9 @@ function AssemblyManagementContent() {
         targetInstallerId = (existingRoute as any)?.assembler_id || null;
       } else {
         // Create new route
+        // Generate unique route code
+        const routeCode = await generateRouteCode();
+
         const { data: routeData, error: routeError } = await supabase
           .from('assembly_routes')
           .insert({
@@ -557,7 +590,8 @@ function AssemblyManagementContent() {
             observations: observations.trim() || null,
             assembler_id: selectedMontador || null,
             vehicle_id: selectedVehicle || null,
-            status: 'pending'
+            status: 'pending',
+            route_code: routeCode,
           })
           .select()
           .single();
@@ -979,7 +1013,7 @@ function AssemblyManagementContent() {
     Object.entries(groupedProducts).forEach(([orderId, products]) => {
       const firstProduct = products[0];
       const order = firstProduct?.order;
-      const addr = order?.address_json || {};
+      const addr = (order?.address_json || {}) as any;
 
       const city = (addr.city || '').toLowerCase();
       const neighborhood = (addr.neighborhood || '').toLowerCase();
@@ -1357,6 +1391,11 @@ function AssemblyManagementContent() {
                           <div className="flex flex-col items-center gap-2 mb-4">
                             <div className="text-center">
                               <h3 className="font-bold text-gray-900 text-lg group-hover:text-blue-600 transition-colors">{route.name}</h3>
+                              {(route as any).route_code && (
+                                <span className="inline-block px-2 py-0.5 bg-gray-100 text-gray-600 text-xs font-mono rounded mt-1">
+                                  {(route as any).route_code}
+                                </span>
+                              )}
                               <p className="text-xs text-gray-500 mt-1 flex items-center justify-center">
                                 <Calendar className="h-3 w-3 mr-1" />
                                 {formatDate(route.created_at)}
@@ -1446,6 +1485,7 @@ function AssemblyManagementContent() {
                                   status: route.status as any,
                                   created_at: route.created_at,
                                   updated_at: route.updated_at,
+                                  route_code: (route as any).route_code,
                                 };
 
                                 const data = {
@@ -1677,7 +1717,14 @@ function AssemblyManagementContent() {
               <div className="flex justify-between items-start">
                 {!isEditingRoute ? (
                   <div>
-                    <h2 className="text-xl font-bold text-gray-900">{selectedRoute.name}</h2>
+                    <h2 className="text-xl font-bold text-gray-900">
+                      {selectedRoute.name}
+                      {(selectedRoute as any).route_code && (
+                        <span className="ml-2 px-2 py-0.5 bg-gray-100 text-gray-600 text-sm font-mono rounded">
+                          {(selectedRoute as any).route_code}
+                        </span>
+                      )}
+                    </h2>
                     <p className="text-sm text-gray-500">
                       {selectedRoute.status === 'pending' ? 'Pendente' : selectedRoute.status === 'in_progress' ? 'Pendente' : 'Concluído'}
                       • {formatDate(selectedRoute.created_at)}
@@ -1800,7 +1847,7 @@ function AssemblyManagementContent() {
                         const products = assemblyInRoutes.filter(ap => ap.assembly_route_id === route.id);
                         const orders = products.map(p => p.order).filter(Boolean) as any[];
                         const routeOrders = products.map((p, idx) => ({ id: String(p.id), route_id: String(route.id), order_id: String(p.order_id), sequence: idx + 1, status: 'pending', created_at: route.created_at, updated_at: route.updated_at })) as any[];
-                        const routeData: any = { id: route.id, name: route.name, driver_id: '', vehicle_id: '', conferente: '', observations: route.observations, status: route.status as any, created_at: route.created_at, updated_at: route.updated_at };
+                        const routeData: any = { id: route.id, name: route.name, driver_id: '', vehicle_id: '', conferente: '', observations: route.observations, status: route.status as any, created_at: route.created_at, updated_at: route.updated_at, route_code: (route as any).route_code };
                         const m = montadores.find(m => m.id === (route as any).assembler_id);
                         const v = vehicles.find(v => v.id === (route as any).vehicle_id);
                         const data = { route: routeData, routeOrders, driver: { id: '', user_id: '', cpf: '', active: true, name: '—', user: { id: '', email: '', name: '—', role: 'driver', created_at: new Date().toISOString() } } as any, vehicle: undefined, orders: orders as any, generatedAt: new Date().toISOString(), assemblyInstallerName: m?.name || m?.email || '—', assemblyVehicleModel: v?.model || '', assemblyVehiclePlate: v?.plate || '' };

@@ -1476,6 +1476,36 @@ function RouteCreationContent() {
     }
   };
 
+  // Generate unique route code: RE-DDMMYY-XXX (delivery) or RM-DDMMYY-XXX (assembly)
+  const generateRouteCode = async (type: 'delivery' | 'assembly' = 'delivery'): Promise<string> => {
+    const prefix = type === 'delivery' ? 'RE' : 'RM';
+    const now = new Date();
+    const day = String(now.getDate()).padStart(2, '0');
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const year = String(now.getFullYear()).slice(-2); // Last 2 digits of year
+    const dateCode = `${day}${month}${year}`;
+
+    // Query existing codes for today to get next sequence
+    const pattern = `${prefix}-${dateCode}-%`;
+    const { data: existingRoutes } = await supabase
+      .from('routes')
+      .select('route_code')
+      .like('route_code', pattern)
+      .order('route_code', { ascending: false })
+      .limit(1);
+
+    let nextSeq = 1;
+    if (existingRoutes && existingRoutes.length > 0 && existingRoutes[0].route_code) {
+      const lastCode = existingRoutes[0].route_code as string;
+      const lastSeq = parseInt(lastCode.split('-')[2], 10);
+      if (!isNaN(lastSeq)) {
+        nextSeq = lastSeq + 1;
+      }
+    }
+
+    return `${prefix}-${dateCode}-${String(nextSeq).padStart(3, '0')}`;
+  };
+
   const createRoute = async (forceProceed: boolean = false) => {
     if (!forceProceed && openMixedConfirm('create')) return;
     if (!selectedExistingRouteId) {
@@ -1489,6 +1519,9 @@ function RouteCreationContent() {
     try {
       let targetRouteId = selectedExistingRouteId;
       if (!selectedExistingRouteId) {
+        // Generate unique route code
+        const routeCode = await generateRouteCode('delivery');
+
         const { data: routeData, error: routeError } = await supabase
           .from('routes')
           .insert({
@@ -1500,6 +1533,7 @@ function RouteCreationContent() {
             team_id: selectedTeam || null,
             helper_id: selectedHelper || null,
             status: 'pending',
+            route_code: routeCode,
           })
           .select()
           .single();
@@ -2223,6 +2257,11 @@ function RouteCreationContent() {
                         <div className="flex flex-col items-center gap-2 mb-4">
                           <div className="text-center">
                             <h3 className="font-bold text-gray-900 text-lg group-hover:text-blue-600 transition-colors">{route.name}</h3>
+                            {(route as any).route_code && (
+                              <span className="inline-block px-2 py-0.5 bg-gray-100 text-gray-600 text-xs font-mono rounded mt-1">
+                                {(route as any).route_code}
+                              </span>
+                            )}
                             <p className="text-xs text-gray-500 mt-1 flex items-center justify-center">
                               <Calendar className="h-3 w-3 mr-1" />
                               {formatDate(route.created_at)}
@@ -3171,7 +3210,14 @@ function RouteCreationContent() {
               {/* Re-implementing the header and actions cleanly */}
               <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
                 <div>
-                  <h2 className="text-xl font-bold text-gray-900">{selectedRoute.name}</h2>
+                  <h2 className="text-xl font-bold text-gray-900">
+                    {selectedRoute.name}
+                    {(selectedRoute as any).route_code && (
+                      <span className="ml-2 px-2 py-0.5 bg-gray-100 text-gray-600 text-sm font-mono rounded">
+                        {(selectedRoute as any).route_code}
+                      </span>
+                    )}
+                  </h2>
                   <p className="text-sm text-gray-500">
                     {selectedRoute.status === 'pending' ? 'Em Separação' : selectedRoute.status === 'in_progress' ? 'Em Rota' : (String(selectedRoute.name || '').startsWith('RETIRADA') ? 'Retirado' : 'Concluída')}
                     {String(selectedRoute.name || '').startsWith('RETIRADA')
@@ -3608,7 +3654,7 @@ function RouteCreationContent() {
                       }
 
                       const data = {
-                        route: { id: route.id, name: route.name, driver_id: route.driver_id, vehicle_id: route.vehicle_id, conferente: route.conferente, observations: route.observations, status: route.status, created_at: route.created_at, updated_at: route.updated_at, },
+                        route: { id: route.id, name: route.name, route_code: (route as any).route_code, driver_id: route.driver_id, vehicle_id: route.vehicle_id, conferente: route.conferente, observations: route.observations, status: route.status, created_at: route.created_at, updated_at: route.updated_at, },
                         routeOrders,
                         driver: driverObj || { id: '', user_id: '', cpf: '', active: true, user: { id: '', email: '', name: '', role: 'driver', created_at: '' } },
                         vehicle: vehicleObj || undefined,

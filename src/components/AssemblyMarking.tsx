@@ -29,6 +29,7 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
   const [processingIds, setProcessingIds] = useState<Set<string>>(new Set());
   const [returnReasonByOrder, setReturnReasonByOrder] = useState<Record<string, string>>({});
   const [returnObservationsByOrder, setReturnObservationsByOrder] = useState<Record<string, string>>({});
+  const [routeStatus, setRouteStatus] = useState<string>('pending');
 
   useEffect(() => {
     loadRouteItems();
@@ -74,6 +75,19 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
         if (data) {
           setAssemblyItems(data);
           await OfflineStorage.setItem(`assembly_items_${routeId}`, data);
+          setAssemblyItems(data);
+          await OfflineStorage.setItem(`assembly_items_${routeId}`, data);
+        }
+
+        // Fetch route status
+        const { data: routeData, error: routeError } = await supabase
+          .from('assembly_routes')
+          .select('status')
+          .eq('id', routeId)
+          .single();
+
+        if (!routeError && routeData) {
+          setRouteStatus(routeData.status);
         }
       } else {
         const cached = await OfflineStorage.getItem(`assembly_items_${routeId}`);
@@ -147,19 +161,7 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
         setAssemblyItems(updated);
         await OfflineStorage.setItem(`assembly_items_${routeId}`, updated);
 
-        // Verifica se todos os produtos da rota estão concluídos
-        const { data: allProducts } = await supabase
-          .from('assembly_products')
-          .select('status')
-          .eq('assembly_route_id', routeId);
-
-        if (allProducts && allProducts.length > 0) {
-          const allDone = allProducts.every((p: any) => p.status !== 'pending');
-          if (allDone) {
-            await supabase.from('assembly_routes').update({ status: 'completed' }).eq('id', routeId);
-            toast.success('Rota de montagem concluída!');
-          }
-        }
+        // Auto-complete logic removed - Manual finalization required
 
         if (onUpdated) onUpdated();
       } else {
@@ -225,42 +227,7 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
 
         if (error) throw error;
 
-        // Clone/Recriação dos itens para nova tentativa
-        // Como o agrupamento é por pedido, todos tem mesmo order_id, customer_name etc.
-        // MAS produtos podem variar, então iteramos sobre eles.
-        const newItemsCandidates = itemsToMark.map(item => ({
-          order_id: item.order_id,
-          product_name: item.product_name,
-          product_sku: item.product_sku,
-          customer_name: item.customer_name,
-          customer_phone: item.customer_phone,
-          installation_address: item.installation_address,
-          status: 'pending',
-          observations: item.observations,
-          assembly_route_id: null,
-          was_returned: true
-        }));
-
-        await supabase.from('assembly_products').insert(newItemsCandidates);
-
-        toast.success('Pedido marcado como RETORNADO!');
-
-        const updated = assemblyItems.map(it => ids.includes(it.id) ? { ...it, status: 'cancelled' } : it);
-        setAssemblyItems(updated);
-        OfflineStorage.setItem(`assembly_items_${routeId}`, updated);
-
-        const { data: allProducts } = await supabase
-          .from('assembly_products')
-          .select('status')
-          .eq('assembly_route_id', routeId);
-
-        if (allProducts && allProducts.length > 0) {
-          const allDone = allProducts.every((p: any) => p.status !== 'pending');
-          if (allDone) {
-            await supabase.from('assembly_routes').update({ status: 'completed' }).eq('id', routeId);
-            toast.success('Rota de montagem concluída!');
-          }
-        }
+        // Auto-complete and immediate re-insertion removed - Defer to manual finalization
 
         if (onUpdated) onUpdated();
       } else {
@@ -403,6 +370,68 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
     }
   };
 
+  const finalizeRoute = async () => {
+    if (processingIds.size > 0) return;
+    if (routeStatus === 'completed') return;
+
+    // Safety check
+    const pending = assemblyItems.filter(i => i.status === 'pending');
+    if (pending.length > 0) {
+      toast.error('Ainda há itens pendentes!');
+      return;
+    }
+
+    if (!window.confirm('Tem certeza que deseja finalizar esta rota? Os itens retornados serão liberados para nova rota.')) {
+      return;
+    }
+
+    try {
+      const next = new Set(processingIds); next.add('finalizing'); setProcessingIds(next);
+
+      const now = new Date().toISOString();
+
+      if (isOnline) {
+        // 1. Mark status completed
+        const { error } = await supabase.from('assembly_routes').update({ status: 'completed' }).eq('id', routeId);
+        if (error) throw error;
+
+        // 2. Find returned items to re-insert
+        const returnedItems = assemblyItems.filter(i => i.status === 'cancelled');
+
+        if (returnedItems.length > 0) {
+          const newItemsCandidates = returnedItems.map(item => ({
+            order_id: item.order_id,
+            product_name: item.product_name,
+            product_sku: item.product_sku,
+            customer_name: item.customer_name,
+            customer_phone: item.customer_phone,
+            installation_address: item.installation_address,
+            status: 'pending',
+            observations: item.observations, // Contains return reason
+            assembly_route_id: null,
+            was_returned: true
+          }));
+
+          const { error: insertError } = await supabase.from('assembly_products').insert(newItemsCandidates);
+          if (insertError) throw insertError;
+        }
+
+        toast.success('Rota finalizada com sucesso!');
+        setRouteStatus('completed');
+        if (onUpdated) onUpdated();
+      } else {
+        toast.warning('Finalize a rota quando estiver online para garantir o processamento correto dos retornos.');
+        return;
+      }
+
+    } catch (err) {
+      console.error(err);
+      toast.error('Erro ao finalizar rota');
+    } finally {
+      const next = new Set(processingIds); next.delete('finalizing'); setProcessingIds(next);
+    }
+  };
+
   const openMaps = (item: any) => {
     const addr = item.installation_address || item.order?.address_json;
     if (!addr) {
@@ -531,6 +560,13 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
                     </div>
                   )}
 
+                  {groupStatus === 'cancelled' && (
+                    <div className="text-sm text-red-600 mb-2 flex items-center">
+                      <Clock className="h-4 w-4 mr-1" />
+                      Retornado em: {firstItem.returned_at ? new Date(firstItem.returned_at).toLocaleString('pt-BR') : new Date(firstItem.updated_at).toLocaleString('pt-BR')}
+                    </div>
+                  )}
+
                   <div className="text-sm text-gray-600 space-y-1 mb-3">
                     <div className="flex items-center" onClick={() => openMaps(firstItem)} role="button">
                       <MapPin className="h-4 w-4 mr-1 text-blue-500" />
@@ -624,6 +660,43 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
           );
         });
       })()}
+
+      <div className="mt-8 pt-4 border-t border-gray-200 pb-8">
+        <button
+          onClick={finalizeRoute}
+          disabled={processingIds.size > 0 || assemblyItems.some(i => i.status === 'pending') || routeStatus === 'completed'}
+          className={`w-full flex items-center justify-center px-4 py-4 text-white font-bold text-lg rounded-xl shadow-lg transition-all active:scale-95 ${routeStatus === 'completed'
+              ? 'bg-gray-400 cursor-not-allowed opacity-100 hover:bg-gray-400'
+              : 'bg-green-600 hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed'
+            }`}
+        >
+          {routeStatus === 'completed' || processingIds.has('finalizing') ? (
+            <>
+              {processingIds.has('finalizing') ? (
+                <>
+                  <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2"></div>
+                  Finalizando...
+                </>
+              ) : (
+                <>
+                  <CheckCircle className="h-6 w-6 mr-2" />
+                  Rota Finalizada
+                </>
+              )}
+            </>
+          ) : (
+            <>
+              <CheckCircle className="h-6 w-6 mr-2" />
+              Finalizar Rota
+            </>
+          )}
+        </button>
+        {assemblyItems.some(i => i.status === 'pending') && (
+          <p className="text-center text-sm text-gray-500 mt-2 bg-yellow-50 p-2 rounded border border-yellow-100">
+            ⚠️ Conclua ou retorne todos os itens para finalizar a rota.
+          </p>
+        )}
+      </div>
 
       {assemblyItems.length === 0 && (
         <div className="text-center py-8 text-gray-500">

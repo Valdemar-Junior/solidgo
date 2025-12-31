@@ -79,24 +79,34 @@ export class AssemblyReportGenerator {
             page.drawText('DOS MÓVEIS', { x: margin + 70, y: y - 20, size: 12, font: font, color: rgb(0.9, 0.4, 0.4) });
         }
 
-        // Header Right
-        const routeName = data.route.name || `Montagem #${data.route.id.slice(0, 6)}`;
-        const routeId = `#M${data.route.id.slice(0, 5).toUpperCase()}`;
+        // Header Right - Route ID and Name
+        const routeName = data.route.name || '-';
+        const routeCode = (data.route as any).route_code || `#${data.route.id.slice(0, 6)}`;
         const dateStr = new Date(data.generatedAt).toLocaleDateString('pt-BR');
 
-        page.drawText(routeName, {
-            x: width - margin - fontBold.widthOfTextAtSize(routeName, 18),
-            y: y - 15,
-            size: 18,
+        // ID do Romaneio (route_code)
+        page.drawText(routeCode, {
+            x: width - margin - fontBold.widthOfTextAtSize(routeCode, 14),
+            y: y - 12,
+            size: 14,
             font: fontBold,
             color: rgb(0.2, 0.2, 0.3)
         });
 
-        page.drawText(routeId, {
-            x: width - margin - fontBold.widthOfTextAtSize(routeId, 10),
-            y: y - 30,
+        // Nome da Rota
+        page.drawText(`Rota: ${routeName}`, {
+            x: width - margin - font.widthOfTextAtSize(`Rota: ${routeName}`, 10),
+            y: y - 28,
             size: 10,
-            font: fontBold,
+            font: font,
+            color: rgb(0.4, 0.4, 0.4)
+        });
+
+        page.drawText(dateStr, {
+            x: width - margin - font.widthOfTextAtSize(dateStr, 10),
+            y: y - 42,
+            size: 10,
+            font: font,
             color: rgb(0.5, 0.5, 0.5)
         });
 
@@ -159,19 +169,28 @@ export class AssemblyReportGenerator {
 
         // --- LOGISTICS DETAILS ---
         const drawDetail = (label: string, value: string, idx: number) => {
-            const colW = (width - margin * 2) / 3;
+            const colW = (width - margin * 2) / 4; // Changed to 4 columns
             const x = margin + (idx * colW);
             page.drawText(label, { x, y: y, size: 7, font: fontBold, color: rgb(0.6, 0.6, 0.6) });
-            page.drawText(value, { x, y: y - 15, size: 9, font: fontBold, color: rgb(0.2, 0.2, 0.2) });
+            // Truncate value if too long
+            let safeValue = value;
+            if (fontBold.widthOfTextAtSize(safeValue, 9) > colW - 10) {
+                while (safeValue.length > 0 && fontBold.widthOfTextAtSize(safeValue + '...', 9) > colW - 10) {
+                    safeValue = safeValue.slice(0, -1);
+                }
+                safeValue += '...';
+            }
+            page.drawText(safeValue, { x, y: y - 15, size: 9, font: fontBold, color: rgb(0.2, 0.2, 0.2) });
         };
 
         const routeDate = data.route.deadline ? new Date(data.route.deadline).toLocaleDateString('pt-BR') : dateStr;
 
-        drawDetail('DATA PREVISTA', routeDate, 0); // Or execution date
-        drawDetail('MONTADOR', data.installerName || '-', 1);
-        drawDetail('VEÍCULO', data.vehicleInfo || '-', 2);
+        drawDetail('ID ROMANEIO', (data.route as any).route_code || data.route.id.slice(0, 8), 0);
+        drawDetail('ROTA', data.route.name || '-', 1);
+        drawDetail('MONTADOR', data.installerName || '-', 2);
+        drawDetail('VEÍCULO', data.vehicleInfo || '-', 3);
 
-        y -= 40;
+        y -= 60; // Increased spacing (breathing room)
 
         // --- GROUPING HELPER ---
         // Group products by Order
