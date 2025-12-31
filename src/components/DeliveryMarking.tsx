@@ -610,14 +610,24 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
         const { error } = await supabase.from('routes').update({ status: 'completed' }).eq('id', routeId);
         if (error) throw error;
 
-        // 2. Liberar pedidos retornados
-        const returnedOrders = routeOrders.filter(r => r.status === 'returned').map(r => r.order_id);
-        if (returnedOrders.length > 0) {
+        // 2. Buscar pedidos retornados DIRETAMENTE do banco para garantir consistência
+        const { data: dbReturned } = await supabase
+          .from('route_orders')
+          .select('order_id')
+          .eq('route_id', routeId)
+          .eq('status', 'returned');
+
+        const returnedDefaults = routeOrders.filter(r => r.status === 'returned').map(r => r.order_id);
+        // Combine DB results with local state as fallback (though DB should be primary source of truth after update)
+        // Actually, if we just marked them returned, DB should have them. 
+        // Using distinct set of IDs.
+        const returnedIds = Array.from(new Set([...(dbReturned?.map(r => r.order_id) || []), ...returnedDefaults]));
+
+        if (returnedIds.length > 0) {
           await supabase
             .from('orders')
             .update({ status: 'pending' }) // AGORA SIM LIBERA
-            .in('id', returnedOrders);
-          // .eq('status', 'assigned') // Safety check?
+            .in('id', returnedIds);
         }
 
         toast.success('Rota finalizada com sucesso!');
@@ -890,7 +900,7 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
         </button>
         {routeDetails?.status !== 'completed' && (
           <p className="text-center text-xs text-gray-500 mt-2">
-            Clique para desbloquear os pedidos retornados e concluir a rota.
+            Só é possível finalizar a rota quando todos os pedidos forem marcados como entregue ou retornado.
           </p>
         )}
       </div>
