@@ -61,8 +61,11 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
     try {
       setLoading(true);
 
+      let data: any[] | null = null;
+      let status: string | null = null;
+
       if (isOnline) {
-        const { data, error } = await supabase
+        const { data: serverData, error } = await supabase
           .from('assembly_products')
           .select(`
             *,
@@ -72,12 +75,7 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
           .order('created_at', { ascending: true });
 
         if (error) throw error;
-        if (data) {
-          setAssemblyItems(data);
-          await OfflineStorage.setItem(`assembly_items_${routeId}`, data);
-          setAssemblyItems(data);
-          await OfflineStorage.setItem(`assembly_items_${routeId}`, data);
-        }
+        data = serverData;
 
         // Fetch route status
         const { data: routeData, error: routeError } = await supabase
@@ -87,14 +85,70 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
           .single();
 
         if (!routeError && routeData) {
-          setRouteStatus(routeData.status);
+          status = routeData.status;
         }
       } else {
         const cached = await OfflineStorage.getItem(`assembly_items_${routeId}`);
         if (cached) {
-          setAssemblyItems(cached);
+          data = cached;
         }
       }
+
+      if (data) {
+        // MERGE LOCAL PENDING ACTIONS (Robustness Fix)
+        // This ensures that even if sync hasn't finished or failed, 
+        // the local UI reflects the user's recent actions.
+        try {
+          const pendingSync = await SyncQueue.getPendingItems();
+
+          // Apply pending actions to data
+          data = data.map(item => {
+            // Find pending update for this item
+            const itemActions = pendingSync.filter(p =>
+              (p.type === 'assembly_confirmation' || p.type === 'assembly_return' || p.type === 'assembly_undo') &&
+              p.data?.item_id === item.id
+            );
+
+            // Apply them in order
+            let tempItem = { ...item };
+            for (const action of itemActions) {
+              if (action.type === 'assembly_confirmation') {
+                tempItem.status = 'completed';
+                tempItem.completion_date = action.data.local_timestamp;
+              } else if (action.type === 'assembly_return') {
+                tempItem.status = 'cancelled';
+                tempItem.returned_at = action.data.local_timestamp;
+                // Note: observations merge is harder without robust parsing, but we try standard append
+                if (action.data.observations) {
+                  tempItem.observations = action.data.observations;
+                }
+              } else if (action.type === 'assembly_undo') {
+                tempItem.status = 'pending';
+                tempItem.completion_date = null;
+                tempItem.returned_at = null;
+              }
+            }
+            return tempItem;
+          });
+
+          // Also check for pending route completion
+          const pendingCompletion = pendingSync.find(p => p.type === 'route_completion' && p.data?.route_id === routeId);
+          if (pendingCompletion) {
+            status = 'completed';
+          }
+
+        } catch (mergeErr) {
+          console.error('Error merging pending items:', mergeErr);
+        }
+
+        setAssemblyItems(data);
+        await OfflineStorage.setItem(`assembly_items_${routeId}`, data);
+      }
+
+      if (status) {
+        setRouteStatus(status);
+      }
+
     } catch (error) {
       console.error('Error loading assembly items:', error);
       toast.error('Erro ao carregar itens de montagem');
@@ -399,6 +453,10 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
         const returnedItems = assemblyItems.filter(i => i.status === 'cancelled');
 
         if (returnedItems.length > 0) {
+          // Check uniqueness to avoid duplicates if re-running
+          // But insert logic usually handles new IDs. 
+          // We assume 'cancelled' items in this route need re-insertion.
+
           const newItemsCandidates = returnedItems.map(item => ({
             order_id: item.order_id,
             product_name: item.product_name,
@@ -420,8 +478,19 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
         setRouteStatus('completed');
         if (onUpdated) onUpdated();
       } else {
-        toast.warning('Finalize a rota quando estiver online para garantir o processamento correto dos retornos.');
-        return;
+        // Offline Finalization
+        await SyncQueue.addItem({
+          type: 'route_completion',
+          data: {
+            route_id: routeId,
+            local_timestamp: now
+          },
+        });
+
+        toast.success('Rota finalizada (offline). Será sincronizada quando online.');
+        setRouteStatus('completed');
+        // Update local status doesn't persist to DB yet, but state is updated.
+        // We should probably rely on SyncQueue merging in loadRouteItems to keep this state consistent on reload.
       }
 
     } catch (err) {
