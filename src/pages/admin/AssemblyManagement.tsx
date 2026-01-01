@@ -552,6 +552,18 @@ function AssemblyManagementContent() {
       return;
     }
 
+    // If creating new route, vehicle is required
+    if (!selectedExistingRoute && !selectedVehicle) {
+      toast.error('Por favor, selecione um veículo - o veículo é obrigatório');
+      return;
+    }
+
+    // If creating new route, deadline is required
+    if (!selectedExistingRoute && !deadline) {
+      toast.error('Por favor, informe o prazo de conclusão');
+      return;
+    }
+
     setSaving(true);
 
     try {
@@ -1581,7 +1593,7 @@ function AssemblyManagementContent() {
                       </select>
                     </div>
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">Veículo</label>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Veículo <span className="text-red-500">*</span></label>
                       <select
                         value={selectedVehicle}
                         onChange={(e) => setSelectedVehicle(e.target.value)}
@@ -1594,7 +1606,7 @@ function AssemblyManagementContent() {
                   </div>
 
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">Prazo de Conclusão</label>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Prazo de Conclusão <span className="text-red-500">*</span></label>
                     <input
                       type="date"
                       value={deadline}

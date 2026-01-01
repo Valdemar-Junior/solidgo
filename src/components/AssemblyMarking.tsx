@@ -4,7 +4,7 @@ import { OfflineStorage, SyncQueue, NetworkStatus } from '../utils/offline/stora
 import { backgroundSync } from '../utils/offline/backgroundSync';
 import type { ReturnReason } from '../types/database';
 import { Package, CheckCircle, XCircle, Clock, MapPin } from 'lucide-react';
-import { buildFullAddress, openWazeWithLL } from '../utils/maps';
+import { buildFullAddress } from '../utils/maps';
 import { toast } from 'sonner';
 
 const FALLBACK_RETURN_REASONS: ReturnReason[] = [
@@ -432,24 +432,7 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
     }
   };
 
-  const openMaps = (item: any) => {
-    const addr = item.installation_address || item.order?.address_json;
-    if (!addr) {
-      toast.error('Endereço não disponível');
-      return;
-    }
 
-    const fullAddr = buildFullAddress(addr);
-    toast.info(`Endereço: ${fullAddr}`);
-
-    if (addr.lat && addr.lng) {
-      openWazeWithLL(addr.lat, addr.lng);
-    } else {
-      // Fallback simples para busca textual se não houver coordenadas
-      const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(fullAddr)}`;
-      window.open(mapsUrl, '_blank');
-    }
-  };
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -568,9 +551,9 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
                   )}
 
                   <div className="text-sm text-gray-600 space-y-1 mb-3">
-                    <div className="flex items-center" onClick={() => openMaps(firstItem)} role="button">
+                    <div className="flex items-center">
                       <MapPin className="h-4 w-4 mr-1 text-blue-500" />
-                      <span className="underline decoration-dotted">{buildFullAddress(firstItem.installation_address || firstItem.order?.address_json)}</span>
+                      <span>{buildFullAddress(firstItem.installation_address || firstItem.order?.address_json)}</span>
                     </div>
                   </div>
 
@@ -666,8 +649,8 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
           onClick={finalizeRoute}
           disabled={processingIds.size > 0 || assemblyItems.some(i => i.status === 'pending') || routeStatus === 'completed'}
           className={`w-full flex items-center justify-center px-4 py-4 text-white font-bold text-lg rounded-xl shadow-lg transition-all active:scale-95 ${routeStatus === 'completed'
-              ? 'bg-gray-400 cursor-not-allowed opacity-100 hover:bg-gray-400'
-              : 'bg-green-600 hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed'
+            ? 'bg-gray-400 cursor-not-allowed opacity-100 hover:bg-gray-400'
+            : 'bg-green-600 hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed'
             }`}
         >
           {routeStatus === 'completed' || processingIds.has('finalizing') ? (
