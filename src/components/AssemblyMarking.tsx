@@ -461,25 +461,37 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
         const returnedItems = assemblyItems.filter(i => i.status === 'cancelled');
 
         if (returnedItems.length > 0) {
-          // Check uniqueness to avoid duplicates if re-running
-          // But insert logic usually handles new IDs. 
-          // We assume 'cancelled' items in this route need re-insertion.
+          // Para cada item retornado, verificar se já existe clone pendente
+          for (const item of returnedItems) {
+            const { data: existingClone } = await supabase
+              .from('assembly_products')
+              .select('id')
+              .eq('order_id', item.order_id)
+              .eq('product_sku', item.product_sku)
+              .eq('status', 'pending')
+              .is('assembly_route_id', null)
+              .limit(1);
 
-          const newItemsCandidates = returnedItems.map(item => ({
-            order_id: item.order_id,
-            product_name: item.product_name,
-            product_sku: item.product_sku,
-            customer_name: item.customer_name,
-            customer_phone: item.customer_phone,
-            installation_address: item.installation_address,
-            status: 'pending',
-            observations: item.observations, // Contains return reason
-            assembly_route_id: null,
-            was_returned: true
-          }));
+            if (existingClone && existingClone.length > 0) {
+              console.log('[FinalizeRoute] Clone already exists for', item.product_sku, '- skipping');
+              continue;
+            }
 
-          const { error: insertError } = await supabase.from('assembly_products').insert(newItemsCandidates);
-          if (insertError) throw insertError;
+            const newItem = {
+              order_id: item.order_id,
+              product_name: item.product_name,
+              product_sku: item.product_sku,
+              customer_name: item.customer_name,
+              customer_phone: item.customer_phone,
+              installation_address: item.installation_address,
+              status: 'pending',
+              observations: item.observations,
+              assembly_route_id: null,
+              was_returned: true
+            };
+
+            await supabase.from('assembly_products').insert(newItem);
+          }
         }
 
         toast.success('Rota finalizada com sucesso!');

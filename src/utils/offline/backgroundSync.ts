@@ -244,6 +244,7 @@ export class BackgroundSyncService {
   }
 
   // Sync assembly return (marcado como retorno) - usa item_id
+  // NOTA: Clones são criados APENAS na finalização da rota para evitar duplicação
   private async syncAssemblyReturn(data: any): Promise<void> {
     const { item_id, route_id, return_reason, observations, local_timestamp } = data || {};
     console.log('[BackgroundSync] syncAssemblyReturn:', { item_id, route_id });
@@ -266,31 +267,8 @@ export class BackgroundSyncService {
     }
     console.log('[BackgroundSync] Assembly return synced successfully:', item_id);
 
-    // Buscar dados do produto para clonar
-    const { data: originalProduct } = await supabase
-      .from('assembly_products')
-      .select('*')
-      .eq('id', item_id)
-      .single();
-
-    if (originalProduct) {
-      // Clone para nova tentativa (libera para nova rota)
-      const newItem = {
-        order_id: originalProduct.order_id,
-        product_name: originalProduct.product_name,
-        product_sku: originalProduct.product_sku,
-        customer_name: originalProduct.customer_name,
-        customer_phone: originalProduct.customer_phone,
-        installation_address: originalProduct.installation_address,
-        status: 'pending',
-        observations: originalProduct.observations,
-        assembly_route_id: null,
-        was_returned: true // Marca como retorno para badge
-      };
-
-      await supabase.from('assembly_products').insert(newItem);
-      console.log('[BackgroundSync] Created clone for returned product');
-    }
+    // REMOVIDO: Criação de clone aqui causava duplicação
+    // Clones são criados na syncAssemblyRouteCompletion ou finalizeRoute
 
     // Verificar se todos os produtos da rota estão concluídos
     if (route_id) {
@@ -366,25 +344,43 @@ export class BackgroundSyncService {
       .eq('status', 'cancelled');
 
     if (returnedItems && returnedItems.length > 0) {
-      const newItems = returnedItems.map((item: any) => ({
-        order_id: item.order_id,
-        product_name: item.product_name,
-        product_sku: item.product_sku,
-        customer_name: item.customer_name,
-        customer_phone: item.customer_phone,
-        installation_address: item.installation_address,
-        status: 'pending',
-        observations: item.observations,
-        assembly_route_id: null,
-        was_returned: true
-      }));
+      // Para cada item retornado, verificar se já existe um clone pendente
+      for (const item of returnedItems) {
+        // Checar se já existe clone pendente para este order_id + product_sku
+        const { data: existingClone } = await supabase
+          .from('assembly_products')
+          .select('id')
+          .eq('order_id', item.order_id)
+          .eq('product_sku', item.product_sku)
+          .eq('status', 'pending')
+          .is('assembly_route_id', null)
+          .limit(1);
 
-      const { error: insertError } = await supabase.from('assembly_products').insert(newItems);
-      if (insertError) {
-        console.error('[BackgroundSync] Error re-inserting returned items:', insertError);
-        // Don't throw, route is already completed
-      } else {
-        console.log('[BackgroundSync] Re-inserted', newItems.length, 'returned items for new routing');
+        if (existingClone && existingClone.length > 0) {
+          console.log('[BackgroundSync] Clone already exists for', item.product_sku, '- skipping');
+          continue;
+        }
+
+        // Criar clone
+        const newItem = {
+          order_id: item.order_id,
+          product_name: item.product_name,
+          product_sku: item.product_sku,
+          customer_name: item.customer_name,
+          customer_phone: item.customer_phone,
+          installation_address: item.installation_address,
+          status: 'pending',
+          observations: item.observations,
+          assembly_route_id: null,
+          was_returned: true
+        };
+
+        const { error: insertError } = await supabase.from('assembly_products').insert(newItem);
+        if (insertError) {
+          console.error('[BackgroundSync] Error inserting clone:', insertError);
+        } else {
+          console.log('[BackgroundSync] Created clone for', item.product_sku);
+        }
       }
     }
 
