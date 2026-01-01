@@ -92,6 +92,11 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
         if (cached) {
           data = cached;
         }
+        // Load cached route status for offline
+        const cachedStatus = await OfflineStorage.getItem(`assembly_route_status_${routeId}`);
+        if (cachedStatus) {
+          status = cachedStatus;
+        }
       }
 
       if (data) {
@@ -131,8 +136,11 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
             return tempItem;
           });
 
-          // Also check for pending route completion
-          const pendingCompletion = pendingSync.find(p => p.type === 'route_completion' && p.data?.route_id === routeId);
+          // Also check for pending route completion (both types for safety)
+          const pendingCompletion = pendingSync.find(p =>
+            (p.type === 'route_completion' || p.type === 'assembly_route_completion') &&
+            p.data?.route_id === routeId
+          );
           if (pendingCompletion) {
             status = 'completed';
           }
@@ -478,19 +486,20 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
         setRouteStatus('completed');
         if (onUpdated) onUpdated();
       } else {
-        // Offline Finalization
+        // Offline Finalization - use assembly_route_completion type
         await SyncQueue.addItem({
-          type: 'route_completion',
+          type: 'assembly_route_completion',
           data: {
             route_id: routeId,
             local_timestamp: now
           },
         });
 
+        // Persist status offline
+        await OfflineStorage.setItem(`assembly_route_status_${routeId}`, 'completed');
+
         toast.success('Rota finalizada (offline). Será sincronizada quando online.');
         setRouteStatus('completed');
-        // Update local status doesn't persist to DB yet, but state is updated.
-        // We should probably rely on SyncQueue merging in loadRouteItems to keep this state consistent on reload.
       }
 
     } catch (err) {

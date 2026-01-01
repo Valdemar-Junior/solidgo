@@ -163,6 +163,9 @@ export class BackgroundSyncService {
       case 'route_completion':
         await this.syncRouteCompletion(item.data);
         break;
+      case 'assembly_route_completion':
+        await this.syncAssemblyRouteCompletion(item.data);
+        break;
       default:
         console.warn(`Unknown sync item type: ${item.type}`);
     }
@@ -339,6 +342,53 @@ export class BackgroundSyncService {
     }
 
     console.log('[BackgroundSync] Route completed and returns released:', route_id);
+  }
+
+  // Sync assembly route completion (finalização de rota de MONTAGEM)
+  private async syncAssemblyRouteCompletion(data: any): Promise<void> {
+    const { route_id, local_timestamp } = data;
+    if (!route_id) throw new Error('Invalid assembly_route_completion payload');
+
+    console.log('[BackgroundSync] syncAssemblyRouteCompletion:', route_id);
+
+    // 1. Mark assembly route as completed
+    const { error } = await supabase.from('assembly_routes').update({ status: 'completed' }).eq('id', route_id);
+    if (error) {
+      console.error('[BackgroundSync] Error completing assembly route:', error);
+      throw error;
+    }
+
+    // 2. Find returned items (cancelled) and re-insert for new routing
+    const { data: returnedItems } = await supabase
+      .from('assembly_products')
+      .select('*')
+      .eq('assembly_route_id', route_id)
+      .eq('status', 'cancelled');
+
+    if (returnedItems && returnedItems.length > 0) {
+      const newItems = returnedItems.map((item: any) => ({
+        order_id: item.order_id,
+        product_name: item.product_name,
+        product_sku: item.product_sku,
+        customer_name: item.customer_name,
+        customer_phone: item.customer_phone,
+        installation_address: item.installation_address,
+        status: 'pending',
+        observations: item.observations,
+        assembly_route_id: null,
+        was_returned: true
+      }));
+
+      const { error: insertError } = await supabase.from('assembly_products').insert(newItems);
+      if (insertError) {
+        console.error('[BackgroundSync] Error re-inserting returned items:', insertError);
+        // Don't throw, route is already completed
+      } else {
+        console.log('[BackgroundSync] Re-inserted', newItems.length, 'returned items for new routing');
+      }
+    }
+
+    console.log('[BackgroundSync] Assembly route completed successfully:', route_id);
   }
 
   private async syncDeliveryConfirmation(data: any): Promise<void> {
