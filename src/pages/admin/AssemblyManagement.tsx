@@ -1381,7 +1381,7 @@ function AssemblyManagementContent() {
                     const totalProducts = productsInRoute.length;
                     const completed = productsInRoute.filter(p => p.status === 'completed').length;
                     const pending = productsInRoute.filter(p => p.status === 'pending' || p.status === 'assigned' || p.status === 'in_progress').length;
-                    const returned = productsInRoute.filter(p => p.status === 'cancelled' || (p as any).was_returned === true).length;
+                    const returned = productsInRoute.filter(p => p.status === 'cancelled').length;
 
                     const statusColors = {
                       pending: 'bg-yellow-50 text-yellow-700 border-yellow-200',
