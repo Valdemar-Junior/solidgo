@@ -290,6 +290,18 @@ export class BackgroundSyncService {
 
     console.log('[BackgroundSync] syncAssemblyRouteCompletion:', route_id);
 
+    // 0. VERIFICAÇÃO DE SEGURANÇA: Não finalizar se houver itens pendentes (aguardando sync)
+    const { count: pendingCount } = await supabase
+      .from('assembly_products')
+      .select('id', { count: 'exact', head: true })
+      .eq('assembly_route_id', route_id)
+      .eq('status', 'pending');
+
+    if (pendingCount && pendingCount > 0) {
+      console.warn(`[BackgroundSync] Cannot complete route ${route_id}: ${pendingCount} items still pending.`);
+      throw new Error(`Route still has pending items. Waiting for item sync.`);
+    }
+
     // 1. Mark assembly route as completed
     const { error } = await supabase.from('assembly_routes').update({ status: 'completed' }).eq('id', route_id);
     if (error) {
