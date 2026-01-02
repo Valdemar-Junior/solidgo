@@ -290,7 +290,21 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
 
         if (error) throw error;
 
-        // Auto-complete and immediate re-insertion removed - Defer to manual finalization
+        // CORREÇÃO: Atualizar estado local após sucesso no Supabase
+        const updated = assemblyItems.map(it =>
+          ids.includes(it.id)
+            ? {
+              ...it,
+              status: 'cancelled',
+              returned_at: now,
+              observations: currentObs ? `(Retorno: ${reasonValue}) ${currentObs}` : `Retorno: ${reasonValue}`
+            }
+            : it
+        );
+        setAssemblyItems(updated);
+        await OfflineStorage.setItem(`assembly_items_${routeId}`, updated);
+
+        toast.success('Pedido marcado como RETORNADO!');
 
         if (onUpdated) onUpdated();
       } else {
