@@ -109,7 +109,8 @@ export class BackgroundSyncService {
           } catch (error) {
             console.error(`Failed to sync item ${item.id}:`, error);
             await SyncQueue.updateItemStatus(item.id, 'failed', item.attempts + 1);
-            if (item.attempts >= 3) {
+            // Log immediately on first failure to debug issues
+            if (item.attempts >= 0) {
               await this.logSyncError(item, error as Error);
             }
           }
@@ -614,11 +615,16 @@ export class BackgroundSyncService {
   private async logSyncError(item: any, error: Error): Promise<void> {
     try {
       await supabase.from('sync_logs').insert({
-        entity: item.type,
-        entity_id: item.id,
+        table_name: 'assembly_items', // Generic name or item.type
+        record_id: item.data?.item_id || item.id,
         action: 'sync_failed',
-        error: error.message,
-        timestamp: new Date().toISOString(),
+        data: {
+          error: error.message,
+          error_stack: error.stack,
+          item_type: item.type,
+          item_data: item.data
+        },
+        created_at: new Date().toISOString(),
       });
     } catch (logError) {
       console.error('Failed to log sync error:', logError);
