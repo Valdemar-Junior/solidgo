@@ -89,6 +89,31 @@ export class SyncQueue {
     };
 
     try {
+      // CONSOLIDAÇÃO INTELIGENTE:
+      // Se já houver ações pendentes para o mesmo item_id e route_id, removê-las.
+      // A nova ação substitui qualquer estado anterior pendente.
+      const itemId = item.data?.item_id;
+      const routeId = item.data?.route_id;
+
+      if (itemId && routeId) {
+        const keys = await syncQueueStorage.keys();
+        for (const key of keys) {
+          const existing = await syncQueueStorage.getItem(key) as SyncQueueItem;
+          // Verifica se é uma ação de item de montagem (não rota, não delete, etc)
+          if (existing &&
+            existing.status === 'pending' &&
+            existing.data?.item_id === itemId &&
+            String(existing.data?.route_id) === String(routeId) &&
+            ['assembly_confirmation', 'assembly_return', 'assembly_undo'].includes(existing.type) &&
+            ['assembly_confirmation', 'assembly_return', 'assembly_undo'].includes(item.type)
+          ) {
+            // Remove a ação obsoleta
+            await syncQueueStorage.removeItem(key);
+            console.log('[SyncQueue] Consolidating: removed obsolete action', existing.type, 'for item', itemId);
+          }
+        }
+      }
+
       await syncQueueStorage.setItem(id, queueItem);
       return id;
     } catch (error) {
