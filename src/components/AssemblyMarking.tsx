@@ -70,7 +70,7 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
             setSyncStatus('completed');
             setTimeout(() => {
               setSyncStatus('idle');
-            }, 1500);
+            }, 700);
           }
         } catch (e) {
           console.error(e);
