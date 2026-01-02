@@ -205,7 +205,7 @@ export class BackgroundSyncService {
 
     if (!item_id) throw new Error('Invalid assembly_return payload: missing item_id');
 
-    const { error } = await supabase
+    const { error, count } = await supabase
       .from('assembly_products')
       .update({
         status: 'cancelled',
@@ -213,13 +213,20 @@ export class BackgroundSyncService {
         observations: observations || null,
         returned_at: local_timestamp || new Date().toISOString()
       })
-      .eq('id', item_id);
+      .eq('id', item_id)
+      .select('id', { count: 'exact' });
 
     if (error) {
       console.error('[BackgroundSync] Error syncing assembly return:', error);
       throw error;
     }
-    console.log('[BackgroundSync] Assembly return synced successfully:', item_id);
+
+    if (count === 0) {
+      console.error('[BackgroundSync] WARNING: Update returned 0 rows affected for item:', item_id);
+      throw new Error(`Item ${item_id} not found or permission denied (rows: 0)`);
+    }
+
+    console.log('[BackgroundSync] Assembly return synced successfully:', item_id, 'Rows:', count);
 
     // REMOVIDO: Criação de clone aqui causava duplicação
     // Clones são criados na syncAssemblyRouteCompletion ou finalizeRoute
