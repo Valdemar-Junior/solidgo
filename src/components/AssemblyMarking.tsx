@@ -108,10 +108,11 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
 
           // Apply pending actions to data
           data = data.map(item => {
-            // Find pending update for this item
+            // Find pending update for this item - STRICT CHECK
             const itemActions = pendingSync.filter(p =>
               (p.type === 'assembly_confirmation' || p.type === 'assembly_return' || p.type === 'assembly_undo') &&
-              p.data?.item_id === item.id
+              p.data?.item_id === item.id &&
+              String(p.data?.route_id) === String(routeId) // Ensure action belongs to this route
             );
 
             // Apply them in order
