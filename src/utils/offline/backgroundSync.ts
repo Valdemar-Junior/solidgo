@@ -60,9 +60,9 @@ export class BackgroundSyncService {
 
   private syncPromise: Promise<number> | null = null;
 
-  public async forceSync(): Promise<number> {
+  public async forceSync(silent = false): Promise<number> {
     if (!NetworkStatus.isOnline()) {
-      toast.error('Sem conexão com a internet');
+      if (!silent) toast.error('Sem conexão com a internet');
       return 0;
     }
 
@@ -71,11 +71,11 @@ export class BackgroundSyncService {
       return this.syncPromise;
     }
 
-    toast.info('Sincronizando dados...');
-    return this.syncPendingItems();
+    if (!silent) toast.info('Sincronizando dados...');
+    return this.syncPendingItems(silent);
   }
 
-  private async syncPendingItems(): Promise<number> {
+  private async syncPendingItems(silent = false): Promise<number> {
     // Evita múltiplas chamadas
     if (!NetworkStatus.isOnline()) {
       return 0;
@@ -117,7 +117,7 @@ export class BackgroundSyncService {
 
         if (syncedCount > 0) {
           await SyncQueue.removeCompletedItems();
-          toast.success(`${syncedCount} sincronizações concluídas`);
+          if (!silent) toast.success(`${syncedCount} sincronizações concluídas`);
         }
 
         return syncedCount;

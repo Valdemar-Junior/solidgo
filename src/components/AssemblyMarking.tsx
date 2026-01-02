@@ -26,7 +26,7 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
   const [returnReasons, setReturnReasons] = useState<ReturnReason[]>([]);
   const [loading, setLoading] = useState(true);
   const [isOnline, setIsOnline] = useState(NetworkStatus.isOnline());
-  const [isSyncing, setIsSyncing] = useState(false);
+  const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'completed'>('idle');
   const [processingIds, setProcessingIds] = useState<Set<string>>(new Set());
   const [returnReasonByOrder, setReturnReasonByOrder] = useState<Record<string, string>>({});
   const [returnObservationsByOrder, setReturnObservationsByOrder] = useState<Record<string, string>>({});
@@ -49,13 +49,20 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
   useEffect(() => {
     const run = async () => {
       if (isOnline) {
-        setIsSyncing(true);
+        setSyncStatus('syncing');
         try {
-          await backgroundSync.forceSync();
-        } finally {
-          setIsSyncing(false);
+          await backgroundSync.forceSync(true); // Silent sync
+          // Atualizar dados antes de mostrar 'Concluído'
+          await loadRouteItems();
+          setSyncStatus('completed');
+          setTimeout(() => {
+            setSyncStatus('idle');
+          }, 1500);
+        } catch (e) {
+          console.error(e);
+          setSyncStatus('idle');
+          await loadRouteItems();
         }
-        await loadRouteItems();
       } else {
         await loadRouteItems();
       }
@@ -585,12 +592,22 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
   return (
     <div className="space-y-4 relative">
       {/* Overlay de Sincronização */}
-      {isSyncing && (
+      {syncStatus !== 'idle' && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-xl p-6 shadow-2xl flex flex-col items-center">
-            <div className="animate-spin rounded-full h-12 w-12 border-4 border-blue-600 border-t-transparent mb-4"></div>
-            <span className="text-lg font-semibold text-gray-800">Sincronizando...</span>
-            <span className="text-sm text-gray-500 mt-1">Aguarde, enviando dados para o servidor</span>
+          <div className="bg-white rounded-xl p-6 shadow-2xl flex flex-col items-center min-w-[200px]">
+            {syncStatus === 'syncing' ? (
+              <>
+                <div className="animate-spin rounded-full h-12 w-12 border-4 border-blue-600 border-t-transparent mb-4"></div>
+                <span className="text-lg font-semibold text-gray-800">Sincronizando...</span>
+                <span className="text-sm text-gray-500 mt-1">Enviando dados...</span>
+              </>
+            ) : (
+              <>
+                <CheckCircle className="h-12 w-12 text-green-500 mb-4 animate-bounce" />
+                <span className="text-lg font-bold text-gray-800">Sincronizado!</span>
+                <span className="text-sm text-gray-500 mt-1">Tudo atualizado</span>
+              </>
+            )}
           </div>
         </div>
       )}
