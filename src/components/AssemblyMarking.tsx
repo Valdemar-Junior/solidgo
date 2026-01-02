@@ -100,54 +100,55 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
       }
 
       if (data) {
-        // MERGE LOCAL PENDING ACTIONS (Robustness Fix)
-        // This ensures that even if sync hasn't finished or failed, 
-        // the local UI reflects the user's recent actions.
-        try {
-          const pendingSync = await SyncQueue.getPendingItems();
+        // MERGE LOCAL PENDING ACTIONS - APENAS QUANDO OFFLINE
+        // Quando online, o servidor é a fonte da verdade (após sync)
+        // Quando offline, precisamos mostrar o estado local baseado nas ações pendentes
+        if (!isOnline) {
+          try {
+            const pendingSync = await SyncQueue.getPendingItems();
 
-          // Apply pending actions to data
-          data = data.map(item => {
-            // Find pending update for this item - STRICT CHECK
-            const itemActions = pendingSync.filter(p =>
-              (p.type === 'assembly_confirmation' || p.type === 'assembly_return' || p.type === 'assembly_undo') &&
-              p.data?.item_id === item.id &&
-              String(p.data?.route_id) === String(routeId) // Ensure action belongs to this route
-            );
+            // Apply pending actions to data (ONLY OFFLINE)
+            data = data.map(item => {
+              // Find pending update for this item - STRICT CHECK
+              const itemActions = pendingSync.filter(p =>
+                (p.type === 'assembly_confirmation' || p.type === 'assembly_return' || p.type === 'assembly_undo') &&
+                p.data?.item_id === item.id &&
+                String(p.data?.route_id) === String(routeId) // Ensure action belongs to this route
+              );
 
-            // Apply them in order
-            let tempItem = { ...item };
-            for (const action of itemActions) {
-              if (action.type === 'assembly_confirmation') {
-                tempItem.status = 'completed';
-                tempItem.completion_date = action.data.local_timestamp;
-              } else if (action.type === 'assembly_return') {
-                tempItem.status = 'cancelled';
-                tempItem.returned_at = action.data.local_timestamp;
-                // Note: observations merge is harder without robust parsing, but we try standard append
-                if (action.data.observations) {
-                  tempItem.observations = action.data.observations;
+              // Apply them in order
+              let tempItem = { ...item };
+              for (const action of itemActions) {
+                if (action.type === 'assembly_confirmation') {
+                  tempItem.status = 'completed';
+                  tempItem.completion_date = action.data.local_timestamp;
+                } else if (action.type === 'assembly_return') {
+                  tempItem.status = 'cancelled';
+                  tempItem.returned_at = action.data.local_timestamp;
+                  if (action.data.observations) {
+                    tempItem.observations = action.data.observations;
+                  }
+                } else if (action.type === 'assembly_undo') {
+                  tempItem.status = 'pending';
+                  tempItem.completion_date = null;
+                  tempItem.returned_at = null;
                 }
-              } else if (action.type === 'assembly_undo') {
-                tempItem.status = 'pending';
-                tempItem.completion_date = null;
-                tempItem.returned_at = null;
               }
+              return tempItem;
+            });
+
+            // Also check for pending route completion (ONLY OFFLINE)
+            const pendingCompletion = pendingSync.find(p =>
+              (p.type === 'route_completion' || p.type === 'assembly_route_completion') &&
+              p.data?.route_id === routeId
+            );
+            if (pendingCompletion) {
+              status = 'completed';
             }
-            return tempItem;
-          });
 
-          // Also check for pending route completion (both types for safety)
-          const pendingCompletion = pendingSync.find(p =>
-            (p.type === 'route_completion' || p.type === 'assembly_route_completion') &&
-            p.data?.route_id === routeId
-          );
-          if (pendingCompletion) {
-            status = 'completed';
+          } catch (mergeErr) {
+            console.error('Error merging pending items:', mergeErr);
           }
-
-        } catch (mergeErr) {
-          console.error('Error merging pending items:', mergeErr);
         }
 
         setAssemblyItems(data);
