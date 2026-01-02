@@ -223,6 +223,8 @@ export class BackgroundSyncService {
 
     if (count === 0) {
       console.error('[BackgroundSync] WARNING: Update returned 0 rows affected for item:', item_id);
+      // Log extra details to debug
+      console.error('[BackgroundSync] Debug context:', { item_id, route_id, userId: (await supabase.auth.getUser()).data.user?.id });
       throw new Error(`Item ${item_id} not found or permission denied (rows: 0)`);
     }
 

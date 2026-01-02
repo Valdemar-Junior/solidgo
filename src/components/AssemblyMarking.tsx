@@ -26,7 +26,7 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
   const [returnReasons, setReturnReasons] = useState<ReturnReason[]>([]);
   const [loading, setLoading] = useState(true);
   const [isOnline, setIsOnline] = useState(NetworkStatus.isOnline());
-  const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'completed'>('idle');
+  const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'completed' | 'error'>('idle');
   const [processingIds, setProcessingIds] = useState<Set<string>>(new Set());
   const [returnReasonByOrder, setReturnReasonByOrder] = useState<Record<string, string>>({});
   const [returnObservationsByOrder, setReturnObservationsByOrder] = useState<Record<string, string>>({});
@@ -52,15 +52,30 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
         setSyncStatus('syncing');
         try {
           await backgroundSync.forceSync(true); // Silent sync
-          // Atualizar dados antes de mostrar 'Concluído'
+          // Atualizar dados antes de verificar estado
           await loadRouteItems();
-          setSyncStatus('completed');
-          setTimeout(() => {
-            setSyncStatus('idle');
-          }, 1500);
+
+          // VERIFICAR SE O SYNC REALMENTE FUNCIONOU
+          // Se ainda houver itens na fila, significa que falharam
+          const pendingItems = await SyncQueue.getPendingItems();
+          const hasFailures = pendingItems.some(p => String(p.data?.route_id) === String(routeId));
+
+          if (hasFailures) {
+            setSyncStatus('error');
+            // Mantém erro visível por um tempo
+            setTimeout(() => {
+              setSyncStatus('idle');
+            }, 3000);
+          } else {
+            setSyncStatus('completed');
+            setTimeout(() => {
+              setSyncStatus('idle');
+            }, 1500);
+          }
         } catch (e) {
           console.error(e);
-          setSyncStatus('idle');
+          setSyncStatus('error');
+          setTimeout(() => setSyncStatus('idle'), 3000);
           await loadRouteItems();
         }
       } else {
@@ -599,11 +614,18 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
                 <span className="text-lg font-semibold text-gray-800">Sincronizando...</span>
                 <span className="text-sm text-gray-500 mt-1">Enviando dados...</span>
               </>
-            ) : (
+            ) : syncStatus === 'completed' ? (
               <>
                 <CheckCircle className="h-12 w-12 text-green-500 mb-4 animate-bounce" />
                 <span className="text-lg font-bold text-gray-800">Sincronizado!</span>
                 <span className="text-sm text-gray-500 mt-1">Tudo atualizado</span>
+              </>
+            ) : (
+              <>
+                <XCircle className="h-12 w-12 text-red-500 mb-4 animate-pulse" />
+                <span className="text-lg font-bold text-gray-800">Erro no Sync</span>
+                <span className="text-sm text-gray-500 mt-1">Alguns itens não foram enviados.</span>
+                <span className="text-xs text-red-400 mt-1">Ainda visíveis localmente.</span>
               </>
             )}
           </div>
