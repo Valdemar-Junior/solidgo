@@ -453,7 +453,20 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
 
       const now = new Date().toISOString();
 
-      if (isOnline) {
+      // PROTEÇÃO DE INTEGRIDADE: Verificar se há ações pendentes na fila de sync para esta rota
+      // Se houver, DEVEMOS usar o fluxo offline (fila) para garantir a ordem de execução
+      let hasPendingSync = false;
+      try {
+        const pendingSync = await SyncQueue.getPendingItems();
+        hasPendingSync = pendingSync.some(p =>
+          (p.type === 'assembly_confirmation' || p.type === 'assembly_return' || p.type === 'assembly_undo') &&
+          p.data?.route_id === routeId
+        );
+      } catch (e) {
+        console.warn('Failed to check sync queue, assuming clean:', e);
+      }
+
+      if (isOnline && !hasPendingSync) {
         // 1. Mark status completed
         const { error } = await supabase.from('assembly_routes').update({ status: 'completed' }).eq('id', routeId);
         if (error) throw error;
