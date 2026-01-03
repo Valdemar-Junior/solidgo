@@ -253,7 +253,7 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
           .from('orders')
           .update({
             status: 'delivered',
-            delivery_date: confirmation.local_timestamp, // Opcional: registrar data entrega
+            // delivery_date removido pois não existe na tabela orders
             return_flag: false,
             last_return_reason: null,
             last_return_notes: null
