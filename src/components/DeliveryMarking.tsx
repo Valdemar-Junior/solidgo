@@ -246,6 +246,22 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
           })
           .eq('id', order.id);
         if (error) throw error;
+
+        // ATUALIZAÇÃO NO MOMENTO DA ENTREGA (ONLINE)
+        // Garante que o pedido saia da lista de disponíveis imediatamente
+        const { error: orderError } = await supabase
+          .from('orders')
+          .update({
+            status: 'delivered',
+            delivery_date: confirmation.local_timestamp, // Opcional: registrar data entrega
+            return_flag: false,
+            last_return_reason: null,
+            last_return_notes: null
+          })
+          .eq('id', order.order_id);
+
+        if (orderError) console.warn('[DeliveryMarking] Falha ao atualizar status do pedido principal:', orderError);
+
         toast.success('Pedido marcado como entregue!');
         setRouteOrders(prev => prev.map(ro => ro.id === order.id ? { ...ro, status: 'delivered', delivered_at: confirmation.local_timestamp } : ro));
 
@@ -637,6 +653,18 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
               return_flag: true // GARANTIA: Se estava como retornado na rota, tem que ter a flag
             })
             .in('id', returnedIds);
+        }
+
+        // 3. (NOVO) GARANTIA FINAL: Assegurar que todos os ENTREGUES estejam com status 'delivered' na tabela orders
+        // Isso corrige qualquer divergência caso a atualização individual tenha falhado
+        const deliveredIds = routeOrders.filter(r => r.status === 'delivered').map(r => r.order_id);
+        if (deliveredIds.length > 0) {
+          await supabase
+            .from('orders')
+            .update({ status: 'delivered' })
+            .in('id', deliveredIds)
+            // Apenas atualiza se NÃO estiver delivered (opcional, mas o update direto é seguro)
+            .neq('status', 'delivered');
         }
 
         toast.success('Rota finalizada com sucesso!');
