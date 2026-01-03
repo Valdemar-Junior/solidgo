@@ -343,6 +343,7 @@ export class AssemblyReportGenerator {
 
         if (groupedCompleted.length > 0) {
             drawGroupedTable('Itens Montados', groupedCompleted, rgb(0.2, 0.8, 0.4));
+            y -= 30; // Add spacing between tables
         }
 
         if (groupedPending.length > 0) {
