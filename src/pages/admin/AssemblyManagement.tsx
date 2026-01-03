@@ -35,7 +35,8 @@ import {
   Save,
   FilePlus,
   RefreshCw,
-  Wrench
+  Wrench,
+  Loader2
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { DeliverySheetGenerator } from '../../utils/pdf/deliverySheetGenerator';
@@ -169,6 +170,13 @@ function AssemblyManagementContent() {
   const [filterNeighborhood, setFilterNeighborhood] = useState<string>('');
   const [filterDeadline, setFilterDeadline] = useState<'all' | 'within' | 'out'>('all');
   const [showFilters, setShowFilters] = useState(true);
+
+  // PAGINATION & ROUTE FILTERS STATE
+  const [dateFilter, setDateFilter] = useState<'today' | 'yesterday' | 'last7' | 'all'>('today');
+  const [statusFilter, setStatusFilter] = useState<string[]>([]);
+  const [page, setPage] = useState(0);
+  const [hasMoreRoutes, setHasMoreRoutes] = useState(true);
+  const LIMIT = 50;
 
   // Table Config
   const [columnsConf, setColumnsConf] = useState<Array<{ id: string, label: string, visible: boolean }>>([
@@ -372,6 +380,72 @@ function AssemblyManagementContent() {
     return today.getTime() <= prev.getTime() ? 'within' : 'out';
   };
 
+  // --- ROUTE FETCHING ---
+  const fetchAssemblyRoutes = async (resetPage: boolean = false) => {
+    try {
+      const currentPage = resetPage ? 0 : page;
+      const from = currentPage * LIMIT;
+      const to = from + LIMIT - 1;
+
+      console.log(`Fetching assembly routes page ${currentPage} (${from}-${to}) with filter ${dateFilter}`);
+
+      let query = supabase
+        .from('assembly_routes')
+        .select('*', { count: 'exact' })
+        .order('created_at', { ascending: false });
+
+      // Apply Date Filters
+      const now = new Date();
+      const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+
+      if (dateFilter === 'today') {
+        query = query.gte('created_at', todayStart);
+      } else if (dateFilter === 'yesterday') {
+        const yesterday = new Date(now);
+        yesterday.setDate(yesterday.getDate() - 1);
+        const yesterdayStart = new Date(yesterday.getFullYear(), yesterday.getMonth(), yesterday.getDate()).toISOString();
+        query = query.gte('created_at', yesterdayStart).lt('created_at', todayStart);
+      } else if (dateFilter === 'last7') {
+        const last7 = new Date(now);
+        last7.setDate(last7.getDate() - 7);
+        const last7Start = new Date(last7.getFullYear(), last7.getMonth(), last7.getDate()).toISOString();
+        query = query.gte('created_at', last7Start);
+      }
+      // 'all' applies no date filter
+
+      // Apply Status Filters
+      if (statusFilter.length > 0) {
+        query = query.in('status', statusFilter);
+      }
+
+      // Pagination
+      query = query.range(from, to);
+
+      const { data, error, count } = await query;
+
+      if (error) throw error;
+
+      const fetchedRoutes = data || [];
+
+      if (resetPage) {
+        setAssemblyRoutes(fetchedRoutes);
+      } else {
+        setAssemblyRoutes(prev => [...prev, ...fetchedRoutes]);
+      }
+
+      setHasMoreRoutes((data?.length || 0) === LIMIT);
+      if (resetPage) setPage(1); // Next page
+      else setPage(prev => prev + 1);
+
+      return fetchedRoutes;
+
+    } catch (err) {
+      console.error('Error fetching assembly routes:', err);
+      toast.error('Erro ao buscar rotas de montagem');
+      return [];
+    }
+  };
+
   // --- DATA LOADING ---
   const loadData = async (silent: boolean = true) => {
     try {
@@ -379,11 +453,14 @@ function AssemblyManagementContent() {
       isLoadingRef.current = true;
       if (!silent) setLoading(true);
 
-      // Load assembly routes
-      const { data: routesData } = await supabase
-        .from('assembly_routes')
-        .select('*')
-        .order('created_at', { ascending: false });
+      // Load assembly routes (Optimized)
+      let currentRoutes: AssemblyRoute[] = [];
+      if (!silent) {
+        const res = await fetchAssemblyRoutes(true);
+        currentRoutes = res;
+      } else {
+        // Init load handled by effect
+      }
 
       // Load assembly products (split queries for performance)
       const { data: productsPending } = await supabase
@@ -393,14 +470,20 @@ function AssemblyManagementContent() {
           order:order_id!inner (id, order_id_erp, customer_name, phone, address_json, raw_json, data_venda, previsao_entrega, observacoes_publicas, observacoes_internas, status),
           installer:installer_id (id, name)
         `)
-        .eq('status', 'pending')
-        .is('assembly_route_id', null)
-        .eq('order.status', 'delivered') // Apenas pedidos entregues aparecem para montagem
-        .order('created_at', { ascending: false });
+
 
       let productsInRoutes: any[] = [];
       try {
-        const routeIds = Array.from(new Set((routesData || []).map((r: any) => r.id))).filter(Boolean);
+        // Use active routes (either just fetched or current state) to determine which products to load
+        // If silent=true, we rely on existing routes state. 
+        // Note: For background refresh (silent=true), we usually want to refresh displayed data. 
+        // But with pagination, refreshing all pages is hard. 
+        // For now, if silent=true, we might skip refreshing products in routes OR 
+        // we could fetch products for *currently visible* routes. 
+        // Let's use 'assemblyRoutes' state if silent, or 'currentRoutes' if fetched.
+        const routesToCheck = (!silent && currentRoutes.length > 0) ? currentRoutes : assemblyRoutes;
+
+        const routeIds = Array.from(new Set((routesToCheck || []).map((r: any) => r.id))).filter(Boolean);
         if (routeIds.length > 0) {
           const { data: productsR } = await supabase
             .from('assembly_products')
@@ -427,18 +510,23 @@ function AssemblyManagementContent() {
         .eq('active', true);
 
       // Always set state - React handles unmounted components internally
-      console.log('[AssemblyManagement] Setting state - routes:', (routesData || []).length, 'pending:', (productsPending || []).length);
-      setAssemblyRoutes(routesData || []);
+      // Note: setAssemblyRoutes is handled by fetchAssemblyRoutes if !silent
+      console.log('[AssemblyManagement] Setting state - pending products:', (productsPending || []).length);
+
       setAssemblyProducts((productsPending || []) as any);
       setAssemblyPending((productsPending || []) as any);
       setAssemblyInRoutes((productsInRoutes || []) as any);
       setMontadores(montadoresData || []);
       setVehicles(vehiclesData || []);
+
       try {
         const rid = localStorage.getItem('am_selectedRouteId');
         const showPref = localStorage.getItem('am_showRouteModal');
+        // We use routesToCheck again for finding selected route
+        const routesAvailable = (!silent && currentRoutes.length > 0) ? currentRoutes : assemblyRoutes;
+
         if (showPref === '1' && rid && isMountedRef.current) {
-          const found = (routesData || []).find((r: any) => String(r.id) === String(rid));
+          const found = (routesAvailable || []).find((r: any) => String(r.id) === String(rid));
           if (found) {
             setSelectedRoute(found);
             setShowRouteModal(true);
@@ -473,10 +561,18 @@ function AssemblyManagementContent() {
 
   // --- EFFECTS ---
 
+  useEffect(() => {
+    // This effect runs on mount and when filters change
+    fetchAssemblyRoutes(true);
+  }, [dateFilter, statusFilter]);
+
   // Load initial data and set up visibility change listener
   useEffect(() => {
-    // Load data on mount
-    loadData(true);
+    // Load metadata (products, drivers, etc) on mount
+    loadData(true); // Argument true means SILENT load (no global loading spinner if unnecessary), but we might want initial spinner? 
+    // Actually, RouteCreation uses loadData(true) but also calls fetchRoutes(true).
+    // Here we added fetchAssemblyRoutes(true) in the effect above.
+    // So loadData(true) is fine for other data.
 
     // Set up visibility change listener for background refresh (without resetting state)
     const handleVisibilityChange = () => {
@@ -1355,14 +1451,75 @@ function AssemblyManagementContent() {
 
             {/* Routes List Section */}
             <div ref={routesSectionRef} className="space-y-4">
-              <div className="flex items-center justify-between">
-                <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
-                  <Truck className="h-6 w-6 text-gray-700" />
-                  Romaneios de Montagem Ativos
-                </h2>
-                <span className="bg-gray-100 text-gray-600 px-3 py-1 rounded-full text-xs font-bold">
-                  {assemblyRoutes.length}
-                </span>
+              <div className="flex flex-col gap-4">
+                <div className="flex items-center justify-between">
+                  <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
+                    <Truck className="h-6 w-6 text-gray-700" />
+                    Romaneios de Montagem Ativos
+                  </h2>
+                  <span className="bg-gray-100 text-gray-600 px-3 py-1 rounded-full text-xs font-bold">
+                    {assemblyRoutes.length}{hasMoreRoutes ? '+' : ''}
+                  </span>
+                </div>
+
+                {/* --- FILTER BAR --- */}
+                <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
+                  {/* Date Filter */}
+                  <div className="flex items-center gap-2 overflow-x-auto w-full sm:w-auto pb-2 sm:pb-0">
+                    <div className="flex bg-gray-100 p-1 rounded-lg">
+                      <button
+                        onClick={() => setDateFilter('today')}
+                        className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all ${dateFilter === 'today' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                      >
+                        Hoje
+                      </button>
+                      <button
+                        onClick={() => setDateFilter('yesterday')}
+                        className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all ${dateFilter === 'yesterday' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                      >
+                        Ontem
+                      </button>
+                      <button
+                        onClick={() => setDateFilter('last7')}
+                        className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all ${dateFilter === 'last7' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                      >
+                        Últimos 7 dias
+                      </button>
+                      <button
+                        onClick={() => setDateFilter('all')}
+                        className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all ${dateFilter === 'all' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                      >
+                        Todos
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Status Filter */}
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-semibold text-gray-500 uppercase">Status:</span>
+                    <div className="flex items-center gap-1">
+                      {[
+                        { id: 'pending', label: 'Pendente', color: 'bg-yellow-100 text-yellow-700 border-yellow-200' },
+                        { id: 'in_progress', label: 'Em Andamento', color: 'bg-blue-100 text-blue-700 border-blue-200' },
+                        { id: 'completed', label: 'Concluído', color: 'bg-green-100 text-green-700 border-green-200' }
+                      ].map(status => (
+                        <button
+                          key={status.id}
+                          onClick={() => {
+                            if (statusFilter.includes(status.id)) {
+                              setStatusFilter(prev => prev.filter(s => s !== status.id));
+                            } else {
+                              setStatusFilter(prev => [...prev, status.id]);
+                            }
+                          }}
+                          className={`px-3 py-1 rounded-full text-xs font-medium border transition-all ${statusFilter.includes(status.id) ? status.color + ' ring-2 ring-offset-1 ring-gray-200' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'}`}
+                        >
+                          {status.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
