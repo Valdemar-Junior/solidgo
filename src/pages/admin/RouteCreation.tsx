@@ -3504,7 +3504,29 @@ function RouteCreationContent() {
                             const route = selectedRoute;
                             const { data: roForGroup } = await supabase.from('route_orders').select('*, order:orders(*)').eq('route_id', route.id).order('sequence');
                             const route_name = String(route.name || '');
-                            const driver_name = String(route.driver?.user?.name || '');
+
+                            // Lógica para buscar nome da equipe (prioridade) ou manter nome do motorista
+                            const driverUserId = (route.driver as any)?.user_id;
+                            let finalDriverName = String((route.driver as any)?.user?.name || '');
+
+                            if (driverUserId) {
+                              try {
+                                const { data: teamData } = await supabase
+                                  .from('teams_user')
+                                  .select('name')
+                                  .or(`driver_user_id.eq.${driverUserId},helper_user_id.eq.${driverUserId}`)
+                                  .order('created_at', { ascending: false })
+                                  .limit(1)
+                                  .maybeSingle();
+
+                                if (teamData && teamData.name) {
+                                  finalDriverName = teamData.name;
+                                }
+                              } catch (err) {
+                                console.error('Erro ao buscar equipe para rota:', err);
+                              }
+                            }
+
                             const conferente_name = String(route.conferente || '');
                             const status = String(route.status || '');
                             let vehicle_text = '';
@@ -3523,18 +3545,19 @@ function RouteCreationContent() {
                             if (!webhookUrl) {
                               try {
                                 const { data } = await supabase.from('webhook_settings').select('url').eq('key', 'envia_grupo').eq('active', true).single();
-                                webhookUrl = data?.url || 'https://n8n.lojaodosmoveis.shop/webhook-test/envia_grupo';
+                                webhookUrl = data?.url || 'https://n8n.lojaodosmoveis.shop/webhook/envia_grupo';
                               } catch {
-                                webhookUrl = 'https://n8n.lojaodosmoveis.shop/webhook-test/envia_grupo';
+                                webhookUrl = 'https://n8n.lojaodosmoveis.shop/webhook/envia_grupo';
                               }
                             }
-                            const payload = { route_name, driver_name, conferente: conferente_name, documentos, status, vehicle: vehicle_text, observations, tipo_de_romaneio: 'entrega' };
+                            // Payload atualizado com finalDriverName
+                            const payload = { route_name, driver_name: finalDriverName, conferente: conferente_name, documentos, status, vehicle: vehicle_text, observations, tipo_de_romaneio: 'entrega' };
                             try {
                               const resp = await fetch(String(webhookUrl), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
                               if (!resp.ok) {
                                 const text = await resp.text();
                                 if (resp.status === 404 && text.includes('envia_grupo')) {
-                                  toast.error('Webhook de teste não está ativo.');
+                                  toast.error('Webhook não está ativo.');
                                 } else {
                                   toast.error('Falha ao enviar informativo');
                                 }
@@ -3544,7 +3567,7 @@ function RouteCreationContent() {
                             } catch {
                               const fd = new FormData();
                               fd.append('route_name', route_name);
-                              fd.append('driver_name', driver_name);
+                              fd.append('driver_name', finalDriverName);
                               fd.append('conferente', conferente_name);
                               fd.append('status', status);
                               fd.append('vehicle', vehicle_text);
