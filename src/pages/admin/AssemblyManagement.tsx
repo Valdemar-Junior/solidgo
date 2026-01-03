@@ -1957,6 +1957,27 @@ function AssemblyManagementContent() {
                           const m = montadores.find(m => m.id === assemblerId);
                           assemblerName = m?.name || m?.email || '';
                         }
+
+                        // Buscar nome da equipe se houver
+                        let finalName = assemblerName;
+                        if (assemblerId) {
+                          try {
+                            const { data: teamData } = await supabase
+                              .from('teams_user')
+                              .select('name')
+                              .or(`driver_user_id.eq.${assemblerId},helper_user_id.eq.${assemblerId}`)
+                              .order('created_at', { ascending: false })
+                              .limit(1)
+                              .maybeSingle();
+
+                            if (teamData && teamData.name) {
+                              finalName = teamData.name;
+                            }
+                          } catch (err) {
+                            console.error('Erro ao buscar equipe:', err);
+                          }
+                        }
+
                         let vehicle_text = '';
                         const vehicleId = (route as any).vehicle_id;
                         if (vehicleId) {
@@ -1970,18 +1991,19 @@ function AssemblyManagementContent() {
                         if (!webhookUrl) {
                           try {
                             const { data } = await supabase.from('webhook_settings').select('url').eq('key', 'envia_grupo').eq('active', true).single();
-                            webhookUrl = data?.url || 'https://n8n.lojaodosmoveis.shop/webhook-test/envia_grupo';
+                            webhookUrl = data?.url || 'https://n8n.lojaodosmoveis.shop/webhook/envia_grupo';
                           } catch {
-                            webhookUrl = 'https://n8n.lojaodosmoveis.shop/webhook-test/envia_grupo';
+                            webhookUrl = 'https://n8n.lojaodosmoveis.shop/webhook/envia_grupo';
                           }
                         }
-                        const payload = { route_name, driver_name: assemblerName, conferente: assemblerName, documentos, status, vehicle: vehicle_text, observations, tipo_de_romaneio: 'montagem' } as any;
+                        // Envia o nome da equipe (ou do montador se nao tiver equipe) no campo driver_name
+                        const payload = { route_name, driver_name: finalName, conferente: finalName, documentos, status, vehicle: vehicle_text, observations, tipo_de_romaneio: 'montagem' } as any;
                         try {
                           const resp = await fetch(String(webhookUrl), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
                           if (!resp.ok) {
                             const text = await resp.text();
                             if (resp.status === 404 && text.includes('envia_grupo')) {
-                              toast.error('Webhook de teste não está ativo.');
+                              toast.error('Webhook não está ativo.');
                             } else {
                               toast.error('Falha ao enviar informativo');
                             }
@@ -1991,8 +2013,8 @@ function AssemblyManagementContent() {
                         } catch {
                           const fd = new FormData();
                           fd.append('route_name', route_name);
-                          fd.append('driver_name', assemblerName);
-                          fd.append('conferente', assemblerName);
+                          fd.append('driver_name', finalName);
+                          fd.append('conferente', finalName);
                           fd.append('status', status);
                           fd.append('vehicle', vehicle_text);
                           fd.append('observations', observations);
