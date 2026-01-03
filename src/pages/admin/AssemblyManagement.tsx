@@ -1980,8 +1980,8 @@ function AssemblyManagementContent() {
                             webhookUrl = 'https://n8n.lojaodosmoveis.shop/webhook/envia_grupo';
                           }
                         }
-                        // Envia o nome do montador no campo driver_name
-                        const payload = { route_id: route.id, route_name, driver_name: finalName, conferente: finalName, documentos, status, vehicle: vehicle_text, observations, tipo_de_romaneio: 'montagem' } as any;
+                        // Envia o nome do montador no campo driver_name e route_code como route_id
+                        const payload = { route_id: (route as any).route_code, route_name, driver_name: finalName, conferente: finalName, documentos, status, vehicle: vehicle_text, observations, tipo_de_romaneio: 'montagem' } as any;
                         try {
                           const resp = await fetch(String(webhookUrl), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
                           if (!resp.ok) {
@@ -1996,7 +1996,7 @@ function AssemblyManagementContent() {
                           }
                         } catch {
                           const fd = new FormData();
-                          fd.append('route_id', route.id);
+                          fd.append('route_id', (route as any).route_code);
                           fd.append('route_name', route_name);
                           fd.append('driver_name', finalName);
                           fd.append('conferente', finalName);
