@@ -3550,8 +3550,8 @@ function RouteCreationContent() {
                                 webhookUrl = 'https://n8n.lojaodosmoveis.shop/webhook/envia_grupo';
                               }
                             }
-                            // Payload atualizado com finalDriverName
-                            const payload = { route_name, driver_name: finalDriverName, conferente: conferente_name, documentos, status, vehicle: vehicle_text, observations, tipo_de_romaneio: 'entrega' };
+                            // Payload atualizado com finalDriverName e route_id
+                            const payload = { route_id: route.id, route_name, driver_name: finalDriverName, conferente: conferente_name, documentos, status, vehicle: vehicle_text, observations, tipo_de_romaneio: 'entrega' };
                             try {
                               const resp = await fetch(String(webhookUrl), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
                               if (!resp.ok) {
@@ -3566,6 +3566,7 @@ function RouteCreationContent() {
                               }
                             } catch {
                               const fd = new FormData();
+                              fd.append('route_id', route.id);
                               fd.append('route_name', route_name);
                               fd.append('driver_name', finalDriverName);
                               fd.append('conferente', conferente_name);
