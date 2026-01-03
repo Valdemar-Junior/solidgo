@@ -1958,7 +1958,7 @@ function AssemblyManagementContent() {
                           assemblerName = m?.name || m?.email || '';
                         }
 
-                        // Buscar nome da equipe se houver
+                        // Buscar nome da equipe se houver, ou usar nome do montador como fallback
                         let finalName = assemblerName;
                         if (assemblerId) {
                           try {
@@ -1996,7 +1996,7 @@ function AssemblyManagementContent() {
                             webhookUrl = 'https://n8n.lojaodosmoveis.shop/webhook/envia_grupo';
                           }
                         }
-                        // Envia o nome da equipe (ou do montador se nao tiver equipe) no campo driver_name
+                        // Envia o nome da equipe (prioridade) ou do montador no campo driver_name
                         const payload = { route_name, driver_name: finalName, conferente: finalName, documentos, status, vehicle: vehicle_text, observations, tipo_de_romaneio: 'montagem' } as any;
                         try {
                           const resp = await fetch(String(webhookUrl), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
