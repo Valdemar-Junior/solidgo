@@ -1958,25 +1958,9 @@ function AssemblyManagementContent() {
                           assemblerName = m?.name || m?.email || '';
                         }
 
-                        // Buscar nome da equipe se houver, ou usar nome do montador como fallback
-                        let finalName = assemblerName;
-                        if (assemblerId) {
-                          try {
-                            const { data: teamData } = await supabase
-                              .from('teams_user')
-                              .select('name')
-                              .or(`driver_user_id.eq.${assemblerId},helper_user_id.eq.${assemblerId}`)
-                              .order('created_at', { ascending: false })
-                              .limit(1)
-                              .maybeSingle();
-
-                            if (teamData && teamData.name) {
-                              finalName = teamData.name;
-                            }
-                          } catch (err) {
-                            console.error('Erro ao buscar equipe:', err);
-                          }
-                        }
+                        // Na montagem não tem equipe, enviar sempre o nome do montador
+                        // Usar variável 'finalName' para manter consistência com o bloco anterior se necessário, ou usar assemblerName direto
+                        const finalName = assemblerName;
 
                         let vehicle_text = '';
                         const vehicleId = (route as any).vehicle_id;
@@ -1996,7 +1980,7 @@ function AssemblyManagementContent() {
                             webhookUrl = 'https://n8n.lojaodosmoveis.shop/webhook/envia_grupo';
                           }
                         }
-                        // Envia o nome da equipe (prioridade) ou do montador no campo driver_name
+                        // Envia o nome do montador no campo driver_name
                         const payload = { route_name, driver_name: finalName, conferente: finalName, documentos, status, vehicle: vehicle_text, observations, tipo_de_romaneio: 'montagem' } as any;
                         try {
                           const resp = await fetch(String(webhookUrl), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
