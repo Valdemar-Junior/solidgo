@@ -21,12 +21,12 @@ export interface DriverWithUser extends Driver {
   user: User;
 }
 
-export interface Vehicle {
-  id: string;
-  plate: string;
-  model: string;
-  capacity?: number;
-  active?: boolean;
+id: string;
+plate: string;
+model: string;
+capacity ?: number;
+active ?: boolean;
+name ?: string;
 }
 
 export interface Order {
@@ -118,6 +118,10 @@ export interface Route {
   status: 'pending' | 'in_progress' | 'completed';
   created_at: string;
   updated_at: string;
+  team_id?: string;
+  helper_id?: string;
+  conferente_id?: string;
+  route_code?: string;
 }
 
 export interface RouteWithDetails extends Route {

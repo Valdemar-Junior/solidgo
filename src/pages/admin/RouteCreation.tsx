@@ -37,7 +37,11 @@ import {
   Store,
   Ban,
   PackageX,
-  Loader2
+  Loader2,
+  Edit2,
+  Users,
+  UserPlus,
+  Check
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { DeliverySheetGenerator } from '../../utils/pdf/deliverySheetGenerator';
@@ -139,6 +143,15 @@ function RouteCreationContent() {
   const [routesList, setRoutesList] = useState<RouteWithDetails[]>([]);
 
   // Modals
+  // Edit Mode State
+  const [isEditingRoute, setIsEditingRoute] = useState(false);
+  const [editRouteName, setEditRouteName] = useState('');
+  const [editRouteTeam, setEditRouteTeam] = useState('');
+  const [editRouteDriver, setEditRouteDriver] = useState('');
+  const [editRouteHelper, setEditRouteHelper] = useState('');
+  const [editRouteVehicle, setEditRouteVehicle] = useState('');
+  const [editRouteConferente, setEditRouteConferente] = useState('');
+
   const [showRouteModal, setShowRouteModal] = useState(false);
   const [selectedRoute, setSelectedRoute] = useState<RouteWithDetails | null>(null);
   const [showConferenceModal, setShowConferenceModal] = useState(false);
@@ -210,7 +223,72 @@ function RouteCreationContent() {
   const [selectedPickupOrder, setSelectedPickupOrder] = useState<Order | null>(null);
   const [pickupOrderLoading, setPickupOrderLoading] = useState(false);
   const [pickupOrderConferente, setPickupOrderConferente] = useState('');
+
   const [pickupOrderObservations, setPickupOrderObservations] = useState('');
+
+  // --- EDIT ROUTE LOGIC ---
+  useEffect(() => {
+    if (showRouteModal && selectedRoute && !isEditingRoute) {
+      setEditRouteName(selectedRoute.name || '');
+      setEditRouteTeam(selectedRoute.team_id || '');
+      setEditRouteDriver(selectedRoute.driver_id || '');
+      setEditRouteHelper(selectedRoute.helper_id || '');
+      setEditRouteVehicle(selectedRoute.vehicle_id || '');
+      setEditRouteConferente(selectedRoute.conferente_id || '');
+    }
+  }, [showRouteModal, selectedRoute, isEditingRoute]);
+
+  const handleEditTeamChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const tid = e.target.value;
+    setEditRouteTeam(tid);
+    if (tid) {
+      const t = teams.find(x => x.id === tid);
+      if (t) {
+        if (t.driver_user_id) {
+          const driver = drivers.find(d => d.user_id === t.driver_user_id);
+          if (driver) setEditRouteDriver(driver.id);
+        }
+        if (t.helper_user_id) setEditRouteHelper(t.helper_user_id);
+      }
+    } else {
+      setEditRouteHelper('');
+    }
+  };
+
+  const handleUpdateRoute = async () => {
+    if (!selectedRoute) return;
+    if (!editRouteName.trim()) { toast.error('Nome da rota é obrigatório'); return; }
+
+    const updatePromise = (async () => {
+      const { error } = await supabase
+        .from('routes')
+        .update({
+          name: editRouteName,
+          team_id: editRouteTeam || null,
+          driver_id: editRouteDriver || null,
+          helper_id: editRouteHelper || null,
+          vehicle_id: editRouteVehicle || null,
+          conferente_id: editRouteConferente || null
+        })
+        .eq('id', selectedRoute.id);
+      if (error) throw error;
+      await loadData(false);
+
+      const { data: refreshed } = await supabase.from('routes')
+        .select(`*, driver:drivers!driver_id(*, user:users!user_id(*)), vehicle:vehicles!vehicle_id(*), route_orders(*, order:orders!order_id(*))`)
+        .eq('id', selectedRoute.id)
+        .single();
+      if (refreshed) setSelectedRoute(refreshed as any);
+
+      setIsEditingRoute(false);
+    })();
+
+    toast.promise(updatePromise, {
+      pending: 'Salvando alterações...',
+      success: 'Rota atualizada com sucesso!',
+      error: 'Erro ao atualizar rota'
+    });
+  };
 
   // Motorista placeholder para retiradas - não será mostrado na UI
   const PICKUP_PLACEHOLDER_DRIVER_ID = '6bb1d41b-0a88-4468-8902-c42402fc0aeb';
@@ -3332,684 +3410,847 @@ function RouteCreationContent() {
           <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in zoom-in-95 duration-200">
             <div className="bg-white rounded-2xl shadow-2xl w-full max-w-6xl max-h-[90vh] flex flex-col overflow-hidden">
               {/* Re-implementing the header and actions cleanly */}
+              {/* Header */}
               <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
-                <div>
-                  <h2 className="text-xl font-bold text-gray-900">
-                    {selectedRoute.name}
-                    {(selectedRoute as any).route_code && (
-                      <span className="ml-2 px-2 py-0.5 bg-gray-100 text-gray-600 text-sm font-mono rounded">
-                        {(selectedRoute as any).route_code}
-                      </span>
+                <div className="flex-1">
+                  <div className="flex items-center gap-2">
+                    {isEditingRoute ? (
+                      <div className="w-full max-w-md">
+                        <label className="block text-xs font-medium text-gray-500 mb-1">Nome da Rota</label>
+                        <input
+                          type="text"
+                          value={editRouteName}
+                          onChange={(e) => setEditRouteName(e.target.value)}
+                          className="w-full text-lg font-bold border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 px-3 py-1"
+                        />
+                      </div>
+                    ) : (
+                      <h2 className="text-xl font-bold text-gray-900">
+                        {selectedRoute.name}
+                        {(selectedRoute as any).route_code && (
+                          <span className="ml-2 px-2 py-0.5 bg-gray-100 text-gray-600 text-sm font-mono rounded">
+                            {(selectedRoute as any).route_code}
+                          </span>
+                        )}
+                        <span className={`ml-3 text-sm px-2 py-1 rounded-full ${selectedRoute.status === 'completed' ? 'bg-green-100 text-green-700' :
+                          selectedRoute.status === 'in_progress' ? 'bg-blue-100 text-blue-700' :
+                            'bg-yellow-100 text-yellow-700'
+                          }`}>
+                          {selectedRoute.status === 'completed' ? 'Concluída' :
+                            selectedRoute.status === 'in_progress' ? 'Em Rota' : 'Pendente'}
+                        </span>
+                      </h2>
                     )}
-                  </h2>
-                  <p className="text-sm text-gray-500">
-                    {selectedRoute.status === 'pending' ? 'Em Separação' : selectedRoute.status === 'in_progress' ? 'Em Rota' : (String(selectedRoute.name || '').startsWith('RETIRADA') ? 'Retirado' : 'Concluída')}
-                    {String(selectedRoute.name || '').startsWith('RETIRADA')
-                      ? ` • Responsável: ${selectedRoute.conferente || 'Não informado'}`
-                      : ` • ${(selectedRoute.driver as any)?.user?.name || selectedRoute.driver?.name || 'Sem motorista'}`
-                    }
-                  </p>
+                  </div>
+                  {!isEditingRoute && (
+                    <p className="text-sm text-gray-500 mt-1">
+                      {String(selectedRoute.name || '').startsWith('RETIRADA')
+                        ? `Responsável: ${selectedRoute.conferente || 'Não informado'}`
+                        : `Motorista: ${(selectedRoute.driver as any)?.user?.name || selectedRoute.driver?.name || 'Sem motorista'}`
+                      }
+                    </p>
+                  )}
                 </div>
-                <button onClick={() => { setShowRouteModal(false); showRouteModalRef.current = false; localStorage.setItem('rc_showRouteModal', '0'); }} className="p-2 hover:bg-gray-200 rounded-full text-gray-500"><X className="h-6 w-6" /></button>
+                <button onClick={() => { setShowRouteModal(false); setIsEditingRoute(false); showRouteModalRef.current = false; localStorage.setItem('rc_showRouteModal', '0'); }} className="p-2 hover:bg-gray-200 rounded-full text-gray-500"><X className="h-6 w-6" /></button>
               </div>
 
               {/* Toolbar */}
-              <div className="px-6 py-3 border-b border-gray-100 bg-white grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-                {/* Custom Buttons for Pickup Routes vs Standard Routes */}
-                {(() => {
-                  const isPickup = String(selectedRoute.name || '').startsWith('RETIRADA');
+              <div className="px-6 py-3 border-b border-gray-100 bg-white flex flex-col md:flex-row items-center gap-3">
+                {isEditingRoute ? (
+                  <div className="flex gap-2 w-full">
+                    <button
+                      onClick={handleUpdateRoute}
+                      className="flex items-center px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
+                    >
+                      <Check className="h-4 w-4 mr-2" />
+                      Salvar
+                    </button>
+                    <button
+                      onClick={() => {
+                        setIsEditingRoute(false);
+                        // Reset optional, useEffect handles re-init or just re-render
+                      }}
+                      className="flex items-center px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors"
+                    >
+                      <X className="h-4 w-4 mr-2" />
+                      Cancelar
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex flex-wrap gap-2 w-full">
+                    {selectedRoute.status !== 'completed' && (
+                      <button
+                        onClick={() => setIsEditingRoute(true)}
+                        className="flex items-center px-4 py-2 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 border border-blue-200 transition-colors mr-auto"
+                      >
+                        <Edit2 className="h-4 w-4 mr-2" />
+                        Editar
+                      </button>
+                    )}
+                    <div className="flex-1"></div>
 
-                  if (isPickup) {
-                    // --- PICKUP BUTTONS ---
-                    return (
-                      <>
-                        {/* Confirmar Retirada Button */}
-                        <button
-                          onClick={async (e) => {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            if (!selectedRoute) return;
-                            if (selectedRoute.status === 'completed') return; // Already completed
-                            try {
-                              if (confirm('Confirma a retirada destes pedidos? Isso marcará a rota como concluída e os pedidos como entregues.')) {
-                                setSaving(true);
+                    {/* Custom Buttons for Pickup Routes vs Standard Routes */}
+                    {(() => {
+                      const isPickup = String(selectedRoute.name || '').startsWith('RETIRADA');
 
-                                // 1. Update Route Status
-                                const { error: rErr } = await supabase.from('routes').update({ status: 'completed' }).eq('id', selectedRoute.id);
-                                if (rErr) throw rErr;
-
-                                const now = new Date().toISOString();
-
-                                // Update route_orders one by one
-                                const routeOrdersToUpdate = selectedRoute.route_orders || [];
-
-                                for (const ro of routeOrdersToUpdate) {
-                                  await supabase
-                                    .from('route_orders')
-                                    .update({ status: 'delivered', delivered_at: now })
-                                    .eq('id', ro.id);
-                                }
-
-                                // Update orders
-                                const oIds = routeOrdersToUpdate.map((ro: any) => ro.order_id);
-                                if (oIds.length > 0) {
-                                  await supabase.from('orders').update({ status: 'delivered' }).in('id', oIds);
-                                }
-
-                                // 3. Check for assembly products (SAME LOGIC AS DeliveryMarking.tsx)
-                                // This creates assembly_products for orders with has_assembly = 'SIM'
+                      if (isPickup) {
+                        // --- PICKUP BUTTONS ---
+                        return (
+                          <>
+                            {/* Confirmar Retirada Button */}
+                            <button
+                              onClick={async (e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                if (!selectedRoute) return;
+                                if (selectedRoute.status === 'completed') return; // Already completed
                                 try {
-                                  for (const orderId of oIds) {
-                                    // Fetch full order data with items_json
-                                    const { data: orderData, error: orderError } = await supabase
-                                      .from('orders')
-                                      .select('id, items_json, customer_name, phone, address_json, order_id_erp')
-                                      .eq('id', orderId)
-                                      .single();
+                                  if (confirm('Confirma a retirada destes pedidos? Isso marcará a rota como concluída e os pedidos como entregues.')) {
+                                    setSaving(true);
 
-                                    if (orderError || !orderData?.items_json) continue;
+                                    // 1. Update Route Status
+                                    const { error: rErr } = await supabase.from('routes').update({ status: 'completed' }).eq('id', selectedRoute.id);
+                                    if (rErr) throw rErr;
 
-                                    // Find products with assembly
-                                    const produtosComMontagem = (orderData.items_json || []).filter((item: any) =>
-                                      item.has_assembly === 'SIM' || item.has_assembly === 'sim' ||
-                                      item.possui_montagem === true || item.possui_montagem === 'true'
-                                    );
+                                    const now = new Date().toISOString();
 
-                                    if (produtosComMontagem.length === 0) continue;
+                                    // Update route_orders one by one
+                                    const routeOrdersToUpdate = selectedRoute.route_orders || [];
 
-                                    // Check if assembly_products already exist for this order
-                                    const { data: existing } = await supabase
-                                      .from('assembly_products')
-                                      .select('id')
-                                      .eq('order_id', orderData.id);
-
-                                    // Only insert if NO existing records for this order
-                                    if (!existing || existing.length === 0) {
-                                      const assemblyProducts = produtosComMontagem.map((item: any) => ({
-                                        order_id: orderData.id,
-                                        product_name: item.name || item.produto || item.descricao || 'Produto',
-                                        product_sku: item.sku || item.codigo || '',
-                                        customer_name: orderData.customer_name,
-                                        customer_phone: orderData.phone,
-                                        installation_address: orderData.address_json,
-                                        status: 'pending',
-                                        created_at: new Date().toISOString(),
-                                        updated_at: new Date().toISOString()
-                                      }));
-
-                                      const { error: insertError } = await supabase.from('assembly_products').insert(assemblyProducts);
-
-                                      if (!insertError) {
-                                        console.log('[Pickup] Created', assemblyProducts.length, 'assembly products for order', orderData.order_id_erp);
-                                        toast.info(`Pedido ${orderData.order_id_erp} tem ${produtosComMontagem.length} produto(s) com montagem!`);
-                                      }
+                                    for (const ro of routeOrdersToUpdate) {
+                                      await supabase
+                                        .from('route_orders')
+                                        .update({ status: 'delivered', delivered_at: now })
+                                        .eq('id', ro.id);
                                     }
+
+                                    // Update orders
+                                    const oIds = routeOrdersToUpdate.map((ro: any) => ro.order_id);
+                                    if (oIds.length > 0) {
+                                      await supabase.from('orders').update({ status: 'delivered' }).in('id', oIds);
+                                    }
+
+                                    // 3. Check for assembly products (SAME LOGIC AS DeliveryMarking.tsx)
+                                    // This creates assembly_products for orders with has_assembly = 'SIM'
+                                    try {
+                                      for (const orderId of oIds) {
+                                        // Fetch full order data with items_json
+                                        const { data: orderData, error: orderError } = await supabase
+                                          .from('orders')
+                                          .select('id, items_json, customer_name, phone, address_json, order_id_erp')
+                                          .eq('id', orderId)
+                                          .single();
+
+                                        if (orderError || !orderData?.items_json) continue;
+
+                                        // Find products with assembly
+                                        const produtosComMontagem = (orderData.items_json || []).filter((item: any) =>
+                                          item.has_assembly === 'SIM' || item.has_assembly === 'sim' ||
+                                          item.possui_montagem === true || item.possui_montagem === 'true'
+                                        );
+
+                                        if (produtosComMontagem.length === 0) continue;
+
+                                        // Check if assembly_products already exist for this order
+                                        const { data: existing } = await supabase
+                                          .from('assembly_products')
+                                          .select('id')
+                                          .eq('order_id', orderData.id);
+
+                                        // Only insert if NO existing records for this order
+                                        if (!existing || existing.length === 0) {
+                                          const assemblyProducts = produtosComMontagem.map((item: any) => ({
+                                            order_id: orderData.id,
+                                            product_name: item.name || item.produto || item.descricao || 'Produto',
+                                            product_sku: item.sku || item.codigo || '',
+                                            customer_name: orderData.customer_name,
+                                            customer_phone: orderData.phone,
+                                            installation_address: orderData.address_json,
+                                            status: 'pending',
+                                            created_at: new Date().toISOString(),
+                                            updated_at: new Date().toISOString()
+                                          }));
+
+                                          const { error: insertError } = await supabase.from('assembly_products').insert(assemblyProducts);
+
+                                          if (!insertError) {
+                                            console.log('[Pickup] Created', assemblyProducts.length, 'assembly products for order', orderData.order_id_erp);
+                                            toast.info(`Pedido ${orderData.order_id_erp} tem ${produtosComMontagem.length} produto(s) com montagem!`);
+                                          }
+                                        }
+                                      }
+                                    } catch (assemblyError) {
+                                      // Log but don't fail the pickup - assembly is secondary
+                                      console.error('[Pickup] Error creating assembly products:', assemblyError);
+                                    }
+
+                                    // 4. Local State Update (Optimistic)
+                                    const updated = { ...selectedRoute, status: 'completed' };
+                                    updated.route_orders = (updated.route_orders || []).map((ro: any) => ({
+                                      ...ro,
+                                      status: 'delivered',
+                                      delivered_at: now
+                                    }));
+                                    setSelectedRoute(updated as any);
+
+                                    toast.success('Retirada confirmada com sucesso!');
+                                    await loadData(false);
+                                    setShowRouteModal(false);
+                                    if (showRouteModalRef && showRouteModalRef.current) showRouteModalRef.current = false;
                                   }
-                                } catch (assemblyError) {
-                                  // Log but don't fail the pickup - assembly is secondary
-                                  console.error('[Pickup] Error creating assembly products:', assemblyError);
+                                } catch (e) {
+                                  console.error(e);
+                                  toast.error('Erro ao confirmar retirada');
+                                } finally {
+                                  setSaving(false);
                                 }
+                              }}
+                              disabled={selectedRoute.status === 'completed'}
+                              className="flex items-center justify-center px-4 py-2 bg-purple-50 text-purple-700 hover:bg-purple-100 rounded-lg font-medium text-sm transition-colors border border-purple-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                              <CheckCircle2 className="h-4 w-4 mr-2" />
+                              {selectedRoute.status === 'completed' ? 'Retirada Concluída' : 'Confirmar Retirada'}
+                            </button>
+                          </>
+                        );
+                      }
 
-                                // 4. Local State Update (Optimistic)
-                                const updated = { ...selectedRoute, status: 'completed' };
-                                updated.route_orders = (updated.route_orders || []).map((ro: any) => ({
-                                  ...ro,
-                                  status: 'delivered',
-                                  delivered_at: now
-                                }));
-                                setSelectedRoute(updated as any);
+                      // --- STANDARD BUTTONS ---
+                      return (
+                        <>
+                          {/* Add Orders Button */}
+                          {selectedRoute?.status === 'pending' && (
+                            <button
+                              onClick={async () => {
+                                try {
+                                  const route = selectedRoute as any;
+                                  const { data: roData } = await supabase.from('route_orders').select('order_id,sequence,id').eq('route_id', route.id).order('sequence');
+                                  const existingIds = new Set((roData || []).map((r) => String(r.order_id)));
+                                  const toAddIds = Array.from(selectedOrders).filter((id) => !existingIds.has(String(id)));
+                                  if (toAddIds.length === 0) { toast.info('Nenhum novo pedido selecionado'); return; }
+                                  const startSeq = (roData && roData.length > 0) ? Math.max(...(roData || []).map((r) => Number(r.sequence || 0))) + 1 : 1;
+                                  const rows = toAddIds.map((orderId, idx) => ({ route_id: route.id, order_id: orderId, sequence: startSeq + idx, status: 'pending' }));
+                                  const { error: insErr } = await supabase.from('route_orders').insert(rows);
+                                  if (insErr) throw insErr;
+                                  const { error: updErr } = await supabase.from('orders').update({ status: 'assigned' }).in('id', toAddIds);
+                                  if (updErr) throw updErr;
+                                  toast.success('Pedidos adicionados à rota');
 
-                                toast.success('Retirada confirmada com sucesso!');
-                                await loadData(false);
-                                setShowRouteModal(false);
-                                if (showRouteModalRef && showRouteModalRef.current) showRouteModalRef.current = false;
-                              }
-                            } catch (e) {
-                              console.error(e);
-                              toast.error('Erro ao confirmar retirada');
-                            } finally {
-                              setSaving(false);
-                            }
-                          }}
-                          disabled={selectedRoute.status === 'completed'}
-                          className="flex items-center justify-center px-4 py-2 bg-purple-50 text-purple-700 hover:bg-purple-100 rounded-lg font-medium text-sm transition-colors border border-purple-200 disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                          <CheckCircle2 className="h-4 w-4 mr-2" />
-                          {selectedRoute.status === 'completed' ? 'Retirada Concluída' : 'Confirmar Retirada'}
-                        </button>
-                      </>
-                    );
-                  }
+                                  // Recarregar dados e atualizar selectedRoute para refletir os novos pedidos no modal
+                                  await loadData();
 
-                  // --- STANDARD BUTTONS ---
-                  return (
-                    <>
-                      {/* Add Orders Button */}
-                      {selectedRoute?.status === 'pending' && (
-                        <button
-                          onClick={async () => {
-                            try {
-                              const route = selectedRoute as any;
-                              const { data: roData } = await supabase.from('route_orders').select('order_id,sequence,id').eq('route_id', route.id).order('sequence');
-                              const existingIds = new Set((roData || []).map((r) => String(r.order_id)));
-                              const toAddIds = Array.from(selectedOrders).filter((id) => !existingIds.has(String(id)));
-                              if (toAddIds.length === 0) { toast.info('Nenhum novo pedido selecionado'); return; }
-                              const startSeq = (roData && roData.length > 0) ? Math.max(...(roData || []).map((r) => Number(r.sequence || 0))) + 1 : 1;
-                              const rows = toAddIds.map((orderId, idx) => ({ route_id: route.id, order_id: orderId, sequence: startSeq + idx, status: 'pending' }));
-                              const { error: insErr } = await supabase.from('route_orders').insert(rows);
-                              if (insErr) throw insErr;
-                              const { error: updErr } = await supabase.from('orders').update({ status: 'assigned' }).in('id', toAddIds);
-                              if (updErr) throw updErr;
-                              toast.success('Pedidos adicionados à rota');
-
-                              // Recarregar dados e atualizar selectedRoute para refletir os novos pedidos no modal
-                              await loadData();
-
-                              // Buscar a rota atualizada com os novos pedidos
-                              const { data: updatedRouteData } = await supabase
-                                .from('routes')
-                                .select(`
+                                  // Buscar a rota atualizada com os novos pedidos
+                                  const { data: updatedRouteData } = await supabase
+                                    .from('routes')
+                                    .select(`
                                   *,
                                   driver:drivers!driver_id(*, user:users!user_id(*)),
                                   vehicle:vehicles!vehicle_id(*),
                                   route_orders(*, order:orders!order_id(*))
                                 `)
-                                .eq('id', route.id)
-                                .single();
+                                    .eq('id', route.id)
+                                    .single();
 
-                              if (updatedRouteData) {
-                                setSelectedRoute(updatedRouteData as any);
-                              }
+                                  if (updatedRouteData) {
+                                    setSelectedRoute(updatedRouteData as any);
+                                  }
 
-                              // Limpar seleção de pedidos
-                              setSelectedOrders(new Set());
-                            } catch {
-                              toast.error('Falha ao adicionar pedidos');
-                            }
-                          }}
-                          className="flex items-center justify-center px-4 py-2 bg-green-50 text-green-700 hover:bg-green-100 rounded-lg font-medium text-sm transition-colors border border-green-200"
-                        >
-                          <Plus className="h-4 w-4 mr-2" /> Adicionar Pedidos
-                        </button>
-                      )}
-
-                      {/* Start Route Button */}
-                      <button
-                        onClick={async () => {
-                          if (!selectedRoute) return;
-                          try {
-                            if (selectedRoute.status !== 'pending') { toast.error('A rota ja foi iniciada'); return; }
-                            const conf = (selectedRoute).conference;
-                            const cStatus = String(conf?.status || '').toLowerCase();
-                            const ok = conf?.result_ok === true || cStatus === 'completed';
-                            if (requireConference && !ok) { toast.error('Finalize a conferencia para iniciar a rota'); return; }
-                            const { error } = await supabase.from('routes').update({ status: 'in_progress' }).eq('id', selectedRoute.id);
-                            if (error) throw error;
-                            const updated = { ...selectedRoute, status: 'in_progress' };
-                            setSelectedRoute(updated);
-                            toast.success('Rota iniciada');
-                            loadData();
-                          } catch (e) {
-                            toast.error('Falha ao iniciar rota');
-                          }
-                        }}
-                        disabled={
-                          selectedRoute.status !== 'pending' ||
-                          (requireConference && !((selectedRoute)?.conference?.result_ok === true || String((selectedRoute)?.conference?.status || '').toLowerCase() === 'completed'))
-                        }
-                        title={
-                          selectedRoute.status !== 'pending'
-                            ? 'A rota ja foi iniciada'
-                            : ((requireConference && !((selectedRoute)?.conference?.result_ok === true || String((selectedRoute)?.conference?.status || '').toLowerCase() === 'completed')) ? 'Finalize a conferencia para iniciar' : '')
-                        }
-                        className="flex items-center justify-center px-4 py-2 bg-yellow-50 text-yellow-700 hover:bg-yellow-100 rounded-lg font-medium text-sm transition-colors border border-yellow-200 disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        <Clock className="h-4 w-4 mr-2" /> Iniciar Rota
-                      </button>
-
-                      {/* WhatsApp Button (cliente) */}
-                      <button
-                        onClick={async () => {
-                          if (!selectedRoute) return;
-                          setWaSending(true);
-                          try {
-                            const route = selectedRoute;
-                            const { data: roForNotify } = await supabase.from('route_orders').select('*, order:orders(*)').eq('route_id', route.id).order('sequence');
-                            const contatos = (roForNotify || []).map((ro) => {
-                              const o = ro.order || {};
-                              const address = o.address_json || {};
-                              const zip = String(address.zip || o.raw_json?.destinatario_cep || '');
-                              const street = String(address.street || o.raw_json?.destinatario_endereco || '');
-                              const neighborhood = String(address.neighborhood || o.raw_json?.destinatario_bairro || '');
-                              const city = String(address.city || o.raw_json?.destinatario_cidade || '');
-                              const endereco_completo = [zip, street, neighborhood && `- ${neighborhood}`, city].filter(Boolean).join(', ').replace(', -', ' -');
-                              const items = Array.isArray(o.items_json) ? o.items_json : [];
-                              const produtos = items.map((it) => `${String(it.sku || '')} - ${String(it.name || '')}`).join(', ');
-                              return {
-                                lancamento_venda: Number(o.order_id_erp || ro.order_id || 0),
-                                cliente_nome: String(o.customer_name || o.raw_json?.nome_cliente || ''),
-                                cliente_celular: String(o.phone || o.raw_json?.cliente_celular || ''),
-                                endereco_completo,
-                                produtos,
-                              };
-                            });
-                            let webhookUrl = import.meta.env.VITE_WEBHOOK_WHATSAPP_URL;
-                            if (!webhookUrl) {
-                              const { data } = await supabase.from('webhook_settings').select('url').eq('key', 'envia_mensagem').eq('active', true).single();
-                              webhookUrl = data?.url || 'https://n8n.lojaodosmoveis.shop/webhook-test/envia_mensagem';
-                            }
-                            const payload = { contatos, tipo_de_romaneio: 'entrega' };
-                            try {
-                              await fetch(String(webhookUrl), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-                            } catch {
-                              const fd = new FormData();
-                              for (const c of contatos) fd.append('contatos[]', JSON.stringify(c));
-                              await fetch(String(webhookUrl), { method: 'POST', body: fd });
-                            }
-                            toast.success('WhatsApp solicitado');
-                          } catch (e) {
-                            toast.error('Erro ao enviar WhatsApp');
-                          } finally {
-                            setWaSending(false);
-                          }
-                        }}
-                        disabled={waSending || selectedRoute?.status === 'completed'}
-                        className="flex items-center justify-center px-4 py-2 bg-gray-50 text-gray-700 hover:bg-gray-100 rounded-lg font-medium text-sm transition-colors border border-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        <WhatsAppIcon className="h-4 w-4 mr-2" /> {waSending ? 'Enviando...' : 'Enviar cliente'}
-                      </button>
-
-                      {/* Group Button */}
-                      <button
-                        onClick={async () => {
-                          if (!selectedRoute) return;
-                          setGroupSending(true);
-                          try {
-                            const route = selectedRoute;
-                            const { data: roForGroup } = await supabase.from('route_orders').select('*, order:orders(*)').eq('route_id', route.id).order('sequence');
-                            const route_name = String(route.name || '');
-
-                            // Lógica para buscar nome da equipe (prioridade) ou manter nome do motorista
-                            const driverUserId = (route.driver as any)?.user_id;
-                            let finalDriverName = String((route.driver as any)?.user?.name || '');
-
-                            if (driverUserId) {
-                              try {
-                                const { data: teamData } = await supabase
-                                  .from('teams_user')
-                                  .select('name')
-                                  .or(`driver_user_id.eq.${driverUserId},helper_user_id.eq.${driverUserId}`)
-                                  .order('created_at', { ascending: false })
-                                  .limit(1)
-                                  .maybeSingle();
-
-                                if (teamData && teamData.name) {
-                                  finalDriverName = teamData.name;
+                                  // Limpar seleção de pedidos
+                                  setSelectedOrders(new Set());
+                                } catch {
+                                  toast.error('Falha ao adicionar pedidos');
                                 }
-                              } catch (err) {
-                                console.error('Erro ao buscar equipe para rota:', err);
-                              }
-                            }
+                              }}
+                              className="flex items-center justify-center px-4 py-2 bg-green-50 text-green-700 hover:bg-green-100 rounded-lg font-medium text-sm transition-colors border border-green-200"
+                            >
+                              <Plus className="h-4 w-4 mr-2" /> Adicionar Pedidos
+                            </button>
+                          )}
 
-                            const conferente_name = String(route.conferente || '');
-                            const status = String(route.status || '');
-                            let vehicle_text = '';
-                            try {
-                              let v = route.vehicle || null;
-                              if (!v && route.vehicle_id) {
-                                const { data: vData } = await supabase.from('vehicles').select('*').eq('id', route.vehicle_id).single();
-                                v = vData || null;
-                              }
-                              if (v) vehicle_text = `${String(v.model || '')}${v.plate ? ' • ' + String(v.plate) : ''}`;
-                            } catch { }
-                            const observations = String(route.observations || '');
-                            const documentos = (roForGroup || []).map((ro) => String(ro.order?.order_id_erp || ro.order_id || '')).filter(Boolean);
-                            if (documentos.length === 0) { toast.error('Nenhum número de lançamento encontrado'); setGroupSending(false); return; }
-                            let webhookUrl = import.meta.env.VITE_WEBHOOK_ENVIA_GRUPO_URL;
-                            if (!webhookUrl) {
+                          {/* Start Route Button */}
+                          <button
+                            onClick={async () => {
+                              if (!selectedRoute) return;
                               try {
-                                const { data } = await supabase.from('webhook_settings').select('url').eq('key', 'envia_grupo').eq('active', true).single();
-                                webhookUrl = data?.url || 'https://n8n.lojaodosmoveis.shop/webhook/envia_grupo';
-                              } catch {
-                                webhookUrl = 'https://n8n.lojaodosmoveis.shop/webhook/envia_grupo';
+                                if (selectedRoute.status !== 'pending') { toast.error('A rota ja foi iniciada'); return; }
+                                const conf = (selectedRoute).conference;
+                                const cStatus = String(conf?.status || '').toLowerCase();
+                                const ok = conf?.result_ok === true || cStatus === 'completed';
+                                if (requireConference && !ok) { toast.error('Finalize a conferencia para iniciar a rota'); return; }
+                                const { error } = await supabase.from('routes').update({ status: 'in_progress' }).eq('id', selectedRoute.id);
+                                if (error) throw error;
+                                const updated = { ...selectedRoute, status: 'in_progress' };
+                                setSelectedRoute(updated);
+                                toast.success('Rota iniciada');
+                                loadData();
+                              } catch (e) {
+                                toast.error('Falha ao iniciar rota');
                               }
+                            }}
+                            disabled={
+                              selectedRoute.status !== 'pending' ||
+                              (requireConference && !((selectedRoute)?.conference?.result_ok === true || String((selectedRoute)?.conference?.status || '').toLowerCase() === 'completed'))
                             }
-                            // Payload atualizado com finalDriverName e route_id (usando route_code)
-                            const payload = { route_id: (route as any).route_code, route_name, driver_name: finalDriverName, conferente: conferente_name, documentos, status, vehicle: vehicle_text, observations, tipo_de_romaneio: 'entrega' };
-                            try {
-                              const resp = await fetch(String(webhookUrl), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-                              if (!resp.ok) {
-                                const text = await resp.text();
-                                if (resp.status === 404 && text.includes('envia_grupo')) {
-                                  toast.error('Webhook não está ativo.');
-                                } else {
-                                  toast.error('Falha ao enviar informativo');
+                            title={
+                              selectedRoute.status !== 'pending'
+                                ? 'A rota ja foi iniciada'
+                                : ((requireConference && !((selectedRoute)?.conference?.result_ok === true || String((selectedRoute)?.conference?.status || '').toLowerCase() === 'completed')) ? 'Finalize a conferencia para iniciar' : '')
+                            }
+                            className="flex items-center justify-center px-4 py-2 bg-yellow-50 text-yellow-700 hover:bg-yellow-100 rounded-lg font-medium text-sm transition-colors border border-yellow-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            <Clock className="h-4 w-4 mr-2" /> Iniciar Rota
+                          </button>
+
+                          {/* WhatsApp Button (cliente) */}
+                          <button
+                            onClick={async () => {
+                              if (!selectedRoute) return;
+                              setWaSending(true);
+                              try {
+                                const route = selectedRoute;
+                                const { data: roForNotify } = await supabase.from('route_orders').select('*, order:orders(*)').eq('route_id', route.id).order('sequence');
+                                const contatos = (roForNotify || []).map((ro) => {
+                                  const o = ro.order || {};
+                                  const address = o.address_json || {};
+                                  const zip = String(address.zip || o.raw_json?.destinatario_cep || '');
+                                  const street = String(address.street || o.raw_json?.destinatario_endereco || '');
+                                  const neighborhood = String(address.neighborhood || o.raw_json?.destinatario_bairro || '');
+                                  const city = String(address.city || o.raw_json?.destinatario_cidade || '');
+                                  const endereco_completo = [zip, street, neighborhood && `- ${neighborhood}`, city].filter(Boolean).join(', ').replace(', -', ' -');
+                                  const items = Array.isArray(o.items_json) ? o.items_json : [];
+                                  const produtos = items.map((it) => `${String(it.sku || '')} - ${String(it.name || '')}`).join(', ');
+                                  return {
+                                    lancamento_venda: Number(o.order_id_erp || ro.order_id || 0),
+                                    cliente_nome: String(o.customer_name || o.raw_json?.nome_cliente || ''),
+                                    cliente_celular: String(o.phone || o.raw_json?.cliente_celular || ''),
+                                    endereco_completo,
+                                    produtos,
+                                  };
+                                });
+                                let webhookUrl = import.meta.env.VITE_WEBHOOK_WHATSAPP_URL;
+                                if (!webhookUrl) {
+                                  const { data } = await supabase.from('webhook_settings').select('url').eq('key', 'envia_mensagem').eq('active', true).single();
+                                  webhookUrl = data?.url || 'https://n8n.lojaodosmoveis.shop/webhook-test/envia_mensagem';
                                 }
+                                const payload = { contatos, tipo_de_romaneio: 'entrega' };
+                                try {
+                                  await fetch(String(webhookUrl), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+                                } catch {
+                                  const fd = new FormData();
+                                  for (const c of contatos) fd.append('contatos[]', JSON.stringify(c));
+                                  await fetch(String(webhookUrl), { method: 'POST', body: fd });
+                                }
+                                toast.success('WhatsApp solicitado');
+                              } catch (e) {
+                                toast.error('Erro ao enviar WhatsApp');
+                              } finally {
+                                setWaSending(false);
+                              }
+                            }}
+                            disabled={waSending || selectedRoute?.status === 'completed'}
+                            className="flex items-center justify-center px-4 py-2 bg-gray-50 text-gray-700 hover:bg-gray-100 rounded-lg font-medium text-sm transition-colors border border-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            <WhatsAppIcon className="h-4 w-4 mr-2" /> {waSending ? 'Enviando...' : 'Enviar cliente'}
+                          </button>
+
+                          {/* Group Button */}
+                          <button
+                            onClick={async () => {
+                              if (!selectedRoute) return;
+                              setGroupSending(true);
+                              try {
+                                const route = selectedRoute;
+                                const { data: roForGroup } = await supabase.from('route_orders').select('*, order:orders(*)').eq('route_id', route.id).order('sequence');
+                                const route_name = String(route.name || '');
+
+                                // Lógica para buscar nome da equipe (prioridade) ou manter nome do motorista
+                                const driverUserId = (route.driver as any)?.user_id;
+                                let finalDriverName = String((route.driver as any)?.user?.name || '');
+
+                                if (driverUserId) {
+                                  try {
+                                    const { data: teamData } = await supabase
+                                      .from('teams_user')
+                                      .select('name')
+                                      .or(`driver_user_id.eq.${driverUserId},helper_user_id.eq.${driverUserId}`)
+                                      .order('created_at', { ascending: false })
+                                      .limit(1)
+                                      .maybeSingle();
+
+                                    if (teamData && teamData.name) {
+                                      finalDriverName = teamData.name;
+                                    }
+                                  } catch (err) {
+                                    console.error('Erro ao buscar equipe para rota:', err);
+                                  }
+                                }
+
+                                const conferente_name = String(route.conferente || '');
+                                const status = String(route.status || '');
+                                let vehicle_text = '';
+                                try {
+                                  let v = route.vehicle || null;
+                                  if (!v && route.vehicle_id) {
+                                    const { data: vData } = await supabase.from('vehicles').select('*').eq('id', route.vehicle_id).single();
+                                    v = vData || null;
+                                  }
+                                  if (v) vehicle_text = `${String(v.model || '')}${v.plate ? ' • ' + String(v.plate) : ''}`;
+                                } catch { }
+                                const observations = String(route.observations || '');
+                                const documentos = (roForGroup || []).map((ro) => String(ro.order?.order_id_erp || ro.order_id || '')).filter(Boolean);
+                                if (documentos.length === 0) { toast.error('Nenhum número de lançamento encontrado'); setGroupSending(false); return; }
+                                let webhookUrl = import.meta.env.VITE_WEBHOOK_ENVIA_GRUPO_URL;
+                                if (!webhookUrl) {
+                                  try {
+                                    const { data } = await supabase.from('webhook_settings').select('url').eq('key', 'envia_grupo').eq('active', true).single();
+                                    webhookUrl = data?.url || 'https://n8n.lojaodosmoveis.shop/webhook/envia_grupo';
+                                  } catch {
+                                    webhookUrl = 'https://n8n.lojaodosmoveis.shop/webhook/envia_grupo';
+                                  }
+                                }
+                                // Payload atualizado com finalDriverName e route_id (usando route_code)
+                                const payload = { route_id: (route as any).route_code, route_name, driver_name: finalDriverName, conferente: conferente_name, documentos, status, vehicle: vehicle_text, observations, tipo_de_romaneio: 'entrega' };
+                                try {
+                                  const resp = await fetch(String(webhookUrl), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+                                  if (!resp.ok) {
+                                    const text = await resp.text();
+                                    if (resp.status === 404 && text.includes('envia_grupo')) {
+                                      toast.error('Webhook não está ativo.');
+                                    } else {
+                                      toast.error('Falha ao enviar informativo');
+                                    }
+                                    setGroupSending(false);
+                                    return;
+                                  }
+                                } catch {
+                                  const fd = new FormData();
+                                  fd.append('route_id', (route as any).route_code);
+                                  fd.append('route_name', route_name);
+                                  fd.append('driver_name', finalDriverName);
+                                  fd.append('conferente', conferente_name);
+                                  fd.append('status', status);
+                                  fd.append('vehicle', vehicle_text);
+                                  fd.append('observations', observations);
+                                  for (const d of documentos) fd.append('documentos[]', d);
+                                  await fetch(String(webhookUrl), { method: 'POST', body: fd });
+                                }
+                                toast.success('Rota enviada ao grupo');
+                              } catch (e) {
+                                toast.error('Erro ao enviar rota em grupo');
+                              } finally {
                                 setGroupSending(false);
-                                return;
                               }
-                            } catch {
-                              const fd = new FormData();
-                              fd.append('route_id', (route as any).route_code);
-                              fd.append('route_name', route_name);
-                              fd.append('driver_name', finalDriverName);
-                              fd.append('conferente', conferente_name);
-                              fd.append('status', status);
-                              fd.append('vehicle', vehicle_text);
-                              fd.append('observations', observations);
-                              for (const d of documentos) fd.append('documentos[]', d);
-                              await fetch(String(webhookUrl), { method: 'POST', body: fd });
+                            }}
+                            disabled={groupSending || selectedRoute?.status === 'completed'}
+                            className="flex items-center justify-center px-4 py-2 bg-gray-50 text-gray-700 hover:bg-gray-100 rounded-lg font-medium text-sm transition-colors border border-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            <WhatsAppIcon className="h-4 w-4 mr-2" /> {groupSending ? 'Enviando...' : 'Enviar grupo'}
+                          </button>
+                        </>
+                      );
+                    })()}
+
+                    {/* PDF Romaneio Button */}
+                    <button
+                      onClick={async () => {
+                        try {
+                          const route = selectedRoute as any;
+                          const { data: roData, error: roErr } = await supabase.from('route_orders').select('*, order:orders(*)').eq('route_id', route.id).order('sequence');
+                          if (roErr) throw roErr;
+                          const routeOrders = (roData || []).map((ro: any) => ({
+                            id: ro.id, route_id: ro.route_id, order_id: ro.order_id, sequence: ro.sequence, status: ro.status, created_at: ro.created_at, updated_at: ro.updated_at,
+                          }));
+                          const orders = (roData || []).map((ro: any) => {
+                            const o = ro.order || {};
+                            const address = o.address_json || {};
+                            const itemsRaw = Array.isArray(o.items_json) ? o.items_json : [];
+                            const prodLoc = o.raw_json?.produtos_locais || [];
+                            const norm = (s: any) => String(s ?? '').toLowerCase().trim();
+                            const items = itemsRaw.map((it: any, idx: number) => {
+                              if (it && !it.location) {
+                                let loc = '';
+                                if (Array.isArray(prodLoc) && prodLoc.length > 0) {
+                                  const byCode = prodLoc.find((p: any) => norm(p?.codigo_produto) === norm(it?.sku));
+                                  const byName = prodLoc.find((p: any) => norm(p?.nome_produto) === norm(it?.name));
+                                  if (byCode?.local_estocagem) loc = String(byCode.local_estocagem);
+                                  else if (byName?.local_estocagem) loc = String(byName.local_estocagem);
+                                  else if (prodLoc[idx]?.local_estocagem) loc = String(prodLoc[idx].local_estocagem);
+                                  else if (prodLoc[0]?.local_estocagem) loc = String(prodLoc[0].local_estocagem);
+                                }
+                                return { ...it, location: loc };
+                              }
+                              return it;
+                            });
+                            return {
+                              id: o.id || ro.order_id,
+                              order_id_erp: String(o.order_id_erp || ro.order_id || ''),
+                              customer_name: String(o.customer_name || (o.raw_json?.nome_cliente ?? '')),
+                              phone: String(o.phone || (o.raw_json?.cliente_celular ?? '')),
+                              address_json: {
+                                street: String(address.street || o.raw_json?.destinatario_endereco || ''),
+                                neighborhood: String(address.neighborhood || o.raw_json?.destinatario_bairro || ''),
+                                city: String(address.city || o.raw_json?.destinatario_cidade || ''),
+                                state: String(address.state || ''),
+                                zip: String(address.zip || o.raw_json?.destinatario_cep || ''),
+                                complement: address.complement || o.raw_json?.destinatario_complemento || '',
+                              },
+                              items_json: items,
+                              raw_json: o.raw_json || null,
+                              total: Number(o.total || 0),
+                              status: o.status || 'imported',
+                              observations: o.observations || '',
+                              created_at: o.created_at || new Date().toISOString(),
+                              updated_at: o.updated_at || new Date().toISOString(),
+                            } as any;
+                          });
+                          let driverObj = route.driver;
+                          if (!driverObj) {
+                            const { data: dData } = await supabase.from('drivers').select('*, user:users!user_id(*)').eq('id', route.driver_id).single();
+                            driverObj = dData || null;
+                          }
+                          let vehicleObj = route.vehicle;
+                          if (!vehicleObj && route.vehicle_id) {
+                            const { data: vData } = await supabase.from('vehicles').select('*').eq('id', route.vehicle_id).single();
+                            vehicleObj = vData || null;
+                          }
+                          // Resolve team and helper names
+                          let teamName = '';
+                          let helperName = '';
+
+                          if (route.team_id) {
+                            const t = teams.find((x: any) => String(x.id) === String(route.team_id));
+                            if (t) teamName = t.name;
+                            else {
+                              const { data: tData } = await supabase.from('teams_user').select('name').eq('id', route.team_id).single();
+                              if (tData) teamName = tData.name;
                             }
-                            toast.success('Rota enviada ao grupo');
-                          } catch (e) {
-                            toast.error('Erro ao enviar rota em grupo');
-                          } finally {
-                            setGroupSending(false);
                           }
-                        }}
-                        disabled={groupSending || selectedRoute?.status === 'completed'}
-                        className="flex items-center justify-center px-4 py-2 bg-gray-50 text-gray-700 hover:bg-gray-100 rounded-lg font-medium text-sm transition-colors border border-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        <WhatsAppIcon className="h-4 w-4 mr-2" /> {groupSending ? 'Enviando...' : 'Enviar grupo'}
-                      </button>
-                    </>
-                  );
-                })()}
 
-                {/* PDF Romaneio Button */}
-                <button
-                  onClick={async () => {
-                    try {
-                      const route = selectedRoute as any;
-                      const { data: roData, error: roErr } = await supabase.from('route_orders').select('*, order:orders(*)').eq('route_id', route.id).order('sequence');
-                      if (roErr) throw roErr;
-                      const routeOrders = (roData || []).map((ro: any) => ({
-                        id: ro.id, route_id: ro.route_id, order_id: ro.order_id, sequence: ro.sequence, status: ro.status, created_at: ro.created_at, updated_at: ro.updated_at,
-                      }));
-                      const orders = (roData || []).map((ro: any) => {
-                        const o = ro.order || {};
-                        const address = o.address_json || {};
-                        const itemsRaw = Array.isArray(o.items_json) ? o.items_json : [];
-                        const prodLoc = o.raw_json?.produtos_locais || [];
-                        const norm = (s: any) => String(s ?? '').toLowerCase().trim();
-                        const items = itemsRaw.map((it: any, idx: number) => {
-                          if (it && !it.location) {
-                            let loc = '';
-                            if (Array.isArray(prodLoc) && prodLoc.length > 0) {
-                              const byCode = prodLoc.find((p: any) => norm(p?.codigo_produto) === norm(it?.sku));
-                              const byName = prodLoc.find((p: any) => norm(p?.nome_produto) === norm(it?.name));
-                              if (byCode?.local_estocagem) loc = String(byCode.local_estocagem);
-                              else if (byName?.local_estocagem) loc = String(byName.local_estocagem);
-                              else if (prodLoc[idx]?.local_estocagem) loc = String(prodLoc[idx].local_estocagem);
-                              else if (prodLoc[0]?.local_estocagem) loc = String(prodLoc[0].local_estocagem);
+                          if (route.helper_id) {
+                            const h = helpers.find((x: any) => String(x.id) === String(route.helper_id));
+                            if (h) helperName = h.name;
+                            else {
+                              const { data: hData } = await supabase.from('users').select('name').eq('id', route.helper_id).single();
+                              if (hData) helperName = hData.name;
                             }
-                            return { ...it, location: loc };
                           }
-                          return it;
-                        });
-                        return {
-                          id: o.id || ro.order_id,
-                          order_id_erp: String(o.order_id_erp || ro.order_id || ''),
-                          customer_name: String(o.customer_name || (o.raw_json?.nome_cliente ?? '')),
-                          phone: String(o.phone || (o.raw_json?.cliente_celular ?? '')),
-                          address_json: {
-                            street: String(address.street || o.raw_json?.destinatario_endereco || ''),
-                            neighborhood: String(address.neighborhood || o.raw_json?.destinatario_bairro || ''),
-                            city: String(address.city || o.raw_json?.destinatario_cidade || ''),
-                            state: String(address.state || ''),
-                            zip: String(address.zip || o.raw_json?.destinatario_cep || ''),
-                            complement: address.complement || o.raw_json?.destinatario_complemento || '',
-                          },
-                          items_json: items,
-                          raw_json: o.raw_json || null,
-                          total: Number(o.total || 0),
-                          status: o.status || 'imported',
-                          observations: o.observations || '',
-                          created_at: o.created_at || new Date().toISOString(),
-                          updated_at: o.updated_at || new Date().toISOString(),
-                        } as any;
-                      });
-                      let driverObj = route.driver;
-                      if (!driverObj) {
-                        const { data: dData } = await supabase.from('drivers').select('*, user:users!user_id(*)').eq('id', route.driver_id).single();
-                        driverObj = dData || null;
-                      }
-                      let vehicleObj = route.vehicle;
-                      if (!vehicleObj && route.vehicle_id) {
-                        const { data: vData } = await supabase.from('vehicles').select('*').eq('id', route.vehicle_id).single();
-                        vehicleObj = vData || null;
-                      }
-                      // Resolve team and helper names
-                      let teamName = '';
-                      let helperName = '';
 
-                      if (route.team_id) {
-                        const t = teams.find((x: any) => String(x.id) === String(route.team_id));
-                        if (t) teamName = t.name;
-                        else {
-                          const { data: tData } = await supabase.from('teams_user').select('name').eq('id', route.team_id).single();
-                          if (tData) teamName = tData.name;
+                          const data = {
+                            route: { id: route.id, name: route.name, route_code: (route as any).route_code, driver_id: route.driver_id, vehicle_id: route.vehicle_id, conferente: route.conferente, observations: route.observations, status: route.status, created_at: route.created_at, updated_at: route.updated_at, },
+                            routeOrders,
+                            driver: driverObj || { id: '', user_id: '', cpf: '', active: true, user: { id: '', email: '', name: '', role: 'driver', created_at: '' } },
+                            vehicle: vehicleObj || undefined,
+                            orders,
+                            generatedAt: new Date().toISOString(),
+                            teamName,
+                            helperName,
+                          };
+                          const pdfBytes = await DeliverySheetGenerator.generateDeliverySheet(data);
+                          DeliverySheetGenerator.openPDFInNewTab(pdfBytes);
+                        } catch (e: any) {
+                          toast.error('Erro ao gerar romaneio em PDF');
                         }
-                      }
+                      }}
+                      className="flex items-center justify-center px-4 py-2 bg-blue-50 text-blue-700 hover:bg-blue-100 rounded-lg font-medium text-sm transition-colors border border-blue-200"
+                    >
+                      <FileText className="h-4 w-4 mr-2" /> Romaneio
+                    </button>
 
-                      if (route.helper_id) {
-                        const h = helpers.find((x: any) => String(x.id) === String(route.helper_id));
-                        if (h) helperName = h.name;
-                        else {
-                          const { data: hData } = await supabase.from('users').select('name').eq('id', route.helper_id).single();
-                          if (hData) helperName = hData.name;
-                        }
-                      }
+                    {/* DANFE Button */}
+                    <button
+                      onClick={async (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        if (!selectedRoute) return;
+                        if (nfLoading) return; // Prevent double-clicks
 
-                      const data = {
-                        route: { id: route.id, name: route.name, route_code: (route as any).route_code, driver_id: route.driver_id, vehicle_id: route.vehicle_id, conferente: route.conferente, observations: route.observations, status: route.status, created_at: route.created_at, updated_at: route.updated_at, },
-                        routeOrders,
-                        driver: driverObj || { id: '', user_id: '', cpf: '', active: true, user: { id: '', email: '', name: '', role: 'driver', created_at: '' } },
-                        vehicle: vehicleObj || undefined,
-                        orders,
-                        generatedAt: new Date().toISOString(),
-                        teamName,
-                        helperName,
-                      };
-                      const pdfBytes = await DeliverySheetGenerator.generateDeliverySheet(data);
-                      DeliverySheetGenerator.openPDFInNewTab(pdfBytes);
-                    } catch (e: any) {
-                      toast.error('Erro ao gerar romaneio em PDF');
-                    }
-                  }}
-                  className="flex items-center justify-center px-4 py-2 bg-blue-50 text-blue-700 hover:bg-blue-100 rounded-lg font-medium text-sm transition-colors border border-blue-200"
-                >
-                  <FileText className="h-4 w-4 mr-2" /> Romaneio
-                </button>
+                        // Capture route ID at the start to avoid stale closure issues
+                        const routeId = selectedRoute.id;
 
-                {/* DANFE Button */}
-                <button
-                  onClick={async (e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    if (!selectedRoute) return;
-                    if (nfLoading) return; // Prevent double-clicks
+                        setNfLoading(true);
+                        try {
+                          const { data: roData, error: roErr } = await supabase.from('route_orders').select('*, order:orders(*)').eq('route_id', routeId).order('sequence');
+                          if (roErr) throw roErr;
 
-                    // Capture route ID at the start to avoid stale closure issues
-                    const routeId = selectedRoute.id;
+                          // Verificar se é rota de coleta (usa DANFE de devolução)
+                          const isPickupRoute = String(selectedRoute.name || '').startsWith('COLETA-');
 
-                    setNfLoading(true);
-                    try {
-                      const { data: roData, error: roErr } = await supabase.from('route_orders').select('*, order:orders(*)').eq('route_id', routeId).order('sequence');
-                      if (roErr) throw roErr;
+                          // Para coletas, usar return_danfe_base64; para entregas, usar danfe_base64
+                          const getDanfe = (order: any) => isPickupRoute ? order?.return_danfe_base64 : order?.danfe_base64;
+                          const getXml = (order: any) => isPickupRoute ? order?.return_nfe_xml : (order?.xml_documento || '');
 
-                      // Verificar se é rota de coleta (usa DANFE de devolução)
-                      const isPickupRoute = String(selectedRoute.name || '').startsWith('COLETA-');
-
-                      // Para coletas, usar return_danfe_base64; para entregas, usar danfe_base64
-                      const getDanfe = (order: any) => isPickupRoute ? order?.return_danfe_base64 : order?.danfe_base64;
-                      const getXml = (order: any) => isPickupRoute ? order?.return_nfe_xml : (order?.xml_documento || '');
-
-                      const allHaveDanfe = (roData || []).every((ro: any) => !!getDanfe(ro.order));
-                      if (allHaveDanfe) {
-                        const base64Existing = (roData || []).map((ro: any) => String(getDanfe(ro.order))).filter((b: string) => b && b.startsWith('JVBER'));
-                        const merged1 = await PDFDocument.create();
-                        for (const b64 of base64Existing) {
-                          const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
-                          const src = await PDFDocument.load(bytes);
-                          const pages = await merged1.copyPages(src, src.getPageIndices());
-                          pages.forEach((p) => merged1.addPage(p));
-                        }
-                        const result = await merged1.save();
-                        DeliverySheetGenerator.openPDFInNewTab(result);
-                        setNfLoading(false);
-                        return;
-                      }
-                      const missing = (roData || []).filter((ro: any) => !getDanfe(ro.order));
-                      const docs = missing.map((ro: any) => {
-                        let xmlText = getXml(ro.order);
-                        if (!xmlText && !isPickupRoute) {
-                          // Fallback para entregas normais
-                          if (ro.order?.raw_json?.xmls_documentos || ro.order?.raw_json?.xmls) {
-                            const arr = ro.order.raw_json.xmls_documentos || ro.order.raw_json.xmls || [];
-                            const first = Array.isArray(arr) ? arr[0] : null;
-                            xmlText = first ? (typeof first === 'string' ? first : (first?.xml || '')) : '';
+                          const allHaveDanfe = (roData || []).every((ro: any) => !!getDanfe(ro.order));
+                          if (allHaveDanfe) {
+                            const base64Existing = (roData || []).map((ro: any) => String(getDanfe(ro.order))).filter((b: string) => b && b.startsWith('JVBER'));
+                            const merged1 = await PDFDocument.create();
+                            for (const b64 of base64Existing) {
+                              const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+                              const src = await PDFDocument.load(bytes);
+                              const pages = await merged1.copyPages(src, src.getPageIndices());
+                              pages.forEach((p) => merged1.addPage(p));
+                            }
+                            const result = await merged1.save();
+                            DeliverySheetGenerator.openPDFInNewTab(result);
+                            setNfLoading(false);
+                            return;
                           }
-                        }
-                        return { order_id: ro.order_id, numero: String(ro.order?.order_id_erp || ro.order_id || ''), xml: xmlText };
-                      }).filter((d: any) => d.xml && d.xml.includes('<'));
-                      if (docs.length === 0) { toast.error('Nenhum XML encontrado nos pedidos faltantes'); setNfLoading(false); return; }
-                      let nfWebhook = 'https://n8n.lojaodosmoveis.shop/webhook-test/gera_nf';
-                      try {
-                        const { data: s } = await supabase.from('webhook_settings').select('url').eq('key', 'gera_nf').eq('active', true).single();
-                        if (s?.url) nfWebhook = s.url;
-                      } catch { }
-                      const resp = await fetch(nfWebhook, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ route_id: routeId, documentos: docs, count: docs.length }) });
-                      const text = await resp.text();
-                      let payload: any = null; try { payload = JSON.parse(text); } catch { payload = { error: text }; }
-                      if (!resp.ok) { toast.error('Erro ao gerar notas fiscais'); setNfLoading(false); return; }
-                      const base64List: string[] = [];
-                      const mapByOrderId = new Map<string, string>();
-                      const pushData = (val: any) => { if (typeof val === 'string' && val.startsWith('JVBER')) base64List.push(val); };
-                      if (payload?.pdf) pushData(payload.pdf);
-                      if (payload?.data) pushData(payload.data);
-                      if (Array.isArray(payload?.pdfs)) payload.pdfs.forEach((b: any) => pushData(b));
-                      if (Array.isArray(payload)) payload.forEach((d: any) => { if (d?.data?.startsWith('JVBER')) pushData(d.data); if (d?.order_id && d?.data?.startsWith('JVBER')) mapByOrderId.set(String(d.order_id), d.data); });
-                      if (Array.isArray(payload?.documentos)) payload.documentos.forEach((d: any) => { if (d?.data?.startsWith('JVBER')) pushData(d.data); if (d?.order_id) mapByOrderId.set(String(d.order_id), d.data); });
-                      if (Array.isArray(payload?.arquivos)) payload.arquivos.forEach((d: any) => { if (d?.data?.startsWith('JVBER')) pushData(d.data); if (d?.order_id) mapByOrderId.set(String(d.order_id), d.data); });
-                      if (base64List.length === 0) { toast.error('Resposta não contém PDFs em base64'); setNfLoading(false); return; }
-                      try {
-                        // Salvar DANFE no campo correto baseado no tipo de rota
-                        const danfeField = isPickupRoute ? 'return_danfe_base64' : 'danfe_base64';
-                        if (mapByOrderId.size > 0) {
-                          for (const [orderId, b64] of mapByOrderId.entries()) {
-                            const updateData: any = { [danfeField]: b64 };
-                            if (!isPickupRoute) updateData.danfe_gerada_em = new Date().toISOString();
-                            await supabase.from('orders').update(updateData).eq('id', orderId);
+                          const missing = (roData || []).filter((ro: any) => !getDanfe(ro.order));
+                          const docs = missing.map((ro: any) => {
+                            let xmlText = getXml(ro.order);
+                            if (!xmlText && !isPickupRoute) {
+                              // Fallback para entregas normais
+                              if (ro.order?.raw_json?.xmls_documentos || ro.order?.raw_json?.xmls) {
+                                const arr = ro.order.raw_json.xmls_documentos || ro.order.raw_json.xmls || [];
+                                const first = Array.isArray(arr) ? arr[0] : null;
+                                xmlText = first ? (typeof first === 'string' ? first : (first?.xml || '')) : '';
+                              }
+                            }
+                            return { order_id: ro.order_id, numero: String(ro.order?.order_id_erp || ro.order_id || ''), xml: xmlText };
+                          }).filter((d: any) => d.xml && d.xml.includes('<'));
+                          if (docs.length === 0) { toast.error('Nenhum XML encontrado nos pedidos faltantes'); setNfLoading(false); return; }
+                          let nfWebhook = 'https://n8n.lojaodosmoveis.shop/webhook-test/gera_nf';
+                          try {
+                            const { data: s } = await supabase.from('webhook_settings').select('url').eq('key', 'gera_nf').eq('active', true).single();
+                            if (s?.url) nfWebhook = s.url;
+                          } catch { }
+                          const resp = await fetch(nfWebhook, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ route_id: routeId, documentos: docs, count: docs.length }) });
+                          const text = await resp.text();
+                          let payload: any = null; try { payload = JSON.parse(text); } catch { payload = { error: text }; }
+                          if (!resp.ok) { toast.error('Erro ao gerar notas fiscais'); setNfLoading(false); return; }
+                          const base64List: string[] = [];
+                          const mapByOrderId = new Map<string, string>();
+                          const pushData = (val: any) => { if (typeof val === 'string' && val.startsWith('JVBER')) base64List.push(val); };
+                          if (payload?.pdf) pushData(payload.pdf);
+                          if (payload?.data) pushData(payload.data);
+                          if (Array.isArray(payload?.pdfs)) payload.pdfs.forEach((b: any) => pushData(b));
+                          if (Array.isArray(payload)) payload.forEach((d: any) => { if (d?.data?.startsWith('JVBER')) pushData(d.data); if (d?.order_id && d?.data?.startsWith('JVBER')) mapByOrderId.set(String(d.order_id), d.data); });
+                          if (Array.isArray(payload?.documentos)) payload.documentos.forEach((d: any) => { if (d?.data?.startsWith('JVBER')) pushData(d.data); if (d?.order_id) mapByOrderId.set(String(d.order_id), d.data); });
+                          if (Array.isArray(payload?.arquivos)) payload.arquivos.forEach((d: any) => { if (d?.data?.startsWith('JVBER')) pushData(d.data); if (d?.order_id) mapByOrderId.set(String(d.order_id), d.data); });
+                          if (base64List.length === 0) { toast.error('Resposta não contém PDFs em base64'); setNfLoading(false); return; }
+                          try {
+                            // Salvar DANFE no campo correto baseado no tipo de rota
+                            const danfeField = isPickupRoute ? 'return_danfe_base64' : 'danfe_base64';
+                            if (mapByOrderId.size > 0) {
+                              for (const [orderId, b64] of mapByOrderId.entries()) {
+                                const updateData: any = { [danfeField]: b64 };
+                                if (!isPickupRoute) updateData.danfe_gerada_em = new Date().toISOString();
+                                await supabase.from('orders').update(updateData).eq('id', orderId);
+                              }
+                            } else if (base64List.length === docs.length) {
+                              for (let i = 0; i < docs.length; i++) {
+                                const orderId = docs[i].order_id; const b64 = base64List[i];
+                                const updateData: any = { [danfeField]: b64 };
+                                if (!isPickupRoute) updateData.danfe_gerada_em = new Date().toISOString();
+                                await supabase.from('orders').update(updateData).eq('id', orderId);
+                              }
+                            }
+                          } catch (e) { console.warn('Falha ao salvar DANFE:', e); }
+                          // Buscar DANFEs existentes do campo correto
+                          const existing = (roData || []).map((ro: any) => String(getDanfe(ro.order))).filter((b: string) => b && b.startsWith('JVBER'));
+                          const allB64 = [...existing, ...base64List];
+                          const merged = await PDFDocument.create();
+                          for (const b64 of allB64) {
+                            const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+                            const src = await PDFDocument.load(bytes);
+                            const pages = await merged.copyPages(src, src.getPageIndices()); pages.forEach((p) => merged.addPage(p));
                           }
-                        } else if (base64List.length === docs.length) {
-                          for (let i = 0; i < docs.length; i++) {
-                            const orderId = docs[i].order_id; const b64 = base64List[i];
-                            const updateData: any = { [danfeField]: b64 };
-                            if (!isPickupRoute) updateData.danfe_gerada_em = new Date().toISOString();
-                            await supabase.from('orders').update(updateData).eq('id', orderId);
+                          const result = await merged.save(); DeliverySheetGenerator.openPDFInNewTab(result);
+                        } catch (e: any) {
+                          console.error('Erro ao gerar/imprimir NFs:', e); toast.error('Erro ao gerar notas fiscais');
+                        } finally { setNfLoading(false); }
+                      }}
+                      disabled={nfLoading}
+                      className="flex items-center justify-center px-4 py-2 bg-gray-50 text-gray-700 hover:bg-gray-100 rounded-lg font-medium text-sm transition-colors border border-gray-200 disabled:opacity-50"
+                    >
+                      <FileSpreadsheet className="h-4 w-4 mr-2" /> {nfLoading ? '...' : ((selectedRoute?.route_orders || []).every((ro: any) => !!ro.order?.danfe_base64) ? 'Imprimir Notas' : 'Gerar Notas')}
+                    </button>
+
+                    {/* Relatório de Fechamento Button */}
+                    <button
+                      onClick={async () => {
+                        if (!selectedRoute) return;
+                        try {
+                          const toastId = toast.loading('Gerando resumo...');
+                          const route = selectedRoute as any;
+                          const { data: roData, error: roErr } = await supabase.from('route_orders').select('*, order:orders(*)').eq('route_id', route.id).order('sequence');
+                          if (roErr) throw roErr;
+
+                          // Ensure we have driver details
+                          let driverName = route.driver?.user?.name || route.driver?.name || 'Não informado';
+                          if (!route.driver && route.driver_id) {
+                            const { data: d } = await supabase.from('drivers').select('*, user:users(*)').eq('id', route.driver_id).single();
+                            if (d) driverName = d.user?.name || d.name || driverName;
                           }
+
+                          // Vehicle
+                          let vehicleInfo = route.vehicle ? `${route.vehicle.model} - ${route.vehicle.plate}` : '-';
+                          if (!route.vehicle && route.vehicle_id) {
+                            const { data: v } = await supabase.from('vehicles').select('*').eq('id', route.vehicle_id).single();
+                            if (v) vehicleInfo = `${v.model} - ${v.plate}`;
+                          }
+
+                          // Populate orders and ensure typing
+                          const routeOrders = (roData || []).map((ro: any) => ({
+                            ...ro,
+                            order: ro.order
+                          }));
+
+                          // Resolve names
+                          let teamName = '';
+                          if (route.team_id) {
+                            const t = teams.find((x: any) => String(x.id) === String(route.team_id));
+                            if (t) teamName = t.name;
+                            else {
+                              const { data: tData } = await supabase.from('teams_user').select('name').eq('id', route.team_id).single();
+                              if (tData) teamName = tData.name;
+                            }
+                          }
+
+                          let helperName = '';
+                          if (route.helper_id) {
+                            const h = helpers.find((x: any) => String(x.id) === String(route.helper_id));
+                            if (h) helperName = h.name;
+                            else {
+                              const { data: hData } = await supabase.from('users').select('name').eq('id', route.helper_id).single();
+                              if (hData) helperName = hData.name;
+                            }
+                          }
+
+                          const data = {
+                            route: { ...route, route_orders: routeOrders },
+                            driverName,
+                            supervisorName: route.conferente || 'Não informado',
+                            vehicleInfo,
+                            teamName: teamName || 'Não informada',
+                            helperName: helperName || 'Não informado',
+                            generatedAt: new Date().toISOString()
+                          };
+
+                          const pdfBytes = await RouteReportGenerator.generateRouteReport(data);
+                          DeliverySheetGenerator.openPDFInNewTab(pdfBytes);
+                          toast.dismiss(toastId);
+                          toast.success('Resumo gerado!');
+
+                        } catch (e: any) {
+                          console.error(e);
+                          toast.error('Erro ao gerar resumo da rota');
                         }
-                      } catch (e) { console.warn('Falha ao salvar DANFE:', e); }
-                      // Buscar DANFEs existentes do campo correto
-                      const existing = (roData || []).map((ro: any) => String(getDanfe(ro.order))).filter((b: string) => b && b.startsWith('JVBER'));
-                      const allB64 = [...existing, ...base64List];
-                      const merged = await PDFDocument.create();
-                      for (const b64 of allB64) {
-                        const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
-                        const src = await PDFDocument.load(bytes);
-                        const pages = await merged.copyPages(src, src.getPageIndices()); pages.forEach((p) => merged.addPage(p));
-                      }
-                      const result = await merged.save(); DeliverySheetGenerator.openPDFInNewTab(result);
-                    } catch (e: any) {
-                      console.error('Erro ao gerar/imprimir NFs:', e); toast.error('Erro ao gerar notas fiscais');
-                    } finally { setNfLoading(false); }
-                  }}
-                  disabled={nfLoading}
-                  className="flex items-center justify-center px-4 py-2 bg-gray-50 text-gray-700 hover:bg-gray-100 rounded-lg font-medium text-sm transition-colors border border-gray-200 disabled:opacity-50"
-                >
-                  <FileSpreadsheet className="h-4 w-4 mr-2" /> {nfLoading ? '...' : ((selectedRoute?.route_orders || []).every((ro: any) => !!ro.order?.danfe_base64) ? 'Imprimir Notas' : 'Gerar Notas')}
-                </button>
+                      }}
+                      className="flex items-center justify-center px-4 py-2 bg-purple-50 text-purple-700 hover:bg-purple-100 rounded-lg font-medium text-sm transition-colors border border-purple-200"
+                      title="Gerar Resumo da Rota"
+                    >
+                      <ClipboardCheck className="h-4 w-4 mr-2" /> Resumo da Rota
+                    </button>
 
-                {/* Relatório de Fechamento Button */}
-                <button
-                  onClick={async () => {
-                    if (!selectedRoute) return;
-                    try {
-                      const toastId = toast.loading('Gerando resumo...');
-                      const route = selectedRoute as any;
-                      const { data: roData, error: roErr } = await supabase.from('route_orders').select('*, order:orders(*)').eq('route_id', route.id).order('sequence');
-                      if (roErr) throw roErr;
-
-                      // Ensure we have driver details
-                      let driverName = route.driver?.user?.name || route.driver?.name || 'Não informado';
-                      if (!route.driver && route.driver_id) {
-                        const { data: d } = await supabase.from('drivers').select('*, user:users(*)').eq('id', route.driver_id).single();
-                        if (d) driverName = d.user?.name || d.name || driverName;
-                      }
-
-                      // Vehicle
-                      let vehicleInfo = route.vehicle ? `${route.vehicle.model} - ${route.vehicle.plate}` : '-';
-                      if (!route.vehicle && route.vehicle_id) {
-                        const { data: v } = await supabase.from('vehicles').select('*').eq('id', route.vehicle_id).single();
-                        if (v) vehicleInfo = `${v.model} - ${v.plate}`;
-                      }
-
-                      // Populate orders and ensure typing
-                      const routeOrders = (roData || []).map((ro: any) => ({
-                        ...ro,
-                        order: ro.order
-                      }));
-
-                      // Resolve names
-                      let teamName = '';
-                      if (route.team_id) {
-                        const t = teams.find((x: any) => String(x.id) === String(route.team_id));
-                        if (t) teamName = t.name;
-                        else {
-                          const { data: tData } = await supabase.from('teams_user').select('name').eq('id', route.team_id).single();
-                          if (tData) teamName = tData.name;
-                        }
-                      }
-
-                      let helperName = '';
-                      if (route.helper_id) {
-                        const h = helpers.find((x: any) => String(x.id) === String(route.helper_id));
-                        if (h) helperName = h.name;
-                        else {
-                          const { data: hData } = await supabase.from('users').select('name').eq('id', route.helper_id).single();
-                          if (hData) helperName = hData.name;
-                        }
-                      }
-
-                      const data = {
-                        route: { ...route, route_orders: routeOrders },
-                        driverName,
-                        supervisorName: route.conferente || 'Não informado',
-                        vehicleInfo,
-                        teamName: teamName || 'Não informada',
-                        helperName: helperName || 'Não informado',
-                        generatedAt: new Date().toISOString()
-                      };
-
-                      const pdfBytes = await RouteReportGenerator.generateRouteReport(data);
-                      DeliverySheetGenerator.openPDFInNewTab(pdfBytes);
-                      toast.dismiss(toastId);
-                      toast.success('Resumo gerado!');
-
-                    } catch (e: any) {
-                      console.error(e);
-                      toast.error('Erro ao gerar resumo da rota');
-                    }
-                  }}
-                  className="flex items-center justify-center px-4 py-2 bg-purple-50 text-purple-700 hover:bg-purple-100 rounded-lg font-medium text-sm transition-colors border border-purple-200"
-                  title="Gerar Resumo da Rota"
-                >
-                  <ClipboardCheck className="h-4 w-4 mr-2" /> Resumo da Rota
-                </button>
-
-                {/* Complete Route Button REMOVED as per user request (auto-complete logic exists) */}
+                    {/* Complete Route Button REMOVED as per user request (auto-complete logic exists) */}
+                  </div>
+                )}
               </div>
+
+              {/* Route Info Cards (Editable) */}
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-6 p-6 bg-white border-b border-gray-100">
+                {/* Team */}
+                <div className="flex items-center space-x-3">
+                  <div className="p-2 bg-purple-100 rounded-lg"><Users className="h-5 w-5 text-purple-600" /></div>
+                  <div className="flex-1">
+                    <p className="text-sm font-medium text-gray-500">Equipe</p>
+                    {isEditingRoute ? (
+                      <select
+                        value={editRouteTeam}
+                        onChange={handleEditTeamChange}
+                        className="mt-1 block w-full text-sm border-gray-300 rounded-md shadow-sm focus:border-purple-500 focus:ring-purple-500 p-1"
+                      >
+                        <option value="">Selecione...</option>
+                        {teams.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                      </select>
+                    ) : (
+                      <p className="text-base font-semibold text-gray-900">{teams.find(t => t.id === selectedRoute.team_id)?.name || '-'}</p>
+                    )}
+                  </div>
+                </div>
+
+                {/* Driver */}
+                <div className="flex items-center space-x-3">
+                  <div className="p-2 bg-blue-100 rounded-lg"><User className="h-5 w-5 text-blue-600" /></div>
+                  <div className="flex-1">
+                    <p className="text-sm font-medium text-gray-500">Motorista</p>
+                    {isEditingRoute ? (
+                      <select
+                        value={editRouteDriver}
+                        onChange={(e) => setEditRouteDriver(e.target.value)}
+                        disabled={!!editRouteTeam}
+                        className={`mt-1 block w-full text-sm border-gray-300 rounded-md shadow-sm focus:border-blue-500 focus:ring-blue-500 p-1 ${!!editRouteTeam ? 'bg-gray-100 cursor-not-allowed' : ''}`}
+                      >
+                        <option value="">Selecione...</option>
+                        {drivers.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                      </select>
+                    ) : (
+                      <p className="text-base font-semibold text-gray-900">{drivers.find(d => d.id === selectedRoute.driver_id)?.name || '-'}</p>
+                    )}
+                  </div>
+                </div>
+
+                {/* Helper */}
+                <div className="flex items-center space-x-3">
+                  <div className="p-2 bg-indigo-100 rounded-lg"><UserPlus className="h-5 w-5 text-indigo-600" /></div>
+                  <div className="flex-1">
+                    <p className="text-sm font-medium text-gray-500">Ajudante</p>
+                    {isEditingRoute ? (
+                      <select
+                        value={editRouteHelper}
+                        onChange={(e) => setEditRouteHelper(e.target.value)}
+                        disabled={!!editRouteTeam}
+                        className={`mt-1 block w-full text-sm border-gray-300 rounded-md shadow-sm focus:border-indigo-500 focus:ring-indigo-500 p-1 ${!!editRouteTeam ? 'bg-gray-100 cursor-not-allowed' : ''}`}
+                      >
+                        <option value="">Selecione...</option>
+                        {helpers.map(h => <option key={h.id} value={h.id}>{h.name}</option>)}
+                      </select>
+                    ) : (
+                      <p className="text-base font-semibold text-gray-900">{helpers.find(h => h.id === selectedRoute.helper_id)?.name || '-'}</p>
+                    )}
+                  </div>
+                </div>
+
+                {/* Vehicle */}
+                <div className="flex items-center space-x-3">
+                  <div className="p-2 bg-orange-100 rounded-lg"><Truck className="h-5 w-5 text-orange-600" /></div>
+                  <div className="flex-1">
+                    <p className="text-sm font-medium text-gray-500">Veículo</p>
+                    {isEditingRoute ? (
+                      <select
+                        value={editRouteVehicle}
+                        onChange={(e) => setEditRouteVehicle(e.target.value)}
+                        className="mt-1 block w-full text-sm border-gray-300 rounded-md shadow-sm focus:border-orange-500 focus:ring-orange-500 p-1"
+                      >
+                        <option value="">Selecione...</option>
+                        {vehicles.map(v => <option key={v.id} value={v.id}>{v.name} ({v.plate})</option>)}
+                      </select>
+                    ) : (
+                      <p className="text-base font-semibold text-gray-900">{vehicles.find(v => v.id === selectedRoute.vehicle_id)?.name || '-'}</p>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Conferente Field Row */}
+              {isEditingRoute && (
+                <div className="px-6 pb-4 bg-white border-b border-gray-100 pt-2">
+                  <div className="flex items-center space-x-3 max-w-sm">
+                    <div className="p-2 bg-teal-100 rounded-lg"><ClipboardCheck className="h-5 w-5 text-teal-600" /></div>
+                    <div className="flex-1">
+                      <label className="text-sm font-medium text-gray-500 block mb-1">Conferente (Opcional)</label>
+                      <select
+                        value={editRouteConferente}
+                        onChange={(e) => setEditRouteConferente(e.target.value)}
+                        className="block w-full text-sm border-gray-300 rounded-md shadow-sm focus:border-teal-500 focus:ring-teal-500 p-1"
+                      >
+                        <option value="">Selecione...</option>
+                        {conferentes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                      </select>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               <div className="flex-1 overflow-auto p-6 bg-gray-50">
                 {/* Table of items in route */}
