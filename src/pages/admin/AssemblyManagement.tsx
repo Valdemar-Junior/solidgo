@@ -390,11 +390,12 @@ function AssemblyManagementContent() {
         .from('assembly_products')
         .select(`
           id, order_id, product_name, product_sku, status, assembly_route_id, created_at, updated_at, was_returned,
-          order:order_id (id, order_id_erp, customer_name, phone, address_json, raw_json, data_venda, previsao_entrega, observacoes_publicas, observacoes_internas),
+          order:order_id!inner (id, order_id_erp, customer_name, phone, address_json, raw_json, data_venda, previsao_entrega, observacoes_publicas, observacoes_internas, status),
           installer:installer_id (id, name)
         `)
         .eq('status', 'pending')
         .is('assembly_route_id', null)
+        .eq('order.status', 'delivered') // Apenas pedidos entregues aparecem para montagem
         .order('created_at', { ascending: false });
 
       let productsInRoutes: any[] = [];
