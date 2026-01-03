@@ -244,14 +244,24 @@ function RouteCreationContent() {
     if (tid) {
       const t = teams.find(x => x.id === tid);
       if (t) {
-        if (t.driver_user_id) {
-          const driver = drivers.find(d => d.user_id === t.driver_user_id);
-          if (driver) setEditRouteDriver(driver.id);
+        // Try to find driver by user_id
+        let driver = drivers.find(d => String(d.user_id) === String(t.driver_user_id));
+        // If not found, try by name matching if possible (optional, but let's stick to ID first)
+
+        if (driver) {
+          setEditRouteDriver(driver.id);
+        } else {
+          // If driver not found in the list (maybe inactive?), we can't select them in the dropdown easily
+          // unless we add them. For now, clear it or leave as is? Better safe to clear or set empty.
+          setEditRouteDriver('');
         }
+
         if (t.helper_user_id) setEditRouteHelper(t.helper_user_id);
+        else setEditRouteHelper('');
       }
     } else {
       setEditRouteHelper('');
+      // setEditRouteDriver(''); // Optional: clear driver when team is cleared?
     }
   };
 
@@ -4164,7 +4174,7 @@ function RouteCreationContent() {
                         {teams.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
                       </select>
                     ) : (
-                      <p className="text-base font-semibold text-gray-900">{teams.find(t => t.id === selectedRoute.team_id)?.name || '-'}</p>
+                      <p className="text-base font-semibold text-gray-900">{teams.find(t => t.id === selectedRoute.team_id)?.name || (selectedRoute as any).teamName || '-'}</p>
                     )}
                   </div>
                 </div>
@@ -4185,7 +4195,9 @@ function RouteCreationContent() {
                         {drivers.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
                       </select>
                     ) : (
-                      <p className="text-base font-semibold text-gray-900">{drivers.find(d => d.id === selectedRoute.driver_id)?.name || '-'}</p>
+                      <p className="text-base font-semibold text-gray-900">
+                        {(selectedRoute.driver as any)?.user?.name || selectedRoute.driver?.name || drivers.find(d => d.id === selectedRoute.driver_id)?.name || '-'}
+                      </p>
                     )}
                   </div>
                 </div>
@@ -4206,7 +4218,7 @@ function RouteCreationContent() {
                         {helpers.map(h => <option key={h.id} value={h.id}>{h.name}</option>)}
                       </select>
                     ) : (
-                      <p className="text-base font-semibold text-gray-900">{helpers.find(h => h.id === selectedRoute.helper_id)?.name || '-'}</p>
+                      <p className="text-base font-semibold text-gray-900">{helpers.find(h => h.id === selectedRoute.helper_id)?.name || (selectedRoute as any).helperName || '-'}</p>
                     )}
                   </div>
                 </div>
@@ -4226,7 +4238,11 @@ function RouteCreationContent() {
                         {vehicles.map(v => <option key={v.id} value={v.id}>{v.name} ({v.plate})</option>)}
                       </select>
                     ) : (
-                      <p className="text-base font-semibold text-gray-900">{vehicles.find(v => v.id === selectedRoute.vehicle_id)?.name || '-'}</p>
+                      <p className="text-base font-semibold text-gray-900">
+                        {selectedRoute.vehicle?.name ? `${selectedRoute.vehicle.name} (${selectedRoute.vehicle.plate})` :
+                          (selectedRoute.vehicle?.model ? `${selectedRoute.vehicle.model} (${selectedRoute.vehicle.plate})` :
+                            vehicles.find(v => v.id === selectedRoute.vehicle_id)?.name || '-')}
+                      </p>
                     )}
                   </div>
                 </div>
