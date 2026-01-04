@@ -3538,6 +3538,8 @@ function RouteCreationContent() {
                                 return;
                               }
                               toast.success('Rota excluída com sucesso');
+                              // Optimistic update: remove from list immediately
+                              setRoutesList(prev => prev.filter(r => r.id !== selectedRoute.id));
                               setShowRouteModal(false);
                               loadData();
                             } catch (e: any) {
