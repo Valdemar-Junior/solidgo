@@ -1668,7 +1668,9 @@ function RouteCreationContent() {
             name: routeName.trim(),
             driver_id: selectedDriver,
             vehicle_id: selectedVehicle || null,
-            conferente: conferente.trim() || null,
+            // We need to save BOTH correctly (conferente name string and conferente_id uuid)
+            conferente_id: conferente || null,
+            conferente: conferentes.find(c => c.id === conferente)?.name || null,
             observations: observations.trim() || null,
             team_id: selectedTeam || null,
             helper_id: selectedHelper || null,
