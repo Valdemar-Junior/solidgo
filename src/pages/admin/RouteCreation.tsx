@@ -1669,8 +1669,11 @@ function RouteCreationContent() {
             driver_id: selectedDriver,
             vehicle_id: selectedVehicle || null,
             // We need to save BOTH correctly (conferente name string and conferente_id uuid)
-            conferente_id: conferente || null,
-            conferente: conferentes.find(c => c.id === conferente)?.name || null,
+            // Check if conferente value is UUID (selection) or Text (free input/legacy)
+            conferente_id: /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(conferente) ? conferente : null,
+            conferente: /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(conferente)
+              ? (conferentes.find(c => c.id === conferente)?.name || null)
+              : (conferente || null),
             observations: observations.trim() || null,
             team_id: selectedTeam || null,
             helper_id: selectedHelper || null,
