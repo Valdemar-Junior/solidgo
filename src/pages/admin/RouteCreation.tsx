@@ -4218,11 +4218,11 @@ function RouteCreationContent() {
                       <select
                         value={editRouteDriver}
                         onChange={(e) => setEditRouteDriver(e.target.value)}
-                        disabled={!!editRouteTeam}
-                        className={`mt-1 block w-full text-sm border-gray-300 rounded-md shadow-sm focus:border-blue-500 focus:ring-blue-500 p-1 ${!!editRouteTeam ? 'bg-gray-100 cursor-not-allowed' : ''}`}
+                        disabled={!!editRouteTeam && !!editRouteDriver} // Smart Lock: Only lock if team selected AND driver populated
+                        className={`mt-1 block w-full text-sm border-gray-300 rounded-md shadow-sm focus:border-blue-500 focus:ring-blue-500 p-1 ${!!editRouteTeam && !!editRouteDriver ? 'bg-gray-100 cursor-not-allowed' : ''}`}
                       >
                         <option value="">Selecione...</option>
-                        {drivers.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                        {drivers.map(d => <option key={d.id} value={d.id}>{d.user?.name || d.name}</option>)}
                       </select>
                     ) : (
                       <p className="text-base font-semibold text-gray-900">
@@ -4241,8 +4241,8 @@ function RouteCreationContent() {
                       <select
                         value={editRouteHelper}
                         onChange={(e) => setEditRouteHelper(e.target.value)}
-                        disabled={!!editRouteTeam}
-                        className={`mt-1 block w-full text-sm border-gray-300 rounded-md shadow-sm focus:border-indigo-500 focus:ring-indigo-500 p-1 ${!!editRouteTeam ? 'bg-gray-100 cursor-not-allowed' : ''}`}
+                        disabled={!!editRouteTeam && !!editRouteHelper} // Smart Lock
+                        className={`mt-1 block w-full text-sm border-gray-300 rounded-md shadow-sm focus:border-indigo-500 focus:ring-indigo-500 p-1 ${!!editRouteTeam && !!editRouteHelper ? 'bg-gray-100 cursor-not-allowed' : ''}`}
                       >
                         <option value="">Selecione...</option>
                         {helpers.map(h => <option key={h.id} value={h.id}>{h.name}</option>)}
