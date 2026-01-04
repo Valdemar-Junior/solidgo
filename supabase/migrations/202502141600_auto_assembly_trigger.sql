@@ -13,6 +13,12 @@ BEGIN
     normalized_obs := lower(coalesce(NEW.observacoes_internas, '') || ' ' || coalesce(NEW.observacoes_publicas, ''));
     order_has_keyword := normalized_obs LIKE '%*montagem*%';
 
+    -- CRÍTICO: Montagem só deve nascer quando o pedido tiver sido ENTREGUE (delivered)
+    -- Se o status não for 'delivered', não gera assembly_product ainda.
+    IF NEW.status != 'delivered' THEN
+        RETURN NEW;
+    END IF;
+
     -- Se não tiver itens, não faz nada
     IF NEW.items_json IS NULL OR jsonb_array_length(NEW.items_json) = 0 THEN
         RETURN NEW;

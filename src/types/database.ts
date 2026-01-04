@@ -21,12 +21,13 @@ export interface DriverWithUser extends Driver {
   user: User;
 }
 
-id: string;
-plate: string;
-model: string;
-capacity ?: number;
-active ?: boolean;
-name ?: string;
+export interface Vehicle {
+  id: string;
+  plate: string;
+  model: string;
+  capacity?: number;
+  active?: boolean;
+  name?: string;
 }
 
 export interface Order {

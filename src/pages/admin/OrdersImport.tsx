@@ -147,6 +147,10 @@ export default function OrdersImport() {
         const repDept = produtos.find((p: any) => p.departamento)?.departamento || produtos.find((p: any) => p.department)?.department || '';
         const repBrand = produtos.find((p: any) => p.marca)?.marca || produtos.find((p: any) => p.brand)?.brand || '';
 
+        // NOVO: Detectar keyword *montagem* nas observações internas
+        const obsInternas = String(o.observacoes_internas ?? '').toLowerCase();
+        const hasKeywordMontagem = obsInternas.includes('*montagem*');
+
         return {
           department: String(repDept),
           brand: String(repBrand),
@@ -183,7 +187,8 @@ export default function OrdersImport() {
             total_price: Number(p.valor_total_real ?? p.valor_total_item ?? 0),
             price: Number(p.valor_unitario_real ?? p.valor_unitario ?? 0),
             location: String(p.local_estocagem ?? ''),
-            has_assembly: String(p.tem_montagem ?? ''),
+            // MODIFICADO: Se tem keyword *montagem* OU se ERP já marcou, define como 'Sim'
+            has_assembly: hasKeywordMontagem ? 'Sim' : String(p.tem_montagem ?? ''),
             labels: Array.isArray(p.etiquetas) ? p.etiquetas : [],
             department: String(p.departamento ?? ''),
             brand: String(p.marca ?? ''),

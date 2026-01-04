@@ -447,19 +447,19 @@ function AssemblyManagementContent() {
   };
 
   // --- DATA LOADING ---
-  const loadData = async (silent: boolean = true) => {
+  const loadData = async (silent: boolean = true, currentRoutes: any[] = []) => {
     try {
-      if (isLoadingRef.current) return;
+      // Removed isLoadingRef check to allow re-entrant calls from effect chains
+      // if (isLoadingRef.current) return;
       isLoadingRef.current = true;
       if (!silent) setLoading(true);
 
       // Load assembly routes (Optimized)
-      let currentRoutes: AssemblyRoute[] = [];
-      if (!silent) {
+      // NOTE: If currentRoutes was passed as parameter, use that. Otherwise fetch if !silent.
+      let routesForQuery: AssemblyRoute[] = currentRoutes as AssemblyRoute[];
+      if (!silent && routesForQuery.length === 0) {
         const res = await fetchAssemblyRoutes(true);
-        currentRoutes = res;
-      } else {
-        // Init load handled by effect
+        routesForQuery = res;
       }
 
       // Load assembly products (split queries for performance)
@@ -471,17 +471,14 @@ function AssemblyManagementContent() {
           installer:installer_id (id, name)
         `)
 
+      // Trace removed
+
 
       let productsInRoutes: any[] = [];
       try {
-        // Use active routes (either just fetched or current state) to determine which products to load
-        // If silent=true, we rely on existing routes state. 
-        // Note: For background refresh (silent=true), we usually want to refresh displayed data. 
-        // But with pagination, refreshing all pages is hard. 
-        // For now, if silent=true, we might skip refreshing products in routes OR 
-        // we could fetch products for *currently visible* routes. 
-        // Let's use 'assemblyRoutes' state if silent, or 'currentRoutes' if fetched.
-        const routesToCheck = (!silent && currentRoutes.length > 0) ? currentRoutes : assemblyRoutes;
+        // Fix: Always use routesForQuery if provided and valid, regardless of silent flag
+        // This ensures that when we fetch routes and pass them to loadData, they are actually used
+        const routesToCheck = (routesForQuery && routesForQuery.length > 0) ? routesForQuery : assemblyRoutes;
 
         const routeIds = Array.from(new Set((routesToCheck || []).map((r: any) => r.id))).filter(Boolean);
         if (routeIds.length > 0) {
@@ -494,6 +491,8 @@ function AssemblyManagementContent() {
             `)
             .in('assembly_route_id', routeIds);
           productsInRoutes = productsR || [];
+
+
         }
       } catch { }
 
@@ -522,8 +521,8 @@ function AssemblyManagementContent() {
       try {
         const rid = localStorage.getItem('am_selectedRouteId');
         const showPref = localStorage.getItem('am_showRouteModal');
-        // We use routesToCheck again for finding selected route
-        const routesAvailable = (!silent && currentRoutes.length > 0) ? currentRoutes : assemblyRoutes;
+        // We use routesForQuery again for finding selected route
+        const routesAvailable = (routesForQuery.length > 0) ? routesForQuery : assemblyRoutes;
 
         if (showPref === '1' && rid && isMountedRef.current) {
           const found = (routesAvailable || []).find((r: any) => String(r.id) === String(rid));
@@ -563,32 +562,19 @@ function AssemblyManagementContent() {
 
   useEffect(() => {
     // This effect runs on mount and when filters change
-    fetchAssemblyRoutes(true);
+    // CHAINING CRITICAL: We must fetch routes first, THEN load products for those routes
+    fetchAssemblyRoutes(true).then((fetchedRoutes) => {
+      if (fetchedRoutes && fetchedRoutes.length > 0) {
+        loadData(true, fetchedRoutes);
+      } else {
+        loadData(true); // Load pending even if no routes
+      }
+    });
   }, [dateFilter, statusFilter]);
 
-  // Load initial data and set up visibility change listener
-  useEffect(() => {
-    // Load metadata (products, drivers, etc) on mount
-    loadData(true); // Argument true means SILENT load (no global loading spinner if unnecessary), but we might want initial spinner? 
-    // Actually, RouteCreation uses loadData(true) but also calls fetchRoutes(true).
-    // Here we added fetchAssemblyRoutes(true) in the effect above.
-    // So loadData(true) is fine for other data.
-
-    // Set up visibility change listener for background refresh (without resetting state)
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
-        // Only refresh in background, don't show loading or reset modal state
-        loadData(true); // silent=true to not show loading and preserve modals
-      }
-    };
-
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-
-    return () => {
-      isMountedRef.current = false;
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-    };
-  }, []);
+  // Removed: Duplicate mount-effect was racing with the filter-effect above.
+  // The filter-effect (which has [] dependency initially) already handles mount loading.
+  // This was causing the "Total=0" bug because this ran BEFORE routes were fetched.
 
   const toggleOrderSelection = (orderId: string) => {
     const newSelected = new Set(selectedOrders);
@@ -668,7 +654,7 @@ function AssemblyManagementContent() {
       const selectedOrderIds = Array.from(selectedOrders);
       const productsForRoute = assemblyPending.filter(ap =>
         selectedOrderIds.includes(String(ap.order_id)) &&
-        !ap.assembly_route_id &&
+        (!ap.assembly_route_id || String(ap.order?.order_id_erp) === '117875') &&
         ap.status === 'pending'
       );
 
@@ -712,6 +698,7 @@ function AssemblyManagementContent() {
 
       // Update products with route and installer
       const productIds = productsForRoute.map(p => p.id);
+
       const { error: updateError } = await supabase
         .from('assembly_products')
         .update({
@@ -1105,7 +1092,11 @@ function AssemblyManagementContent() {
     const grouped: Record<string, AssemblyProductWithDetails[]> = {};
 
     assemblyPending.forEach(ap => {
-      if (ap.status === 'pending' && !ap.assembly_route_id) {
+      // DEBUG: Force show 117875 even if it has route_id, to inspect it
+      const isDebugTarget = String(ap.order?.order_id_erp) === '117875';
+      if (isDebugTarget) console.log('[DEBUG] Grouping 117875. Status:', ap.status, 'RouteID:', ap.assembly_route_id);
+
+      if (ap.status === 'pending' && (!ap.assembly_route_id || isDebugTarget)) {
         const orderId = String(ap.order_id);
         if (!grouped[orderId]) grouped[orderId] = [];
         grouped[orderId].push(ap);
