@@ -1161,7 +1161,7 @@ function RouteCreationContent() {
         supabase
           .from('vehicles')
           .select('*')
-          .eq('active', true),
+          .order('model'), // Removed active filter to ensure team vehicles appear
 
         // Conference setting
         supabase
@@ -1174,7 +1174,7 @@ function RouteCreationContent() {
         supabase
           .from('drivers')
           .select('id, user_id, active')
-          .eq('active', true),
+          .order('id'), // Removed active filter to ensure team drivers appear
 
         // Conferentes
         supabase
