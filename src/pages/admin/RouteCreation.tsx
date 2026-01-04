@@ -244,15 +244,21 @@ function RouteCreationContent() {
     if (tid) {
       const t = teams.find(x => x.id === tid);
       if (t) {
-        // Try to find driver by user_id
+        console.log('[EditTeamChange] Selected team:', t);
+        console.log('[EditTeamChange] Looking for driver with user_id:', t.driver_user_id);
+
+        // Try to find driver by user_id matches
+        // Ensure we compare strings to strings
         let driver = drivers.find(d => String(d.user_id) === String(t.driver_user_id));
-        // If not found, try by name matching if possible (optional, but let's stick to ID first)
+
+        console.log('[EditTeamChange] Found Driver:', driver);
 
         if (driver) {
           setEditRouteDriver(driver.id);
         } else {
-          // If driver not found in the list (maybe inactive?), we can't select them in the dropdown easily
-          // unless we add them. For now, clear it or leave as is? Better safe to clear or set empty.
+          // Fallback: If no driver record found, check if we can find by name just in case, 
+          // or at least warn/log.
+          console.warn('[EditTeamChange] Driver record not found for user_id:', t.driver_user_id);
           setEditRouteDriver('');
         }
 
@@ -261,7 +267,7 @@ function RouteCreationContent() {
       }
     } else {
       setEditRouteHelper('');
-      // setEditRouteDriver(''); // Optional: clear driver when team is cleared?
+      // setEditRouteDriver(''); // Optional: clear driver when team is cleared
     }
   };
 
