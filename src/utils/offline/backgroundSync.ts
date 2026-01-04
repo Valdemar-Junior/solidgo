@@ -406,7 +406,9 @@ export class BackgroundSyncService {
           console.log('[BackgroundSync] Checking assembly for order:', order_id, 'items:', orderData.items_json.length);
 
           const produtosComMontagem = orderData.items_json.filter((item: any) =>
-            item.has_assembly === 'SIM' || item.has_assembly === 'sim' || item.possui_montagem === true || item.possui_montagem === 'true'
+            // Check multiple variations of has_assembly value (case variations + boolean)
+            ['SIM', 'sim', 'Sim', 'true', '1', 'yes', 'YES', 'Yes'].includes(String(item.has_assembly)) ||
+            item.possui_montagem === true || item.possui_montagem === 'true'
           );
 
           console.log('[BackgroundSync] Products with assembly found:', produtosComMontagem.length);
