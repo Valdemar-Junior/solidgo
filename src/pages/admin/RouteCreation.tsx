@@ -3531,13 +3531,18 @@ function RouteCreationContent() {
                         onClick={async () => {
                           if (confirm('Tem certeza que deseja EXCLUIR esta rota vazia?')) {
                             try {
-                              const { error } = await supabase.from('routes').delete().eq('id', selectedRoute.id);
+                              const { error, count } = await supabase.from('routes').delete({ count: 'exact' }).eq('id', selectedRoute.id);
                               if (error) throw error;
+                              if (count === 0) {
+                                toast.error('Não foi possível excluir. Rota não encontrada ou permissão negada.');
+                                return;
+                              }
                               toast.success('Rota excluída com sucesso');
                               setShowRouteModal(false);
                               loadData();
-                            } catch (e) {
-                              toast.error('Erro ao excluir rota');
+                            } catch (e: any) {
+                              console.error('Erro ao excluir rota:', e);
+                              toast.error('Erro ao excluir rota: ' + (e.message || 'Erro desconhecido'));
                             }
                           }
                         }}
