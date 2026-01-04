@@ -278,7 +278,8 @@ function RouteCreationContent() {
           driver_id: editRouteDriver || null,
           helper_id: editRouteHelper || null,
           vehicle_id: editRouteVehicle || null,
-          conferente_id: editRouteConferente || null
+          conferente_id: editRouteConferente || null,
+          conferente: conferentes.find(c => c.id === editRouteConferente)?.name || null
         })
         .eq('id', selectedRoute.id);
       if (error) throw error;
@@ -1271,8 +1272,8 @@ function RouteCreationContent() {
           const mapU = new Map<string, any>((usersData || []).map((u: any) => [String(u.id), u]));
           driverList = driversRes.data.map((d: any) => ({ ...d, user: mapU.get(String(d.user_id)) || null }));
         }
-        // Filter only drivers
-        driverList = driverList.filter((d: any) => String(d?.user?.role || '').toLowerCase() === 'driver');
+        // Filter only drivers - RELAXED: Trust 'drivers' table membership
+        // driverList = driverList.filter((d: any) => String(d?.user?.role || '').toLowerCase() === 'driver');
       }
       setDrivers(driverList);
 
