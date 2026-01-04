@@ -245,20 +245,33 @@ function RouteCreationContent() {
       const t = teams.find(x => x.id === tid);
       if (t) {
         console.log('[EditTeamChange] Selected team:', t);
-        console.log('[EditTeamChange] Looking for driver with user_id:', t.driver_user_id);
+        // DEBUG: Debug driver finding logic
+        console.log('[EditTeamChange] Team Data:', t);
+        console.log('[EditTeamChange] Looking for driver w/ user_id:', t.driver_user_id, 'Type:', typeof t.driver_user_id);
+        console.log('[EditTeamChange] Available Drivers (first 5):', drivers.slice(0, 5).map(d => ({ id: d.id, user_id: d.user_id, name: d.user?.name || d.name })));
 
         // Try to find driver by user_id matches
-        // Ensure we compare strings to strings
         let driver = drivers.find(d => String(d.user_id) === String(t.driver_user_id));
 
-        console.log('[EditTeamChange] Found Driver:', driver);
+        if (!driver) {
+          // Fallback check: maybe the team.driver_user_id IS the driver.id? (unlikely but checking)
+          const fallback = drivers.find(d => String(d.id) === String(t.driver_user_id));
+          if (fallback) {
+            console.log('[EditTeamChange] Found driver by ID fallback!', fallback);
+            driver = fallback;
+          }
+        }
+
+        console.log('[EditTeamChange] Found Driver Result:', driver);
 
         if (driver) {
-          setEditRouteDriver(driver.id);
+          setEditRouteDriver(String(driver.id));
         } else {
-          // Fallback: If no driver record found, check if we can find by name just in case, 
-          // or at least warn/log.
-          console.warn('[EditTeamChange] Driver record not found for user_id:', t.driver_user_id);
+          console.warn('[EditTeamChange] Driver record NOT found for user_id:', t.driver_user_id);
+          console.log('[EditTeamChange] All Driver User IDs:', drivers.map(d => d.user_id));
+          // Don't clear driver immediately if not found, to preserve manual entry if needed, or clear?
+          // User wants strict sync. So if team has driver, we should try to set it.
+          // If not found, better to clear or keep previous? Clearing signals "not found".
           setEditRouteDriver('');
         }
 
