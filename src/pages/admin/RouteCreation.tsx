@@ -3521,13 +3521,12 @@ function RouteCreationContent() {
                     {selectedRoute.status !== 'completed' && (
                       <button
                         onClick={() => setIsEditingRoute(true)}
-                        className="flex items-center px-4 py-2 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 border border-blue-200 transition-colors mr-auto"
+                        className="flex items-center px-4 py-2 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 border border-blue-200 transition-colors"
                       >
                         <Edit2 className="h-4 w-4 mr-2" />
                         Editar
                       </button>
                     )}
-                    <div className="flex-1"></div>
 
                     {/* Custom Buttons for Pickup Routes vs Standard Routes */}
                     {(() => {
