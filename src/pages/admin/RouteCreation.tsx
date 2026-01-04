@@ -3525,6 +3525,29 @@ function RouteCreationContent() {
                       </button>
                     )}
 
+                    {/* Delete Button for Empty Routes */}
+                    {(!selectedRoute.route_orders || selectedRoute.route_orders.length === 0) && (
+                      <button
+                        onClick={async () => {
+                          if (confirm('Tem certeza que deseja EXCLUIR esta rota vazia?')) {
+                            try {
+                              const { error } = await supabase.from('routes').delete().eq('id', selectedRoute.id);
+                              if (error) throw error;
+                              toast.success('Rota excluída com sucesso');
+                              setShowRouteModal(false);
+                              loadData();
+                            } catch (e) {
+                              toast.error('Erro ao excluir rota');
+                            }
+                          }
+                        }}
+                        className="flex items-center px-4 py-2 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 border border-red-200 transition-colors"
+                      >
+                        <Trash2 className="h-4 w-4 mr-2" />
+                        Excluir
+                      </button>
+                    )}
+
                     {/* Custom Buttons for Pickup Routes vs Standard Routes */}
                     {(() => {
                       const isPickup = String(selectedRoute.name || '').startsWith('RETIRADA');
