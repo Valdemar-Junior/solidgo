@@ -147,9 +147,15 @@ export default function OrdersImport() {
         const repDept = produtos.find((p: any) => p.departamento)?.departamento || produtos.find((p: any) => p.department)?.department || '';
         const repBrand = produtos.find((p: any) => p.marca)?.marca || produtos.find((p: any) => p.brand)?.brand || '';
 
-        // NOVO: Detectar keyword *montagem* nas observações internas
-        const obsInternas = String(o.observacoes_internas ?? '').toLowerCase();
+        // NOVO: Detectar keyword *montagem* nas observações internas (Robust Check)
+        // Check root field OR raw_json field if available
+        const rawObs = o.observacoes_internas || o.observacoes || (o.raw_json && o.raw_json.observacoes_internas) || '';
+        const obsInternas = String(rawObs).toLowerCase();
+
+        // Check for "*montagem*" strictly as requested
         const hasKeywordMontagem = obsInternas.includes('*montagem*');
+
+        console.log(`[Import Debug] Pedido ${o.numero_lancamento}: Obs="${obsInternas}", Montagem=${hasKeywordMontagem}`);
 
         return {
           department: String(repDept),
@@ -175,24 +181,34 @@ export default function OrdersImport() {
             lat: o.lat ?? o.latitude ?? null,
             lng: o.lng ?? o.longitude ?? o.long ?? null
           },
-          items_json: produtos.map((p: any) => ({
-            sku: String(p.codigo_produto ?? ''),
-            name: String(p.nome_produto ?? ''),
-            quantity: Number(p.quantidade_volumes ?? 1),
-            volumes_per_unit: Number(p.quantidade_volumes ?? 1),
-            purchased_quantity: Number(p.quantidade_comprada ?? 1),
-            unit_price_real: Number(p.valor_unitario_real ?? p.valor_unitario ?? 0),
-            total_price_real: Number(p.valor_total_real ?? p.valor_total_item ?? 0),
-            unit_price: Number(p.valor_unitario_real ?? p.valor_unitario ?? 0),
-            total_price: Number(p.valor_total_real ?? p.valor_total_item ?? 0),
-            price: Number(p.valor_unitario_real ?? p.valor_unitario ?? 0),
-            location: String(p.local_estocagem ?? ''),
-            // MODIFICADO: Se tem keyword *montagem* OU se ERP já marcou, define como 'Sim'
-            has_assembly: hasKeywordMontagem ? 'Sim' : String(p.tem_montagem ?? ''),
-            labels: Array.isArray(p.etiquetas) ? p.etiquetas : [],
-            department: String(p.departamento ?? ''),
-            brand: String(p.marca ?? ''),
-          })),
+          items_json: produtos.map((p: any) => {
+            const explicitFlag = String(p.tem_montagem ?? '');
+            const calculatedHasAssembly = hasKeywordMontagem ? 'Sim' : explicitFlag;
+
+            // Log decision for first item usually
+            if (p.codigo_produto && hasKeywordMontagem) {
+              console.log(`[Import Item Debug] SKU=${p.codigo_produto} FlagOriginal="${explicitFlag}" KeywordFound=${hasKeywordMontagem} -> Final="${calculatedHasAssembly}"`);
+            }
+
+            return {
+              sku: String(p.codigo_produto ?? ''),
+              name: String(p.nome_produto ?? ''),
+              quantity: Number(p.quantidade_volumes ?? 1),
+              volumes_per_unit: Number(p.quantidade_volumes ?? 1),
+              purchased_quantity: Number(p.quantidade_comprada ?? 1),
+              unit_price_real: Number(p.valor_unitario_real ?? p.valor_unitario ?? 0),
+              total_price_real: Number(p.valor_total_real ?? p.valor_total_item ?? 0),
+              unit_price: Number(p.valor_unitario_real ?? p.valor_unitario ?? 0),
+              total_price: Number(p.valor_total_real ?? p.valor_total_item ?? 0),
+              price: Number(p.valor_unitario_real ?? p.valor_unitario ?? 0),
+              location: String(p.local_estocagem ?? ''),
+              // MODIFICADO: Se tem keyword *montagem* OU se ERP já marcou, define como 'Sim'
+              has_assembly: calculatedHasAssembly,
+              labels: Array.isArray(p.etiquetas) ? p.etiquetas : [],
+              department: String(p.departamento ?? ''),
+              brand: String(p.marca ?? ''),
+            }
+          }),
           status: 'pending' as const,
           raw_json: o,
           xml_documento: xmlDanfe.conteudo_xml || null,
