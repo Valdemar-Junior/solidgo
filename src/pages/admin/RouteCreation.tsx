@@ -2196,7 +2196,11 @@ function RouteCreationContent() {
                       const raw: any = o.raw_json || {};
                       const addr: any = o.address_json || {};
                       const temFreteFull = hasFreteFull(o);
-                      const hasAssembly = isTrue(it?.has_assembly);
+
+                      // Ckeck for Assembly: DB flag OR Keyword in internal notes
+                      const obsIntLower = String(o.observacoes_internas || raw.observacoes_internas || '').toLowerCase();
+                      const hasAssembly = isTrue(it?.has_assembly) || obsIntLower.includes('*montagem*');
+
                       const isReturned = Boolean(o.return_flag) || String(o.status) === 'returned';
                       const returnReason = (o.last_return_reason || (raw as any).return_reason || '') as string;
                       const returnNotes = (o.last_return_notes || (raw as any).return_notes || '') as string;
