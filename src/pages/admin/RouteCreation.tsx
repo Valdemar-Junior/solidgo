@@ -2859,21 +2859,24 @@ function RouteCreationContent() {
                           const tid = e.target.value;
                           setSelectedTeam(tid);
                           if (tid) {
-                            const t = teams.find(x => x.id === tid);
+                            const t = teams.find(x => String(x.id) === String(tid));
                             if (t) {
+                              console.log('Select Team Change:', t);
                               // teams_user has driver_user_id (users.id) and helper_user_id (users.id)
                               // But driver dropdown expects drivers.id, so we need to convert
                               if (t.driver_user_id) {
                                 // Find the driver record that corresponds to this user_id
-                                const driver = drivers.find(d => d.user_id === t.driver_user_id);
+                                console.log('Looking for driver with user_id:', t.driver_user_id);
+                                const driver = drivers.find(d => String(d.user_id) === String(t.driver_user_id));
                                 if (driver) {
-                                  setSelectedDriver(driver.id);
+                                  console.log('Found Driver:', driver);
+                                  setSelectedDriver(String(driver.id));
                                 } else {
                                   console.warn('Driver not found for user_id:', t.driver_user_id);
                                 }
                               }
                               // Helper uses user.id directly (no conversion needed)
-                              if (t.helper_user_id) setSelectedHelper(t.helper_user_id);
+                              if (t.helper_user_id) setSelectedHelper(String(t.helper_user_id));
                             }
                           } else {
                             setSelectedHelper('');
