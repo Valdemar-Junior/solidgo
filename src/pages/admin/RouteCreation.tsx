@@ -278,8 +278,10 @@ function RouteCreationContent() {
           driver_id: editRouteDriver || null,
           helper_id: editRouteHelper || null,
           vehicle_id: editRouteVehicle || null,
-          conferente_id: editRouteConferente || null,
-          conferente: conferentes.find(c => c.id === editRouteConferente)?.name || null
+          conferente_id: /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(editRouteConferente) ? editRouteConferente : null,
+          conferente: /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(editRouteConferente)
+            ? (conferentes.find(c => c.id === editRouteConferente)?.name || null)
+            : (editRouteConferente || null)
         })
         .eq('id', selectedRoute.id);
       if (error) throw error;
