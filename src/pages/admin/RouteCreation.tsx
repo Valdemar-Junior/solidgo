@@ -3482,12 +3482,9 @@ function RouteCreationContent() {
                       </h2>
                     )}
                   </div>
-                  {!isEditingRoute && (
+                  {!isEditingRoute && String(selectedRoute.name || '').startsWith('RETIRADA') && (
                     <p className="text-sm text-gray-500 mt-1">
-                      {String(selectedRoute.name || '').startsWith('RETIRADA')
-                        ? `Responsável: ${selectedRoute.conferente || 'Não informado'}`
-                        : `Motorista: ${(selectedRoute.driver as any)?.user?.name || selectedRoute.driver?.name || 'Sem motorista'}`
-                      }
+                      {`Responsável: ${selectedRoute.conferente || 'Não informado'}`}
                     </p>
                   )}
                 </div>
