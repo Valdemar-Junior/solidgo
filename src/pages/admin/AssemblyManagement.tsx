@@ -470,6 +470,8 @@ function AssemblyManagementContent() {
           order:order_id!inner (id, order_id_erp, customer_name, phone, address_json, raw_json, data_venda, previsao_entrega, observacoes_publicas, observacoes_internas, status),
           installer:installer_id (id, name)
         `)
+        .is('assembly_route_id', null)
+        .eq('status', 'pending');
 
       // Trace removed
 
@@ -654,7 +656,7 @@ function AssemblyManagementContent() {
       const selectedOrderIds = Array.from(selectedOrders);
       const productsForRoute = assemblyPending.filter(ap =>
         selectedOrderIds.includes(String(ap.order_id)) &&
-        (!ap.assembly_route_id || String(ap.order?.order_id_erp) === '117875') &&
+        !ap.assembly_route_id &&
         ap.status === 'pending'
       );
 
@@ -1092,11 +1094,7 @@ function AssemblyManagementContent() {
     const grouped: Record<string, AssemblyProductWithDetails[]> = {};
 
     assemblyPending.forEach(ap => {
-      // DEBUG: Force show 117875 even if it has route_id, to inspect it
-      const isDebugTarget = String(ap.order?.order_id_erp) === '117875';
-      if (isDebugTarget) console.log('[DEBUG] Grouping 117875. Status:', ap.status, 'RouteID:', ap.assembly_route_id);
-
-      if (ap.status === 'pending' && (!ap.assembly_route_id || isDebugTarget)) {
+      if (ap.status === 'pending' && !ap.assembly_route_id) {
         const orderId = String(ap.order_id);
         if (!grouped[orderId]) grouped[orderId] = [];
         grouped[orderId].push(ap);
