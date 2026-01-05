@@ -396,10 +396,14 @@ function RouteCreationContent() {
 
         const itemsJson = produtos.length > 0 ? produtos.map((p: any) => {
           const explicitFlag = getVal(p.tem_montagem);
-          // Force 'Sim' if keyword is found, otherwise trust explicit flag (or normalized 'Sim')
-          const finalHasAssembly = (explicitFlag === 'Sim' || hasKeywordMontagem) ? 'Sim' : explicitFlag;
+          // Restore checking for keywords or explicit flag
 
-          console.log(`[Manual Import Item Debug] SKU=${p.codigo_produto} FlagOriginal="${explicitFlag}" KeywordFound=${hasKeywordMontagem} -> Final="${finalHasAssembly}"`);
+          // LOGIC: If explicit says yes OR keyword says yes -> Sim.
+          // We can also use p.produto_e_montavel to HELP, but we must NOT filter the item out.
+          // Let's keep it simple and safe: Revert to mixed logic.
+
+          // Old logic + New Field Persistence
+          const finalHasAssembly = (explicitFlag === 'Sim' || hasKeywordMontagem) ? 'Sim' : explicitFlag;
 
           return {
             sku: getVal(p.codigo_produto),
@@ -414,6 +418,7 @@ function RouteCreationContent() {
             price: Number(p.valor_unitario_real ?? p.valor_unitario ?? 0),
             location: getVal(p.local_estocagem),
             has_assembly: finalHasAssembly,
+            produto_e_montavel: getVal(p.produto_e_montavel), // Mantendo o mapeamento
             labels: Array.isArray(p.etiquetas) ? p.etiquetas : [],
             department: getVal(p.departamento),
             brand: getVal(p.marca),

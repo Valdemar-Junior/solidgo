@@ -207,6 +207,7 @@ export default function OrdersImport() {
               labels: Array.isArray(p.etiquetas) ? p.etiquetas : [],
               department: String(p.departamento ?? ''),
               brand: String(p.marca ?? ''),
+              produto_e_montavel: String(p.produto_e_montavel ?? ''), // Persistindo dado do ERP
             }
           }),
           status: 'pending' as const,

@@ -947,7 +947,13 @@ function AssemblyManagementContent() {
           orderId = existingOrder.id;
         } else {
           // Criar o pedido na tabela orders com status 'delivered' (pula a roteirização de entrega)
-          const itemsJson = produtos.map((p: any) => ({
+          const itemsJson = produtos.filter((p: any) => {
+            // FILTRO ESTRITO: Apenas produtos montáveis são importados no Lançamento Avulso.
+            // Ignora ventiladores, travesseiros, etc.
+            const checkMontavel = String(p.produto_e_montavel || 'Sim').trim().toUpperCase();
+            // Se for explicitamente NÃO, filtra fora. Se for VAZIO ou SIM, mantém.
+            return checkMontavel === 'SIM';
+          }).map((p: any) => ({
             sku: getVal(p.codigo_produto),
             name: getVal(p.nome_produto),
             quantity: Number(p.quantidade_volumes ?? 1),
@@ -959,11 +965,17 @@ function AssemblyManagementContent() {
             total_price: Number(p.valor_total_real ?? p.valor_total_item ?? 0),
             price: Number(p.valor_unitario_real ?? p.valor_unitario ?? 0),
             location: getVal(p.local_estocagem),
-            has_assembly: 'SIM', // Forçar montagem para importação avulsa
+            has_assembly: 'Sim', // Forçar montagem para importação avulsa de produto montável
+            produto_e_montavel: getVal(p.produto_e_montavel), // Persistir o dado original
             labels: Array.isArray(p.etiquetas) ? p.etiquetas : [],
             department: getVal(p.departamento),
             brand: getVal(p.marca),
           }));
+
+          // Se itemsJson estiver vazio após filtro, o que acontece? 
+          // O insert abaixo vai criar um pedido sem itens no JSON. 
+          // Depois o loop de criação de assembly_products não vai criar nada se baseando nesse JSON?
+          // Precisamos verificar o loop de productsInsert depois.
 
           const orderRecord = {
             order_id_erp: erpId,
@@ -1020,7 +1032,11 @@ function AssemblyManagementContent() {
           complement: getVal(o.destinatario_complemento)
         };
 
-        const assemblyProducts = produtos.map((p: any) => ({
+        const assemblyProducts = produtos.filter((p: any) => {
+          // Apply strict filter again for insertion into assembly_products table
+          const checkMontavel = String(p.produto_e_montavel || 'Sim').trim().toUpperCase();
+          return checkMontavel === 'SIM';
+        }).map((p: any) => ({
           order_id: orderId,
           product_name: getVal(p.nome_produto) || 'Produto sem nome',
           product_sku: getVal(p.codigo_produto) || null,
