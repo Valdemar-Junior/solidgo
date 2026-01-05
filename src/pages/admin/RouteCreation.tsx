@@ -390,23 +390,35 @@ function RouteCreationContent() {
           return '';
         };
 
-        const itemsJson = produtos.length > 0 ? produtos.map((p: any) => ({
-          sku: getVal(p.codigo_produto),
-          name: getVal(p.nome_produto),
-          quantity: Number(p.quantidade_volumes ?? 1),
-          volumes_per_unit: Number(p.quantidade_volumes ?? 1),
-          purchased_quantity: Number(p.quantidade_comprada ?? 1),
-          unit_price_real: Number(p.valor_unitario_real ?? p.valor_unitario ?? 0),
-          total_price_real: Number(p.valor_total_real ?? p.valor_total_item ?? 0),
-          unit_price: Number(p.valor_unitario_real ?? p.valor_unitario ?? 0),
-          total_price: Number(p.valor_total_real ?? p.valor_total_item ?? 0),
-          price: Number(p.valor_unitario_real ?? p.valor_unitario ?? 0),
-          location: getVal(p.local_estocagem),
-          has_assembly: getVal(p.tem_montagem),
-          labels: Array.isArray(p.etiquetas) ? p.etiquetas : [],
-          department: getVal(p.departamento),
-          brand: getVal(p.marca),
-        })) : [];
+        const obsVal = getVal(o.observacoes_internas).toLowerCase();
+        const hasKeywordMontagem = obsVal.includes('*montagem*');
+        console.log(`[Manual Import Debug] Lancamento ${o.numero_lancamento}: Obs="${obsVal}", Montagem=${hasKeywordMontagem}`);
+
+        const itemsJson = produtos.length > 0 ? produtos.map((p: any) => {
+          const explicitFlag = getVal(p.tem_montagem);
+          // Force 'Sim' if keyword is found, otherwise trust explicit flag (or normalized 'Sim')
+          const finalHasAssembly = (explicitFlag === 'Sim' || hasKeywordMontagem) ? 'Sim' : explicitFlag;
+
+          console.log(`[Manual Import Item Debug] SKU=${p.codigo_produto} FlagOriginal="${explicitFlag}" KeywordFound=${hasKeywordMontagem} -> Final="${finalHasAssembly}"`);
+
+          return {
+            sku: getVal(p.codigo_produto),
+            name: getVal(p.nome_produto),
+            quantity: Number(p.quantidade_volumes ?? 1),
+            volumes_per_unit: Number(p.quantidade_volumes ?? 1),
+            purchased_quantity: Number(p.quantidade_comprada ?? 1),
+            unit_price_real: Number(p.valor_unitario_real ?? p.valor_unitario ?? 0),
+            total_price_real: Number(p.valor_total_real ?? p.valor_total_item ?? 0),
+            unit_price: Number(p.valor_unitario_real ?? p.valor_unitario ?? 0),
+            total_price: Number(p.valor_total_real ?? p.valor_total_item ?? 0),
+            price: Number(p.valor_unitario_real ?? p.valor_unitario ?? 0),
+            location: getVal(p.local_estocagem),
+            has_assembly: finalHasAssembly,
+            labels: Array.isArray(p.etiquetas) ? p.etiquetas : [],
+            department: getVal(p.departamento),
+            brand: getVal(p.marca),
+          };
+        }) : [];
 
         // Append type suffix to ensure uniqueness and identification
         // Para vendas, NÃO adiciona sufixo (é o pedido original)
