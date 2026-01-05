@@ -4409,6 +4409,13 @@ function RouteCreationContent() {
                                       const updated = { ...selectedRoute } as any;
                                       updated.route_orders = (updated.route_orders || []).filter((x: any) => x.id !== ro.id);
                                       setSelectedRoute(updated);
+
+                                      // Optimistic update for background list
+                                      setRoutesList(current => current.map(r =>
+                                        r.id === selectedRoute.id
+                                          ? { ...r, route_orders: (r.route_orders || []).filter((orderItem: any) => orderItem.id !== ro.id) }
+                                          : r
+                                      ));
                                       loadData();
                                     } catch {
                                       toast.error('Falha ao remover pedido');
