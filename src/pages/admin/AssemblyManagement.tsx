@@ -2233,7 +2233,7 @@ function AssemblyManagementContent() {
                 </div>
               </div>
 
-              <div className="flex-1 overflow-auto p-6 bg-gray-50">
+              <div className="flex-1 overflow-y-auto p-6 bg-gray-50 max-h-[65vh]">
                 {/* Orders grouped */}
                 <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
                   <table className="min-w-full text-sm">

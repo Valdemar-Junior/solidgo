@@ -284,6 +284,66 @@ export class BackgroundSyncService {
     }
 
     console.log('[BackgroundSync] Route completed and returns released:', route_id);
+
+    // 3. (NEW) Generate Assembly Tasks for DELIVERED orders in this route
+    try {
+      const { data: routeOrders } = await supabase
+        .from('route_orders')
+        .select(`
+          order_id,
+          status,
+          order:order_id (
+            id, order_id_erp, items_json, customer_name, phone, address_json
+          )
+        `)
+        .eq('route_id', route_id)
+        .eq('status', 'delivered');
+
+      if (routeOrders && routeOrders.length > 0) {
+        console.log(`[BackgroundSync] Checking assembly requirements for ${routeOrders.length} delivered orders in route ${route_id}`);
+
+        for (const ro of routeOrders) {
+          const orderData = ro.order as any;
+          if (!orderData || !orderData.items_json) continue;
+
+          const produtosComMontagem = orderData.items_json.filter((item: any) =>
+            ['SIM', 'sim', 'Sim', 'true', '1', 'yes', 'YES', 'Yes'].includes(String(item.has_assembly)) ||
+            item.possui_montagem === true || item.possui_montagem === 'true'
+          );
+
+          if (produtosComMontagem.length > 0) {
+            // Verificar se já existe registro de montagem para este pedido para evitar duplicidade
+            const { count } = await supabase
+              .from('assembly_products')
+              .select('id', { count: 'exact', head: true })
+              .eq('order_id', orderData.id);
+
+            if (!count || count === 0) {
+              const assemblyProducts = produtosComMontagem.map((item: any) => ({
+                order_id: orderData.id,
+                product_name: item.name,
+                product_sku: item.sku,
+                customer_name: orderData.customer_name,
+                customer_phone: orderData.phone,
+                installation_address: orderData.address_json,
+                status: 'pending',
+                created_at: new Date().toISOString(),
+                updated_at: new Date().toISOString()
+              }));
+
+              const { error: insertError } = await supabase.from('assembly_products').insert(assemblyProducts);
+              if (insertError) {
+                console.error('[BackgroundSync] Failed to insert assembly_products:', insertError);
+              } else {
+                console.log(`[BackgroundSync] Created ${assemblyProducts.length} assembly products for order ${orderData.id}`);
+              }
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.error('[BackgroundSync] Error generating assembly tasks for route:', e);
+    }
   }
 
   // Sync assembly route completion (finalização de rota de MONTAGEM)
@@ -391,66 +451,6 @@ export class BackgroundSyncService {
         .update({ status: 'delivered', return_flag: false, last_return_reason: null, last_return_notes: null })
         .eq('id', order_id);
       if (orderError) console.warn('Failed to update order status:', orderError);
-
-      // Criar produtos de montagem se o pedido tiver itens com montagem
-      try {
-        const { data: orderData, error: orderFetchError } = await supabase
-          .from('orders')
-          .select('id, items_json, customer_name, phone, address_json, order_id_erp')
-          .eq('id', order_id)
-          .single();
-
-        if (orderFetchError) {
-          console.warn('[BackgroundSync] Failed to fetch order for assembly:', orderFetchError);
-        } else if (orderData && orderData.items_json) {
-          console.log('[BackgroundSync] Checking assembly for order:', order_id, 'items:', orderData.items_json.length);
-
-          const produtosComMontagem = orderData.items_json.filter((item: any) =>
-            // Check multiple variations of has_assembly value (case variations + boolean)
-            ['SIM', 'sim', 'Sim', 'true', '1', 'yes', 'YES', 'Yes'].includes(String(item.has_assembly)) ||
-            item.possui_montagem === true || item.possui_montagem === 'true'
-          );
-
-          console.log('[BackgroundSync] Products with assembly found:', produtosComMontagem.length);
-
-          if (produtosComMontagem.length > 0) {
-            // Verificar se já existem registros PARA ESTE PEDIDO (order_id é único)
-            const { data: existing } = await supabase
-              .from('assembly_products')
-              .select('id')
-              .eq('order_id', order_id);
-
-            console.log('[BackgroundSync] Existing products for this order:', (existing || []).length);
-
-            // Só insere se NÃO existir nenhum registro para este pedido
-            if (!existing || existing.length === 0) {
-              const assemblyProducts = produtosComMontagem.map((item: any) => ({
-                order_id: orderData.id,
-                product_name: item.name,
-                product_sku: item.sku,
-                customer_name: orderData.customer_name,
-                customer_phone: orderData.phone,
-                installation_address: orderData.address_json,
-                status: 'pending',
-                created_at: new Date().toISOString(),
-                updated_at: new Date().toISOString()
-              }));
-
-              const { error: insertError } = await supabase.from('assembly_products').insert(assemblyProducts);
-
-              if (insertError) {
-                console.error('[BackgroundSync] Failed to insert assembly_products:', insertError);
-              } else {
-                console.log(`[BackgroundSync] Created ${assemblyProducts.length} assembly products for order ${order_id}`);
-              }
-            } else {
-              console.log('[BackgroundSync] Order already has assembly products, skipping creation');
-            }
-          }
-        }
-      } catch (assemblyErr) {
-        console.warn('[BackgroundSync] Failed to create assembly products:', assemblyErr);
-      }
     } else if (action === 'returned') {
       const { error: orderError2 } = await supabase
         .from('orders')
@@ -463,13 +463,6 @@ export class BackgroundSyncService {
         .eq('id', order_id);
       if (orderError2) console.warn('Failed to update order status:', orderError2);
     }
-
-    // Auto-completion check removed in favor of manual finalization
-    /* 
-    try {
-       ...
-    } catch (routeErr) { } 
-    */
 
     await this.logSyncAction('delivery_confirmation', order_id, action, user_id);
   }
@@ -488,7 +481,7 @@ export class BackgroundSyncService {
       .eq('route_id', route_id);
 
     if (error) {
-      throw new Error(`Failed to revert return: ${error.message}`);
+      throw new Error(`Failed to update route order: ${error.message}`);
     }
 
     const { error: orderError } = await supabase
