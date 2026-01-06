@@ -402,7 +402,7 @@ export class DeliverySheetGenerator {
       page.drawLine({ start: { x: margin, y }, end: { x: leftLineEnd, y }, thickness: 1, color: rgb(0, 0, 0) });
       this.drawText(page, 'Ass. do Recebedor', margin, y - 14, { font: helveticaFont, size: 8, color: { r: 0, g: 0, b: 0 } });
       page.drawLine({ start: { x: rightLineStart, y }, end: { x: rightLineEnd, y }, thickness: 1, color: rgb(0, 0, 0) });
-      this.drawText(page, 'Ass. Resp pela Montagem', rightLineStart, y - 14, { font: helveticaFont, size: 8, color: { r: 0, g: 0, b: 0 } });
+      this.drawText(page, isAssemblySheet ? 'Ass. Resp pela Montagem' : 'Ass. Resp. pela Entrega', rightLineStart, y - 14, { font: helveticaFont, size: 8, color: { r: 0, g: 0, b: 0 } });
       y -= 40; // extra bottom breathing before next item or page footer
       page.drawLine({ start: { x: margin, y }, end: { x: width - margin, y }, thickness: 1, color: rgb(0, 0, 0) });
       y -= 20; // extra gap before next item on same page
