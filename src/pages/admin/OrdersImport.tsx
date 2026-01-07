@@ -46,9 +46,9 @@ export default function OrdersImport() {
   }, [showModal]);
 
   const fetchImportedOrders = async () => {
-    const { data, error } = await supabase
+    const { data, count, error } = await supabase
       .from('orders')
-      .select('*')
+      .select('*', { count: 'exact' })
       .order('created_at', { ascending: false })
       .limit(200);
 
@@ -61,7 +61,8 @@ export default function OrdersImport() {
       const today = new Date().toISOString().split('T')[0];
       const todayCount = (data || []).filter((o: any) => o.created_at.startsWith(today)).length;
       const pending = (data || []).filter((o: any) => o.status === 'pending').length;
-      setStats({ total: data?.length || 0, pending, today: todayCount });
+      // Use the true count from DB for total, fall back to current list length if null
+      setStats({ total: count || data?.length || 0, pending, today: todayCount });
     }
   };
 
