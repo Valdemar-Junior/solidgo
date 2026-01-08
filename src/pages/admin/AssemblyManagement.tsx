@@ -169,6 +169,11 @@ function AssemblyManagementContent() {
   const [filterCity, setFilterCity] = useState<string>('');
   const [filterNeighborhood, setFilterNeighborhood] = useState<string>('');
   const [filterDeadline, setFilterDeadline] = useState<'all' | 'within' | 'out'>('all');
+  const [filterOrder, setFilterOrder] = useState<string>('');
+  const [filterClient, setFilterClient] = useState<string>('');
+  const [filterSaleDate, setFilterSaleDate] = useState<string>('');
+  const [filterDeliveryDate, setFilterDeliveryDate] = useState<string>('');
+  const [filterForecastDate, setFilterForecastDate] = useState<string>('');
   const [showFilters, setShowFilters] = useState(true);
 
   // PAGINATION & ROUTE FILTERS STATE
@@ -315,6 +320,14 @@ function AssemblyManagementContent() {
           if ('city' in f) setFilterCity(f.city || '');
           if ('neighborhood' in f) setFilterNeighborhood(f.neighborhood || '');
           if ('deadline' in f) setFilterDeadline(f.deadline || 'all');
+          if ('order' in f) setFilterOrder(f.order || '');
+          if ('client' in f) setFilterClient(f.client || '');
+          // Dates are usually not persisted as they might be transient, but user asked for these filters. 
+          // Persisting might be annoying if they come back next day and don't see anything.
+          // Let's persist them for now as per pattern, but user can clear.
+          if ('saleDate' in f) setFilterSaleDate(f.saleDate || '');
+          if ('deliveryDate' in f) setFilterDeliveryDate(f.deliveryDate || '');
+          if ('forecastDate' in f) setFilterForecastDate(f.forecastDate || '');
         }
       }
     } catch { }
@@ -326,10 +339,15 @@ function AssemblyManagementContent() {
         city: filterCity,
         neighborhood: filterNeighborhood,
         deadline: filterDeadline,
+        order: filterOrder,
+        client: filterClient,
+        saleDate: filterSaleDate,
+        deliveryDate: filterDeliveryDate,
+        forecastDate: filterForecastDate,
       };
       localStorage.setItem('am_filters', JSON.stringify(payload));
     } catch { }
-  }, [filterCity, filterNeighborhood, filterDeadline]);
+  }, [filterCity, filterNeighborhood, filterDeadline, filterOrder, filterClient, filterSaleDate, filterDeliveryDate, filterForecastDate]);
 
   // --- MEMOS (Options) ---
   const cityOptions = useMemo(() => {
@@ -1126,11 +1144,24 @@ function AssemblyManagementContent() {
 
     Object.entries(groupedProducts).forEach(([orderId, products]) => {
       const firstProduct = products[0];
-      const order = firstProduct?.order;
+      const order = firstProduct?.order as any;
       const addr = (order?.address_json || {}) as any;
 
       const city = (addr.city || '').toLowerCase();
       const neighborhood = (addr.neighborhood || '').toLowerCase();
+
+      // New fields extraction
+      const orderNum = String(order?.order_id_erp || '').toLowerCase();
+      const clientName = String(order?.customer_name || '').toLowerCase();
+
+      const saleDateStr = order?.data_venda ? order.data_venda.split('T')[0] : '';
+      const deliveryDateStr = deliveryInfo[orderId] ? deliveryInfo[orderId].split('T')[0] : '';
+
+      let forecastDateStr = '';
+      const prevDate = getPrevisaoEntrega(order);
+      if (prevDate) {
+        forecastDateStr = prevDate.toISOString().split('T')[0];
+      }
 
       const matchCity = filterCity ? city.includes(filterCity.toLowerCase()) : true;
       const matchNeighborhood = filterNeighborhood ? neighborhood.includes(filterNeighborhood.toLowerCase()) : true;
@@ -1138,13 +1169,20 @@ function AssemblyManagementContent() {
       const prazo = getPrazoStatusForOrder(order);
       const matchPrazo = filterDeadline === 'all' ? true : filterDeadline === prazo;
 
-      if (matchCity && matchNeighborhood && matchPrazo) {
+      // New filters logic
+      const matchOrder = filterOrder ? orderNum.includes(filterOrder.toLowerCase()) : true;
+      const matchClient = filterClient ? clientName.includes(filterClient.toLowerCase()) : true;
+      const matchSaleDate = filterSaleDate ? saleDateStr === filterSaleDate : true;
+      const matchDeliveryDate = filterDeliveryDate ? deliveryDateStr === filterDeliveryDate : true;
+      const matchForecastDate = filterForecastDate ? forecastDateStr === filterForecastDate : true;
+
+      if (matchCity && matchNeighborhood && matchPrazo && matchOrder && matchClient && matchSaleDate && matchDeliveryDate && matchForecastDate) {
         filtered[orderId] = products;
       }
     });
 
     return filtered;
-  }, [groupedProducts, filterCity, filterNeighborhood, filterDeadline]);
+  }, [groupedProducts, filterCity, filterNeighborhood, filterDeadline, filterOrder, filterClient, filterSaleDate, filterDeliveryDate, filterForecastDate, deliveryInfo]);
 
   const orderRows = useMemo(() => {
     const rows: Array<{ key: string; orderId: string; dataVenda: string; entrega: string; previsao: string; pedido: string; cliente: string; telefone: string; produto: string; sku: string; obsPublicas: string; obsInternas: string; cidade: string; bairro: string; endereco: string; selected: boolean; wasReturned: boolean; isForaPrazo: boolean; }> = [];
@@ -1273,7 +1311,31 @@ function AssemblyManagementContent() {
             {/* Filters Panel */}
             {showFilters && (
               <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5 animate-in slide-in-from-top-2 duration-200">
-                <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+
+                  {/* Row 1 */}
+                  <div className="space-y-1">
+                    <label className="text-xs font-semibold text-gray-500 uppercase">Pedido</label>
+                    <input
+                      type="text"
+                      value={filterOrder}
+                      onChange={(e) => setFilterOrder(e.target.value)}
+                      placeholder="Nº Pedido"
+                      className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all placeholder:text-gray-400"
+                    />
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-xs font-semibold text-gray-500 uppercase">Cliente</label>
+                    <input
+                      type="text"
+                      value={filterClient}
+                      onChange={(e) => setFilterClient(e.target.value)}
+                      placeholder="Nome do cliente"
+                      className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all placeholder:text-gray-400"
+                    />
+                  </div>
+
                   <div className="space-y-1">
                     <label className="text-xs font-semibold text-gray-500 uppercase">Cidade</label>
                     <select value={filterCity} onChange={(e) => setFilterCity(e.target.value)} className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all">
@@ -1281,6 +1343,7 @@ function AssemblyManagementContent() {
                       {cityOptions.map((c) => (<option key={c} value={c}>{c}</option>))}
                     </select>
                   </div>
+
                   <div className="space-y-1">
                     <label className="text-xs font-semibold text-gray-500 uppercase">Bairro</label>
                     <select value={filterNeighborhood} onChange={(e) => setFilterNeighborhood(e.target.value)} className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all">
@@ -1288,19 +1351,61 @@ function AssemblyManagementContent() {
                       {neighborhoodOptions.map((c) => (<option key={c} value={c}>{c}</option>))}
                     </select>
                   </div>
+
+                  {/* Row 2 */}
                   <div className="space-y-1">
-                    <label className="text-xs font-semibold text-gray-500 uppercase">Prazo</label>
+                    <label className="text-xs font-semibold text-gray-500 uppercase">Data Venda</label>
+                    <input
+                      type="date"
+                      value={filterSaleDate}
+                      onChange={(e) => setFilterSaleDate(e.target.value)}
+                      className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all text-gray-600"
+                    />
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-xs font-semibold text-gray-500 uppercase">Data Entrega</label>
+                    <input
+                      type="date"
+                      value={filterDeliveryDate}
+                      onChange={(e) => setFilterDeliveryDate(e.target.value)}
+                      className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all text-gray-600"
+                    />
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-xs font-semibold text-gray-500 uppercase">Previsão Entrega</label>
+                    <input
+                      type="date"
+                      value={filterForecastDate}
+                      onChange={(e) => setFilterForecastDate(e.target.value)}
+                      className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all text-gray-600"
+                    />
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-xs font-semibold text-gray-500 uppercase">Status Prazo</label>
                     <select value={filterDeadline} onChange={(e) => setFilterDeadline(e.target.value as any)} className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all">
                       <option value="all">Todos</option>
                       <option value="within">Dentro do prazo</option>
                       <option value="out">Fora do prazo</option>
                     </select>
                   </div>
+
                 </div>
 
                 <div className="flex justify-end mt-4 pt-4 border-t border-gray-100">
                   <button
-                    onClick={() => { setFilterCity(''); setFilterNeighborhood(''); setFilterDeadline('all'); }}
+                    onClick={() => {
+                      setFilterCity('');
+                      setFilterNeighborhood('');
+                      setFilterDeadline('all');
+                      setFilterOrder('');
+                      setFilterClient('');
+                      setFilterSaleDate('');
+                      setFilterDeliveryDate('');
+                      setFilterForecastDate('');
+                    }}
                     className="text-sm text-red-600 hover:text-red-800 font-medium flex items-center"
                   >
                     <X className="h-3 w-3 mr-1" /> Limpar filtros
