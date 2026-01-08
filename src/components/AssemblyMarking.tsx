@@ -3,7 +3,7 @@ import { supabase } from '../supabase/client';
 import { OfflineStorage, SyncQueue, NetworkStatus } from '../utils/offline/storage';
 import { backgroundSync } from '../utils/offline/backgroundSync';
 import type { ReturnReason } from '../types/database';
-import { Package, CheckCircle, XCircle, Clock, MapPin } from 'lucide-react';
+import { Package, CheckCircle, XCircle, Clock, MapPin, Search } from 'lucide-react';
 import { buildFullAddress } from '../utils/maps';
 import { toast } from 'sonner';
 
@@ -31,6 +31,7 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
   const [returnReasonByOrder, setReturnReasonByOrder] = useState<Record<string, string>>({});
   const [returnObservationsByOrder, setReturnObservationsByOrder] = useState<Record<string, string>>({});
   const [routeStatus, setRouteStatus] = useState<string>('pending');
+  const [searchQuery, setSearchQuery] = useState('');
 
   useEffect(() => {
     loadRouteItems();
@@ -631,13 +632,27 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
           </div>
         </div>
       )}
-      <div className={`p-3 rounded-lg flex items-center ${isOnline ? 'bg-green-50 text-green-800' : 'bg-yellow-50 text-yellow-800'
-        }`}>
-        <div className={`w-2 h-2 rounded-full mr-2 ${isOnline ? 'bg-green-500' : 'bg-yellow-500'
-          }`}></div>
-        <span className="text-sm font-medium">
-          {isOnline ? 'Online' : 'Modo Offline'}
-        </span>
+      <div className={`p-3 rounded-lg flex items-center justify-between ${isOnline ? 'bg-green-50 text-green-800' : 'bg-yellow-50 text-yellow-800'}`}>
+        <div className="flex items-center">
+          <div className={`w-2 h-2 rounded-full mr-2 ${isOnline ? 'bg-green-500' : 'bg-yellow-500'}`}></div>
+          <span className="text-sm font-medium">
+            {isOnline ? 'Online' : 'Modo Offline'}
+          </span>
+        </div>
+      </div>
+
+      {/* Search Input */}
+      <div className="relative">
+        <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+          <Search className="h-5 w-5 text-gray-400" />
+        </div>
+        <input
+          type="text"
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          className="block w-full pl-10 pr-3 py-3 border border-gray-300 rounded-lg leading-5 bg-white placeholder-gray-500 focus:outline-none focus:placeholder-gray-400 focus:ring-1 focus:ring-blue-500 focus:border-blue-500 sm:text-sm shadow-sm"
+          placeholder="Buscar por pedido ou cliente..."
+        />
       </div>
 
       {/* Lógica de Agrupamento */}
@@ -666,7 +681,23 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
           groups[key].push(item);
         });
 
-        return Object.values(groups).map((groupItems) => {
+        const filteredGroups = Object.values(groups).filter((groupItems) => {
+          if (!searchQuery.trim()) return true;
+          const firstItem = groupItems[0];
+          const query = searchQuery.toLowerCase();
+
+          const orderId = String(firstItem.order?.order_id_erp || firstItem.order_id || '').toLowerCase();
+          const clientName = String(firstItem.customer_name || '').toLowerCase();
+          const products = groupItems.map(i => String(i.product_name || '').toLowerCase()).join(' ');
+
+          return orderId.includes(query) || clientName.includes(query) || products.includes(query);
+        });
+
+        if (filteredGroups.length === 0) {
+          return <div className="text-center py-10 text-gray-500">Nenhum pedido encontrado.</div>;
+        }
+
+        return filteredGroups.map((groupItems) => {
           const firstItem = groupItems[0];
           const groupId = firstItem.order_id || firstItem.id; // Chave de controle para estados locais (motivo retorno)
 
