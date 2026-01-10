@@ -46,6 +46,7 @@ import {
 import { toast } from 'sonner';
 import { DeliverySheetGenerator } from '../../utils/pdf/deliverySheetGenerator';
 import { RouteReportGenerator } from '../../utils/pdf/routeReportGenerator';
+import { SeparationSheetGenerator } from '../../utils/pdf/separationSheetGenerator';
 import { PDFDocument } from 'pdf-lib';
 import { useAuthStore } from '../../stores/authStore';
 import { useRouteDataStore } from '../../stores/routeDataStore';
@@ -3786,6 +3787,41 @@ function RouteCreationContent() {
                             className="flex items-center justify-center px-4 py-2 bg-yellow-50 text-yellow-700 hover:bg-yellow-100 rounded-lg font-medium text-sm transition-colors border border-yellow-200 disabled:opacity-50 disabled:cursor-not-allowed"
                           >
                             <Clock className="h-4 w-4 mr-2" /> Iniciar Rota
+                          </button>
+
+
+                          {/* Print Separation Button */}
+                          <button
+                            onClick={async () => {
+                              if (!selectedRoute) return;
+                              if (!selectedRoute.route_orders || selectedRoute.route_orders.length === 0) {
+                                toast.error('Rota vazia não pode gerar romaneio');
+                                return;
+                              }
+
+                              const toastId = toast.loading('Gerando Romaneio de Separação...');
+                              try {
+                                const orders = selectedRoute.route_orders
+                                  .map((ro: any) => ro.order)
+                                  .filter(Boolean) as Order[];
+
+                                const pdfBytes = await SeparationSheetGenerator.generate({
+                                  route: selectedRoute,
+                                  routeOrders: selectedRoute.route_orders,
+                                  orders,
+                                  generatedAt: new Date().toISOString(),
+                                });
+
+                                DeliverySheetGenerator.openPDFInNewTab(pdfBytes);
+                                toast.success('Romaneio gerado com sucesso!', { id: toastId });
+                              } catch (e) {
+                                console.error(e);
+                                toast.error('Erro ao gerar romaneio', { id: toastId });
+                              }
+                            }}
+                            className="flex items-center justify-center px-4 py-2 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 rounded-lg font-medium text-sm transition-colors border border-indigo-200"
+                          >
+                            <FileText className="h-4 w-4 mr-2" /> Imprimir Separação
                           </button>
 
                           {/* WhatsApp Button (cliente) */}
