@@ -4466,6 +4466,139 @@ function RouteCreationContent() {
                                   <Trash2 className="h-4 w-4" />
                                 </button>
                               )}
+
+                              {/* Individual Separation Print */}
+                              <button
+                                className="p-1 text-orange-600 hover:text-orange-800 hover:bg-orange-50 rounded transition-colors"
+                                title="Imprimir Separação Individual"
+                                onClick={async () => {
+                                  const toastId = toast.loading('Gerando...');
+                                  try {
+                                    const order = ro.order;
+                                    if (!order) throw new Error("Pedido não encontrado");
+
+                                    const pdfBytes = await SeparationSheetGenerator.generate({
+                                      route: selectedRoute,
+                                      routeOrders: [ro],
+                                      orders: [order],
+                                      generatedAt: new Date().toISOString()
+                                    });
+                                    DeliverySheetGenerator.openPDFInNewTab(pdfBytes);
+                                    toast.success('Gerado!', { id: toastId });
+                                  } catch (e) {
+                                    console.error(e);
+                                    toast.error('Erro ao gerar', { id: toastId });
+                                  }
+                                }}
+                              >
+                                <FileText className="h-4 w-4" />
+                              </button>
+
+                              {/* Individual Delivery Romaneio Print */}
+                              <button
+                                className="p-1 text-purple-600 hover:text-purple-800 hover:bg-purple-50 rounded transition-colors"
+                                title="Imprimir Romaneio de Entrega Individual"
+                                onClick={async () => {
+                                  const toastId = toast.loading('Gerando Romaneio de Entrega...');
+                                  try {
+                                    const order = ro.order;
+                                    if (!order) throw new Error("Pedido não encontrado");
+
+                                    // Lógica de mapeamento igual ao romaneio geral, mas para UM pedido
+                                    const address = order.address_json || {};
+                                    const itemsRaw = Array.isArray(order.items_json) ? order.items_json : [];
+                                    const prodLoc = order.raw_json?.produtos_locais || [];
+                                    const norm = (s: any) => String(s ?? '').toLowerCase().trim();
+
+                                    const items = itemsRaw.map((it: any, idx: number) => {
+                                      if (it && !it.location) {
+                                        let loc = '';
+                                        if (Array.isArray(prodLoc) && prodLoc.length > 0) {
+                                          const byCode = prodLoc.find((p: any) => norm(p?.codigo_produto) === norm(it?.sku));
+                                          const byName = prodLoc.find((p: any) => norm(p?.nome_produto) === norm(it?.name));
+                                          if (byCode?.local_estocagem) loc = String(byCode.local_estocagem);
+                                          else if (byName?.local_estocagem) loc = String(byName.local_estocagem);
+                                          else if (prodLoc[idx]?.local_estocagem) loc = String(prodLoc[idx].local_estocagem);
+                                          else if (prodLoc[0]?.local_estocagem) loc = String(prodLoc[0].local_estocagem);
+                                        }
+                                        return { ...it, location: loc };
+                                      }
+                                      return it;
+                                    });
+
+                                    const mappedOrder = {
+                                      id: order.id || ro.order_id,
+                                      order_id_erp: String(order.order_id_erp || ro.order_id || ''),
+                                      customer_name: String(order.customer_name || (order.raw_json?.nome_cliente ?? '')),
+                                      phone: String(order.phone || (order.raw_json?.cliente_celular ?? '')),
+                                      address_json: {
+                                        street: String(address.street || order.raw_json?.destinatario_endereco || ''),
+                                        neighborhood: String(address.neighborhood || order.raw_json?.destinatario_bairro || ''),
+                                        city: String(address.city || order.raw_json?.destinatario_cidade || ''),
+                                        state: String(address.state || ''),
+                                        zip: String(address.zip || order.raw_json?.destinatario_cep || ''),
+                                        complement: address.complement || order.raw_json?.destinatario_complemento || '',
+                                      },
+                                      items_json: items,
+                                      raw_json: order.raw_json || null,
+                                      total: Number(order.total || 0),
+                                      status: order.status || 'imported',
+                                      observations: order.observations || '',
+                                      created_at: order.created_at || new Date().toISOString(),
+                                      updated_at: order.updated_at || new Date().toISOString(),
+                                    } as any;
+
+                                    // Resolve Motorista e Equipe (pode usar os da rota ou vazios)
+                                    let driverObj = selectedRoute.driver || { id: '', user_id: '', cpf: '', active: true, user: { id: '', email: '', name: '', role: 'driver', created_at: '' } };
+                                    let vehicleObj = selectedRoute.vehicle || undefined;
+
+                                    // Tentar resolver nomes da equipe (igual ao geral)
+                                    let teamName = '';
+                                    let helperName = '';
+
+                                    if (selectedRoute.team_id) {
+                                      const t = teams.find((x: any) => String(x.id) === String(selectedRoute.team_id));
+                                      if (t) teamName = t.name;
+                                    }
+                                    if (selectedRoute.helper_id) {
+                                      const h = helpers.find((x: any) => String(x.id) === String(selectedRoute.helper_id));
+                                      if (h) helperName = h.name;
+                                    }
+
+                                    const data = {
+                                      route: {
+                                        id: selectedRoute.id,
+                                        name: selectedRoute.name,
+                                        route_code: (selectedRoute as any).route_code,
+                                        driver_id: selectedRoute.driver_id,
+                                        vehicle_id: selectedRoute.vehicle_id,
+                                        conferente: selectedRoute.conferente,
+                                        observations: selectedRoute.observations,
+                                        status: selectedRoute.status,
+                                        created_at: selectedRoute.created_at,
+                                        updated_at: selectedRoute.updated_at,
+                                      },
+                                      routeOrders: [ro], // Passa só esta routeOrder
+                                      driver: driverObj as any,
+                                      vehicle: vehicleObj,
+                                      orders: [mappedOrder], // Passa só este pedido
+                                      generatedAt: new Date().toISOString(),
+                                      teamName,
+                                      helperName,
+                                    };
+
+                                    const pdfBytes = await DeliverySheetGenerator.generateDeliverySheet(data);
+                                    DeliverySheetGenerator.openPDFInNewTab(pdfBytes);
+                                    toast.success('Romaneio de Entrega gerado!', { id: toastId });
+                                  } catch (e) {
+                                    console.error(e);
+                                    toast.error('Erro ao gerar', { id: toastId });
+                                  }
+                                }}
+                              >
+                                <FileSpreadsheet className="h-4 w-4" />
+                              </button>
+
                               {ro.order?.danfe_base64 ? (
                                 <button
                                   className="p-1 text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded transition-colors"
