@@ -1301,6 +1301,7 @@ function AssemblyManagementContent() {
 
       // Date Range logic helper
       const checkDateRange = (dateStr: string, start: string, end: string) => {
+        if (!start && !end) return true;
         if (!dateStr) return false;
         if (start && dateStr < start) return false;
         if (end && dateStr > end) return false;
