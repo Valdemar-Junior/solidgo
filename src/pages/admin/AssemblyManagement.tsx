@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../../supabase/client';
 import type { AssemblyRoute, AssemblyProductWithDetails, User, Vehicle } from '../../types/database';
+import DatePicker, { registerLocale } from 'react-datepicker';
+import { ptBR } from 'date-fns/locale';
 import {
   ArrowLeft,
   Plus,
@@ -44,6 +46,8 @@ import { AssemblyReportGenerator } from '../../utils/pdf/assemblyReportGenerator
 import { useAssemblyDataStore } from '../../stores/assemblyDataStore';
 import { useAuthStore } from '../../stores/authStore';
 import { saveUserPreference, loadUserPreference, mergeColumnsConfig, type ColumnConfig } from '../../utils/userPreferences';
+
+registerLocale('pt-BR', ptBR);
 
 // --- ERROR BOUNDARY ---
 class AssemblyManagementErrorBoundary extends React.Component<
@@ -176,9 +180,20 @@ function AssemblyManagementContent() {
   const [filterDeadline, setFilterDeadline] = useState<'all' | 'within' | 'out'>('all');
   const [filterOrder, setFilterOrder] = useState<string>('');
   const [filterClient, setFilterClient] = useState<string>('');
-  const [filterSaleDate, setFilterSaleDate] = useState<string>('');
-  const [filterDeliveryDate, setFilterDeliveryDate] = useState<string>('');
-  const [filterForecastDate, setFilterForecastDate] = useState<string>('');
+
+  // Date Range Filters
+  const [filterSaleDateStart, setFilterSaleDateStart] = useState<string>('');
+  const [filterSaleDateEnd, setFilterSaleDateEnd] = useState<string>('');
+
+  const [filterDeliveryDateStart, setFilterDeliveryDateStart] = useState<string>('');
+  const [filterDeliveryDateEnd, setFilterDeliveryDateEnd] = useState<string>('');
+
+  const [filterForecastDateStart, setFilterForecastDateStart] = useState<string>('');
+  const [filterForecastDateEnd, setFilterForecastDateEnd] = useState<string>('');
+
+  const [filterReturned, setFilterReturned] = useState<boolean>(false);
+  const [filterServiceType, setFilterServiceType] = useState<string>('');
+
   const [showFilters, setShowFilters] = useState(true);
 
   // PAGINATION & ROUTE FILTERS STATE
@@ -187,6 +202,9 @@ function AssemblyManagementContent() {
   const [page, setPage] = useState(0);
   const [hasMoreRoutes, setHasMoreRoutes] = useState(true);
   const LIMIT = 50;
+  // Unfiltered routes for the dropdown
+  const [allPendingRoutes, setAllPendingRoutes] = useState<AssemblyRoute[]>([]);
+  const [loadingAllPending, setLoadingAllPending] = useState(false);
 
   // Table Config
   const [columnsConf, setColumnsConf] = useState<Array<{ id: string, label: string, visible: boolean }>>([
@@ -330,9 +348,16 @@ function AssemblyManagementContent() {
           // Dates are usually not persisted as they might be transient, but user asked for these filters. 
           // Persisting might be annoying if they come back next day and don't see anything.
           // Let's persist them for now as per pattern, but user can clear.
-          if ('saleDate' in f) setFilterSaleDate(f.saleDate || '');
-          if ('deliveryDate' in f) setFilterDeliveryDate(f.deliveryDate || '');
-          if ('forecastDate' in f) setFilterForecastDate(f.forecastDate || '');
+          if ('saleDateStart' in f) setFilterSaleDateStart(f.saleDateStart || '');
+          if ('saleDateEnd' in f) setFilterSaleDateEnd(f.saleDateEnd || '');
+
+          if ('deliveryDateStart' in f) setFilterDeliveryDateStart(f.deliveryDateStart || '');
+          if ('deliveryDateEnd' in f) setFilterDeliveryDateEnd(f.deliveryDateEnd || '');
+
+          if ('forecastDateStart' in f) setFilterForecastDateStart(f.forecastDateStart || '');
+          if ('forecastDateEnd' in f) setFilterForecastDateEnd(f.forecastDateEnd || '');
+          if ('returned' in f) setFilterReturned(Boolean(f.returned));
+          if ('serviceType' in f) setFilterServiceType(f.serviceType || '');
         }
       }
     } catch { }
@@ -346,13 +371,18 @@ function AssemblyManagementContent() {
         deadline: filterDeadline,
         order: filterOrder,
         client: filterClient,
-        saleDate: filterSaleDate,
-        deliveryDate: filterDeliveryDate,
-        forecastDate: filterForecastDate,
+        saleDateStart: filterSaleDateStart,
+        saleDateEnd: filterSaleDateEnd,
+        deliveryDateStart: filterDeliveryDateStart,
+        deliveryDateEnd: filterDeliveryDateEnd,
+        forecastDateStart: filterForecastDateStart,
+        forecastDateEnd: filterForecastDateEnd,
+        returned: filterReturned,
+        serviceType: filterServiceType,
       };
       localStorage.setItem('am_filters', JSON.stringify(payload));
     } catch { }
-  }, [filterCity, filterNeighborhood, filterDeadline, filterOrder, filterClient, filterSaleDate, filterDeliveryDate, filterForecastDate]);
+  }, [filterCity, filterNeighborhood, filterDeadline, filterOrder, filterClient, filterSaleDateStart, filterSaleDateEnd, filterDeliveryDateStart, filterDeliveryDateEnd, filterForecastDateStart, filterForecastDateEnd, filterReturned, filterServiceType]);
 
   // --- MEMOS (Options) ---
   const cityOptions = useMemo(() => {
@@ -388,6 +418,25 @@ function AssemblyManagementContent() {
   const parseDateSafe = (input: any): Date | null => {
     if (!input) return null;
     try { const d = new Date(String(input)); return isNaN(d.getTime()) ? null : d; } catch { return null; }
+  };
+
+  // Helper to convert YYYY-MM-DD string to Date object (local time)
+  // We append T12:00:00 to avoid timezone issues shifting the day
+  const stringToDate = (str: string): Date | null => {
+    if (!str) return null;
+    try {
+      const [y, m, d] = str.split('-').map(Number);
+      return new Date(y, m - 1, d);
+    } catch { return null; }
+  };
+
+  // Helper to convert Date object to YYYY-MM-DD string
+  const dateToString = (date: Date | null): string => {
+    if (!date) return '';
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
   };
 
   const getPrevisaoEntrega = (order: any): Date | null => {
@@ -473,6 +522,26 @@ function AssemblyManagementContent() {
     }
   };
 
+  // Fetch ALL pending routes for the dropdown (ignoring page filters)
+  const fetchAllPendingRoutes = async () => {
+    setLoadingAllPending(true);
+    try {
+      const { data, error } = await supabase
+        .from('assembly_routes')
+        .select('*')
+        .eq('status', 'pending')
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+      setAllPendingRoutes(data || []);
+    } catch (err) {
+      console.error('Error fetching all pending routes:', err);
+      toast.error('Erro ao atualizar lista de romaneios');
+    } finally {
+      setLoadingAllPending(false);
+    }
+  };
+
   // --- DATA LOADING ---
   const loadData = async (silent: boolean = true, currentRoutes: any[] = []) => {
     try {
@@ -494,7 +563,7 @@ function AssemblyManagementContent() {
         .from('assembly_products')
         .select(`
           id, order_id, product_name, product_sku, status, assembly_route_id, created_at, updated_at, was_returned,
-          order:order_id!inner (id, order_id_erp, customer_name, phone, address_json, raw_json, data_venda, previsao_entrega, observacoes_publicas, observacoes_internas, status),
+          order:order_id!inner (id, order_id_erp, customer_name, phone, address_json, raw_json, data_venda, previsao_entrega, observacoes_publicas, observacoes_internas, status, service_type),
           installer:installer_id (id, name)
         `)
         .is('assembly_route_id', null)
@@ -514,7 +583,7 @@ function AssemblyManagementContent() {
           const { data: productsR } = await supabase
             .from('assembly_products')
             .select(`
-              id, order_id, product_name, product_sku, status, assembly_route_id, created_at, updated_at, was_returned, completion_date, returned_at,
+              id, order_id, product_name, product_sku, status, assembly_route_id, created_at, updated_at, was_returned, completion_date, returned_at, observations,
               order:order_id (id, order_id_erp, customer_name, phone, address_json, raw_json, items_json, data_venda, previsao_entrega),
               installer:installer_id (id, name)
             `)
@@ -594,6 +663,13 @@ function AssemblyManagementContent() {
     fetchRoutesRef.current = fetchAssemblyRoutes;
     loadDataRef.current = loadData;
   });
+
+  // Fetch all pending routes when modal opens
+  useEffect(() => {
+    if (showCreateModal) {
+      fetchAllPendingRoutes();
+    }
+  }, [showCreateModal]);
 
   useEffect(() => {
     // Realtime Subscription
@@ -1222,17 +1298,42 @@ function AssemblyManagementContent() {
       // New filters logic
       const matchOrder = filterOrder ? orderNum.includes(filterOrder.toLowerCase()) : true;
       const matchClient = filterClient ? clientName.includes(filterClient.toLowerCase()) : true;
-      const matchSaleDate = filterSaleDate ? saleDateStr === filterSaleDate : true;
-      const matchDeliveryDate = filterDeliveryDate ? deliveryDateStr === filterDeliveryDate : true;
-      const matchForecastDate = filterForecastDate ? forecastDateStr === filterForecastDate : true;
 
-      if (matchCity && matchNeighborhood && matchPrazo && matchOrder && matchClient && matchSaleDate && matchDeliveryDate && matchForecastDate) {
+      // Date Range logic helper
+      const checkDateRange = (dateStr: string, start: string, end: string) => {
+        if (!dateStr) return false;
+        if (start && dateStr < start) return false;
+        if (end && dateStr > end) return false;
+        return true;
+      };
+
+      const matchSaleDate = checkDateRange(saleDateStr, filterSaleDateStart, filterSaleDateEnd);
+      const matchDeliveryDate = checkDateRange(deliveryDateStr, filterDeliveryDateStart, filterDeliveryDateEnd);
+      const matchForecastDate = checkDateRange(forecastDateStr, filterForecastDateStart, filterForecastDateEnd);
+
+      const isReturnedFlag = Boolean(order?.return_flag) || String(order?.status) === 'returned';
+      const matchReturned = filterReturned ? isReturnedFlag : true;
+
+      // Service Type Filter
+      let matchServiceType = true;
+      if (filterServiceType) {
+        const st = (order?.service_type || 'normal').toLowerCase();
+        if (filterServiceType === 'normal') {
+          // If filtering for 'normal', exclude explicit 'troca' or 'assistencia' if they exist, or allow if null/normal
+          if (order?.service_type && order.service_type !== 'normal') matchServiceType = false;
+        } else {
+          // data matches exactly
+          if (st !== filterServiceType) matchServiceType = false;
+        }
+      }
+
+      if (matchCity && matchNeighborhood && matchPrazo && matchOrder && matchClient && matchSaleDate && matchDeliveryDate && matchForecastDate && matchReturned && matchServiceType) {
         filtered[orderId] = products;
       }
     });
 
     return filtered;
-  }, [groupedProducts, filterCity, filterNeighborhood, filterDeadline, filterOrder, filterClient, filterSaleDate, filterDeliveryDate, filterForecastDate, deliveryInfo]);
+  }, [groupedProducts, filterCity, filterNeighborhood, filterDeadline, filterOrder, filterClient, filterSaleDateStart, filterSaleDateEnd, filterDeliveryDateStart, filterDeliveryDateEnd, filterForecastDateStart, filterForecastDateEnd, filterReturned, filterServiceType, deliveryInfo]);
 
   const orderRows = useMemo(() => {
     const rows: Array<{ key: string; orderId: string; dataVenda: string; entrega: string; previsao: string; pedido: string; cliente: string; telefone: string; produto: string; sku: string; obsPublicas: string; obsInternas: string; cidade: string; bairro: string; endereco: string; selected: boolean; wasReturned: boolean; isForaPrazo: boolean; }> = [];
@@ -1404,33 +1505,69 @@ function AssemblyManagementContent() {
 
                   {/* Row 2 */}
                   <div className="space-y-1">
-                    <label className="text-xs font-semibold text-gray-500 uppercase">Data Venda</label>
-                    <input
-                      type="date"
-                      value={filterSaleDate}
-                      onChange={(e) => setFilterSaleDate(e.target.value)}
-                      className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all text-gray-600"
-                    />
+                    <label className="text-xs font-semibold text-gray-500 uppercase">Data Venda (Período)</label>
+                    <div className="w-full">
+                      <DatePicker
+                        selectsRange={true}
+                        startDate={stringToDate(filterSaleDateStart)}
+                        endDate={stringToDate(filterSaleDateEnd)}
+                        onChange={(update) => {
+                          const [start, end] = update;
+                          setFilterSaleDateStart(dateToString(start));
+                          setFilterSaleDateEnd(dateToString(end));
+                        }}
+                        isClearable={true}
+                        locale="pt-BR"
+                        dateFormat="dd/MM/yyyy"
+                        placeholderText="Selecione o período"
+                        className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all text-gray-600 text-sm"
+                        wrapperClassName="w-full"
+                      />
+                    </div>
                   </div>
 
                   <div className="space-y-1">
-                    <label className="text-xs font-semibold text-gray-500 uppercase">Data Entrega</label>
-                    <input
-                      type="date"
-                      value={filterDeliveryDate}
-                      onChange={(e) => setFilterDeliveryDate(e.target.value)}
-                      className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all text-gray-600"
-                    />
+                    <label className="text-xs font-semibold text-gray-500 uppercase">Data Entrega (Período)</label>
+                    <div className="w-full">
+                      <DatePicker
+                        selectsRange={true}
+                        startDate={stringToDate(filterDeliveryDateStart)}
+                        endDate={stringToDate(filterDeliveryDateEnd)}
+                        onChange={(update) => {
+                          const [start, end] = update;
+                          setFilterDeliveryDateStart(dateToString(start));
+                          setFilterDeliveryDateEnd(dateToString(end));
+                        }}
+                        isClearable={true}
+                        locale="pt-BR"
+                        dateFormat="dd/MM/yyyy"
+                        placeholderText="Selecione o período"
+                        className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all text-gray-600 text-sm"
+                        wrapperClassName="w-full"
+                      />
+                    </div>
                   </div>
 
                   <div className="space-y-1">
-                    <label className="text-xs font-semibold text-gray-500 uppercase">Previsão Entrega</label>
-                    <input
-                      type="date"
-                      value={filterForecastDate}
-                      onChange={(e) => setFilterForecastDate(e.target.value)}
-                      className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all text-gray-600"
-                    />
+                    <label className="text-xs font-semibold text-gray-500 uppercase">Previsão Entrega (Período)</label>
+                    <div className="w-full">
+                      <DatePicker
+                        selectsRange={true}
+                        startDate={stringToDate(filterForecastDateStart)}
+                        endDate={stringToDate(filterForecastDateEnd)}
+                        onChange={(update) => {
+                          const [start, end] = update;
+                          setFilterForecastDateStart(dateToString(start));
+                          setFilterForecastDateEnd(dateToString(end));
+                        }}
+                        isClearable={true}
+                        locale="pt-BR"
+                        dateFormat="dd/MM/yyyy"
+                        placeholderText="Selecione o período"
+                        className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all text-gray-600 text-sm"
+                        wrapperClassName="w-full"
+                      />
+                    </div>
                   </div>
 
                   <div className="space-y-1">
@@ -1442,6 +1579,26 @@ function AssemblyManagementContent() {
                     </select>
                   </div>
 
+
+
+                  <div className="space-y-1">
+                    <label className="text-xs font-semibold text-gray-500 uppercase">Retorno</label>
+                    <div className="flex items-center gap-2 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg">
+                      <input id="freturned" type="checkbox" className="h-4 w-4" checked={filterReturned} onChange={(e) => setFilterReturned(e.target.checked)} />
+                      <label htmlFor="freturned" className="text-sm text-gray-700">Apenas pedidos retornados</label>
+                    </div>
+                  </div>
+
+
+                  <div className="space-y-1">
+                    <label className="text-xs font-semibold text-gray-500 uppercase">Tipo Serviço</label>
+                    <select value={filterServiceType} onChange={(e) => setFilterServiceType(e.target.value)} className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all">
+                      <option value="">Todos</option>
+                      <option value="normal">Venda Normal</option>
+                      <option value="troca">Troca</option>
+                      <option value="assistencia">Assistência</option>
+                    </select>
+                  </div>
                 </div>
 
                 <div className="flex justify-end mt-4 pt-4 border-t border-gray-100">
@@ -1452,9 +1609,14 @@ function AssemblyManagementContent() {
                       setFilterDeadline('all');
                       setFilterOrder('');
                       setFilterClient('');
-                      setFilterSaleDate('');
-                      setFilterDeliveryDate('');
-                      setFilterForecastDate('');
+                      setFilterSaleDateStart('');
+                      setFilterSaleDateEnd('');
+                      setFilterDeliveryDateStart('');
+                      setFilterDeliveryDateEnd('');
+                      setFilterForecastDateStart('');
+                      setFilterForecastDateEnd('');
+                      setFilterReturned(false);
+                      setFilterServiceType('');
                     }}
                     className="text-sm text-red-600 hover:text-red-800 font-medium flex items-center"
                   >
@@ -1856,781 +2018,805 @@ function AssemblyManagementContent() {
       {/* --- MODALS --- */}
 
       {/* Create Route Modal */}
-      {showCreateModal && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden">
-            <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50 flex-shrink-0">
-              <h3 className="text-lg font-bold text-gray-900">Novo Romaneio de Montagem</h3>
-              <button onClick={() => { try { localStorage.setItem('am_showCreateModal', '0'); } catch { } setShowCreateModal(false); }} className="text-gray-400 hover:text-gray-600"><X className="h-5 w-5" /></button>
-            </div>
-            <div className="p-6 space-y-6 overflow-y-auto flex-1">
-              {/* Select existing route or create new */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Adicionar a romaneio existente?</label>
-                <select
-                  value={selectedExistingRoute}
-                  onChange={(e) => setSelectedExistingRoute(e.target.value)}
-                  className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all"
-                >
-                  <option value="">Não, criar novo romaneio</option>
-                  {assemblyRoutes
-                    .filter(r => r.status === 'pending')
-                    .map(r => (
-                      <option key={r.id} value={r.id}>{r.name}</option>
-                    ))
-                  }
-                </select>
+      {
+        showCreateModal && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden">
+              <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50 flex-shrink-0">
+                <h3 className="text-lg font-bold text-gray-900">Novo Romaneio de Montagem</h3>
+                <button onClick={() => { try { localStorage.setItem('am_showCreateModal', '0'); } catch { } setShowCreateModal(false); }} className="text-gray-400 hover:text-gray-600"><X className="h-5 w-5" /></button>
               </div>
-
-              {/* Only show name field if creating new route */}
-              {!selectedExistingRoute && (
+              <div className="p-6 space-y-6 overflow-y-auto flex-1">
+                {/* Select existing route or create new */}
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Nome do Romaneio <span className="text-red-500">*</span></label>
-                  <input
-                    type="text"
-                    value={routeName}
-                    onChange={(e) => setRouteName(e.target.value)}
-                    placeholder="Ex: Montagem Zona Sul - Manhã"
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Adicionar a romaneio existente?</label>
+                  <select
+                    value={selectedExistingRoute}
+                    onChange={(e) => setSelectedExistingRoute(e.target.value)}
                     className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all"
-                  />
-                </div>
-              )}
-
-              {/* Only show these fields if creating new route */}
-              {!selectedExistingRoute && (
-                <>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">Montador <span className="text-red-500">*</span></label>
-                      <select
-                        value={selectedMontador}
-                        onChange={(e) => setSelectedMontador(e.target.value)}
-                        className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all"
-                      >
-                        <option value="">Selecione...</option>
-                        {montadores.map(m => <option key={m.id} value={m.id}>{m.name || m.email}</option>)}
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">Veículo <span className="text-red-500">*</span></label>
-                      <select
-                        value={selectedVehicle}
-                        onChange={(e) => setSelectedVehicle(e.target.value)}
-                        className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all"
-                      >
-                        <option value="">Selecione...</option>
-                        {vehicles.map(v => <option key={v.id} value={v.id}>{v.plate} - {v.model}</option>)}
-                      </select>
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">Prazo de Conclusão <span className="text-red-500">*</span></label>
-                    <input
-                      type="date"
-                      value={deadline}
-                      onChange={(e) => setDeadline(e.target.value)}
-                      className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">Observações</label>
-                    <textarea
-                      value={observations}
-                      onChange={(e) => setObservations(e.target.value)}
-                      rows={3}
-                      placeholder="Observações sobre a montagem..."
-                      className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all"
-                    />
-                  </div>
-                </>
-              )}
-
-              <div className="bg-blue-50 p-4 rounded-xl flex items-center justify-between">
-                <span className="text-blue-900 font-medium">Pedidos Selecionados</span>
-                <span className="bg-blue-200 text-blue-800 px-3 py-1 rounded-lg font-bold">{selectedOrders.size}</span>
-              </div>
-            </div>
-            <div className="px-6 py-4 border-t border-gray-100 bg-gray-50 flex justify-end gap-3 flex-shrink-0">
-              <button onClick={() => setShowCreateModal(false)} className="px-6 py-2.5 rounded-xl border border-gray-300 text-gray-700 font-medium hover:bg-white transition-colors">Cancelar</button>
-              <button
-                onClick={() => createAssemblyRoute()}
-                disabled={saving || (selectedOrders.size === 0) || (!selectedExistingRoute && !routeName.trim())}
-                className="px-6 py-2.5 rounded-xl bg-blue-600 text-white font-bold hover:bg-blue-700 shadow-lg shadow-blue-200 disabled:opacity-50 disabled:shadow-none transition-all transform active:scale-95"
-              >
-                {saving ? 'Salvando...' : (selectedExistingRoute ? 'Adicionar à Rota' : 'Confirmar Romaneio')}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Columns Modal */}
-      {showColumnsModal && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-md overflow-hidden">
-            <div className="px-5 py-4 border-b border-gray-100 flex justify-between items-center">
-              <h3 className="font-bold text-gray-900">Configurar Colunas</h3>
-              <button onClick={() => setShowColumnsModal(false)}><X className="h-5 w-5 text-gray-400" /></button>
-            </div>
-            <div className="p-2 overflow-y-auto max-h-[60vh]">
-              {columnsConf.map((c, idx) => (
-                <div key={c.id} className="flex items-center justify-between p-3 hover:bg-gray-50 rounded-lg group">
-                  <label className="flex items-center gap-3 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={c.visible}
-                      onChange={() => {
-                        const newCols = [...columnsConf];
-                        newCols[idx].visible = !newCols[idx].visible;
-                        setColumnsConf(newCols);
-                      }}
-                      className="h-4 w-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
-                    />
-                    <span className="text-gray-700">{c.label}</span>
-                  </label>
-                  <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <button
-                      onClick={() => {
-                        if (idx === 0) return;
-                        const newCols = [...columnsConf];
-                        [newCols[idx - 1], newCols[idx]] = [newCols[idx], newCols[idx - 1]];
-                        setColumnsConf(newCols);
-                      }}
-                      className="p-1 hover:bg-gray-200 rounded"
-                    ><ChevronUp className="h-4 w-4" /></button>
-                    <button
-                      onClick={() => {
-                        if (idx === columnsConf.length - 1) return;
-                        const newCols = [...columnsConf];
-                        [newCols[idx + 1], newCols[idx]] = [newCols[idx], newCols[idx + 1]];
-                        setColumnsConf(newCols);
-                      }}
-                      className="p-1 hover:bg-gray-200 rounded"
-                    ><ChevronDown className="h-4 w-4" /></button>
-                  </div>
-                </div>
-              ))}
-            </div>
-            <div className="p-4 border-t border-gray-100 bg-gray-50 text-right">
-              <button
-                onClick={async () => {
-                  if (authUser?.id) {
-                    const success = await saveUserPreference(authUser.id, 'am_columns_conf', columnsConf);
-                    if (success) {
-                      toast.success('Configuração de colunas salva com sucesso!');
-                    } else {
-                      toast.error('Erro ao salvar configuração. Tente novamente.');
+                  >
+                    <option value="">Não, criar novo romaneio</option>
+                    {allPendingRoutes
+                      .map(r => (
+                        <option key={r.id} value={r.id}>{r.name}</option>
+                      ))
                     }
-                  } else {
-                    // Fallback to localStorage if not authenticated
-                    localStorage.setItem('am_columns_conf', JSON.stringify(columnsConf));
-                    toast.success('Configuração salva localmente.');
-                  }
-                  setShowColumnsModal(false);
-                }}
-                className="px-4 py-2 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700"
-              >
-                Salvar Configuração
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+                  </select>
+                </div>
 
-      {/* Route Details Modal */}
-      {showRouteModal && selectedRoute && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in zoom-in-95 duration-200">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-6xl max-h-[90vh] flex flex-col overflow-hidden">
-            <div className="px-6 py-4 border-b border-gray-100 bg-gray-50">
-              {/* Header with Edit Toggle */}
-              <div className="flex justify-between items-start">
-                {!isEditingRoute ? (
+                {/* Only show name field if creating new route */}
+                {!selectedExistingRoute && (
                   <div>
-                    <h2 className="text-xl font-bold text-gray-900">
-                      {selectedRoute.name}
-                      {(selectedRoute as any).route_code && (
-                        <span className="ml-2 px-2 py-0.5 bg-gray-100 text-gray-600 text-sm font-mono rounded">
-                          {(selectedRoute as any).route_code}
-                        </span>
-                      )}
-                    </h2>
-                    <p className="text-sm text-gray-500">
-                      {selectedRoute.status === 'pending' ? 'Pendente' : selectedRoute.status === 'in_progress' ? 'Pendente' : 'Concluído'}
-                      • {formatDate(selectedRoute.created_at)}
-                      {(selectedRoute as any).assembler_id && (() => {
-                        const m = montadores.find(m => m.id === (selectedRoute as any).assembler_id);
-                        return m ? ` • Montador: ${m.name || m.email}` : '';
-                      })()}
-                      {(selectedRoute as any).vehicle_id && (() => {
-                        const v = vehicles.find(v => v.id === (selectedRoute as any).vehicle_id);
-                        return v ? ` • ${v.model} (${v.plate})` : '';
-                      })()}
-                    </p>
-                    {selectedRoute.observations && (
-                      <p className="text-sm text-gray-500 mt-1">Obs: {selectedRoute.observations}</p>
-                    )}
-                  </div>
-                ) : (
-                  <div className="flex-1 mr-4">
-                    <h3 className="text-lg font-bold text-gray-900 mb-3">Editar Romaneio</h3>
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                      <div>
-                        <label className="block text-xs font-medium text-gray-700 mb-1">Nome do Romaneio *</label>
-                        <input
-                          type="text"
-                          value={editRouteName}
-                          onChange={(e) => setEditRouteName(e.target.value)}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                          placeholder="Nome do romaneio"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-medium text-gray-700 mb-1">Montador *</label>
-                        <select
-                          value={editRouteMontador}
-                          onChange={(e) => setEditRouteMontador(e.target.value)}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                        >
-                          <option value="">Selecione um montador</option>
-                          {montadores.map(m => (
-                            <option key={m.id} value={m.id}>{m.name || m.email}</option>
-                          ))}
-                        </select>
-                      </div>
-                      <div>
-                        <label className="block text-xs font-medium text-gray-700 mb-1">Veículo</label>
-                        <select
-                          value={editRouteVehicle}
-                          onChange={(e) => setEditRouteVehicle(e.target.value)}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                        >
-                          <option value="">Selecione um veículo</option>
-                          {vehicles.map(v => (
-                            <option key={v.id} value={v.id}>{v.model} ({v.plate})</option>
-                          ))}
-                        </select>
-                      </div>
-                      <div>
-                        <label className="block text-xs font-medium text-gray-700 mb-1">Prazo</label>
-                        <input
-                          type="date"
-                          value={editRouteDeadline}
-                          onChange={(e) => setEditRouteDeadline(e.target.value)}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                        />
-                      </div>
-                      <div className="md:col-span-2">
-                        <label className="block text-xs font-medium text-gray-700 mb-1">Observações</label>
-                        <input
-                          type="text"
-                          value={editRouteObservations}
-                          onChange={(e) => setEditRouteObservations(e.target.value)}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                          placeholder="Observações sobre a rota"
-                        />
-                      </div>
-                    </div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Nome do Romaneio <span className="text-red-500">*</span></label>
+                    <input
+                      type="text"
+                      value={routeName}
+                      onChange={(e) => setRouteName(e.target.value)}
+                      placeholder="Ex: Montagem Zona Sul - Manhã"
+                      className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all"
+                    />
                   </div>
                 )}
-                <div className="flex items-center gap-2 flex-shrink-0">
-                  {/* Edit / Save / Cancel buttons */}
-                  {!isEditingRoute ? (
-                    <button
-                      onClick={() => {
-                        const r = selectedRoute as any;
-                        setEditRouteName(r.name || '');
-                        setEditRouteMontador(r.assembler_id || '');
-                        setEditRouteVehicle(r.vehicle_id || '');
-                        setEditRouteDeadline(r.deadline ? r.deadline.split('T')[0] : '');
-                        setEditRouteObservations(r.observations || '');
-                        setIsEditingRoute(true);
-                      }}
-                      disabled={(selectedRoute as any).status === 'completed'}
-                      className="inline-flex items-center px-3 py-2 border border-yellow-200 shadow-sm text-sm font-medium rounded-lg text-yellow-700 bg-yellow-50 hover:bg-yellow-100 disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      <Pencil className="h-4 w-4 mr-2" /> Editar
-                    </button>
-                  ) : (
-                    <>
-                      <button
-                        onClick={() => saveRouteEdits()}
-                        disabled={savingEdit}
-                        className="inline-flex items-center px-3 py-2 border border-green-200 shadow-sm text-sm font-medium rounded-lg text-green-700 bg-green-50 hover:bg-green-100 disabled:opacity-50"
-                      >
-                        <Save className="h-4 w-4 mr-2" /> {savingEdit ? 'Salvando...' : 'Salvar'}
-                      </button>
-                      <button
-                        onClick={() => setIsEditingRoute(false)}
-                        disabled={savingEdit}
-                        className="inline-flex items-center px-3 py-2 border border-gray-200 shadow-sm text-sm font-medium rounded-lg text-gray-700 bg-gray-50 hover:bg-gray-100 disabled:opacity-50"
-                      >
-                        Cancelar
-                      </button>
-                    </>
-                  )}
-                  <button
-                    onClick={async () => {
-                      try {
-                        if (!selectedRoute) return;
-                        const route = selectedRoute as any;
-                        const products = assemblyInRoutes.filter(ap => ap.assembly_route_id === route.id);
-                        const orders = products.map(p => p.order).filter(Boolean) as any[];
-                        const routeOrders = products.map((p, idx) => ({ id: String(p.id), route_id: String(route.id), order_id: String(p.order_id), sequence: idx + 1, status: 'pending', created_at: route.created_at, updated_at: route.updated_at })) as any[];
-                        const routeData: any = { id: route.id, name: route.name, driver_id: '', vehicle_id: '', conferente: '', observations: route.observations, status: route.status as any, created_at: route.created_at, updated_at: route.updated_at, route_code: (route as any).route_code };
-                        const m = montadores.find(m => m.id === (route as any).assembler_id);
-                        const v = vehicles.find(v => v.id === (route as any).vehicle_id);
-                        const data = { route: routeData, routeOrders, driver: { id: '', user_id: '', cpf: '', active: true, name: '—', user: { id: '', email: '', name: '—', role: 'driver', created_at: new Date().toISOString() } } as any, vehicle: undefined, orders: orders as any, generatedAt: new Date().toISOString(), assemblyInstallerName: m?.name || m?.email || '—', assemblyVehicleModel: v?.model || '', assemblyVehiclePlate: v?.plate || '' };
-                        const pdfBytes = await DeliverySheetGenerator.generateDeliverySheet(data, 'Romaneio de Montagem');
-                        DeliverySheetGenerator.openPDFInNewTab(pdfBytes);
-                      } catch (e) {
-                        console.error(e);
-                        toast.error('Erro ao gerar PDF do romaneio');
-                      }
-                    }}
-                    className="inline-flex items-center px-3 py-2 border border-blue-200 shadow-sm text-sm font-medium rounded-lg text-blue-700 bg-blue-50 hover:bg-blue-100"
-                  >
-                    <FileText className="h-4 w-4 mr-2" /> PDF
-                  </button>
-                  <button
-                    onClick={async () => {
-                      if (!selectedRoute) return;
-                      setWaSending(true);
-                      try {
-                        const route = selectedRoute as any;
-                        const produtosDaRota = assemblyInRoutes.filter(p => p.assembly_route_id === route.id);
-                        const mapByOrder = new Map<string, any>();
-                        produtosDaRota.forEach((p: any) => {
-                          const o = p.order || {};
-                          if (!o.id) return;
-                          if (!mapByOrder.has(o.id)) {
-                            const addr = o.address_json || {};
-                            const num = addr.number ? `, ${addr.number}` : '';
-                            const endereco_completo = `${addr.street || ''}${num} - ${addr.neighborhood || ''}${addr.city ? ', ' + addr.city : ''}`.trim();
-                            mapByOrder.set(o.id, {
-                              lancamento_venda: Number(o.order_id_erp || o.id || 0),
-                              cliente_nome: String(o.customer_name || ''),
-                              cliente_celular: String(o.phone || o.raw_json?.cliente_celular || ''),
-                              endereco_completo,
-                              produtos: [] as string[],
-                            });
-                          }
-                          const entry = mapByOrder.get(o.id);
-                          const sku = String(p.product_sku || '');
-                          const nome = String(p.product_name || '');
-                          entry.produtos.push(`${sku} - ${nome}`);
-                        });
-                        const contatos = Array.from(mapByOrder.values()).map((c: any) => ({
-                          lancamento_venda: c.lancamento_venda,
-                          cliente_nome: c.cliente_nome,
-                          cliente_celular: c.cliente_celular,
-                          endereco_completo: c.endereco_completo,
-                          produtos: (c.produtos || []).join(', '),
-                        }));
-                        if (contatos.length === 0) { toast.error('Nenhum pedido para envio'); setWaSending(false); return; }
-                        let webhookUrl = import.meta.env.VITE_WEBHOOK_WHATSAPP_URL as string | undefined;
-                        if (!webhookUrl) {
-                          try {
-                            const { data } = await supabase.from('webhook_settings').select('url').eq('key', 'envia_mensagem').eq('active', true).single();
-                            webhookUrl = data?.url || 'https://n8n.lojaodosmoveis.shop/webhook-test/envia_mensagem';
-                          } catch {
-                            webhookUrl = 'https://n8n.lojaodosmoveis.shop/webhook-test/envia_mensagem';
-                          }
-                        }
-                        const payload = { contatos, tipo_de_romaneio: 'montagem' } as any;
-                        try {
-                          await fetch(String(webhookUrl), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-                        } catch {
-                          const fd = new FormData();
-                          for (const c of contatos) fd.append('contatos[]', JSON.stringify(c));
-                          fd.append('tipo_de_romaneio', 'montagem');
-                          await fetch(String(webhookUrl), { method: 'POST', body: fd });
-                        }
-                        toast.success('WhatsApp solicitado');
-                      } catch (e) {
-                        console.error(e);
-                        toast.error('Erro ao enviar WhatsApp');
-                      } finally {
-                        setWaSending(false);
-                      }
-                    }}
-                    disabled={waSending || (selectedRoute as any).status === 'completed'}
-                    className="inline-flex items-center px-3 py-2 border border-green-200 shadow-sm text-sm font-medium rounded-lg text-green-700 bg-green-50 hover:bg-green-100 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    Enviar cliente
-                  </button>
-                  <button
-                    onClick={async () => {
-                      if (!selectedRoute) return;
-                      setGroupSending(true);
-                      try {
-                        const route = selectedRoute as any;
-                        const produtos = assemblyInRoutes.filter(p => p.assembly_route_id === route.id);
-                        const documentos = Array.from(new Set(produtos.map((p: any) => String(p.order?.order_id_erp || '')).filter(Boolean)));
-                        if (documentos.length === 0) { toast.error('Nenhum número de lançamento encontrado'); setGroupSending(false); return; }
-                        const assemblerId = (route as any).assembler_id;
-                        let assemblerName = '';
-                        if (assemblerId) {
-                          const m = montadores.find(m => m.id === assemblerId);
-                          assemblerName = m?.name || m?.email || '';
-                        }
 
-                        // Na montagem não tem equipe, enviar sempre o nome do montador
-                        // Usar variável 'finalName' para manter consistência com o bloco anterior se necessário, ou usar assemblerName direto
-                        const finalName = assemblerName;
+                {/* Only show these fields if creating new route */}
+                {!selectedExistingRoute && (
+                  <>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">Montador <span className="text-red-500">*</span></label>
+                        <select
+                          value={selectedMontador}
+                          onChange={(e) => setSelectedMontador(e.target.value)}
+                          className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all"
+                        >
+                          <option value="">Selecione...</option>
+                          {montadores.map(m => <option key={m.id} value={m.id}>{m.name || m.email}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">Veículo <span className="text-red-500">*</span></label>
+                        <select
+                          value={selectedVehicle}
+                          onChange={(e) => setSelectedVehicle(e.target.value)}
+                          className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all"
+                        >
+                          <option value="">Selecione...</option>
+                          {vehicles.map(v => <option key={v.id} value={v.id}>{v.plate} - {v.model}</option>)}
+                        </select>
+                      </div>
+                    </div>
 
-                        let vehicle_text = '';
-                        const vehicleId = (route as any).vehicle_id;
-                        if (vehicleId) {
-                          const v = vehicles.find(v => v.id === vehicleId);
-                          if (v) vehicle_text = `${String(v.model || '')}${v.plate ? ' | ' + String(v.plate) : ''}`;
-                        }
-                        const route_name = String(route.name || '');
-                        const status = String(route.status || '');
-                        const observations = String(route.observations || '');
-                        let webhookUrl = import.meta.env.VITE_WEBHOOK_ENVIA_GRUPO_URL as string | undefined;
-                        if (!webhookUrl) {
-                          try {
-                            const { data } = await supabase.from('webhook_settings').select('url').eq('key', 'envia_grupo').eq('active', true).single();
-                            webhookUrl = data?.url || 'https://n8n.lojaodosmoveis.shop/webhook/envia_grupo';
-                          } catch {
-                            webhookUrl = 'https://n8n.lojaodosmoveis.shop/webhook/envia_grupo';
-                          }
-                        }
-                        // Envia o nome do montador no campo driver_name e route_code como route_id
-                        const payload = { route_id: (route as any).route_code, route_name, driver_name: finalName, conferente: finalName, documentos, status, vehicle: vehicle_text, observations, tipo_de_romaneio: 'montagem' } as any;
-                        try {
-                          const resp = await fetch(String(webhookUrl), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-                          if (!resp.ok) {
-                            const text = await resp.text();
-                            if (resp.status === 404 && text.includes('envia_grupo')) {
-                              toast.error('Webhook não está ativo.');
-                            } else {
-                              toast.error('Falha ao enviar informativo');
-                            }
-                            setGroupSending(false);
-                            return;
-                          }
-                        } catch {
-                          const fd = new FormData();
-                          fd.append('route_id', (route as any).route_code);
-                          fd.append('route_name', route_name);
-                          fd.append('driver_name', finalName);
-                          fd.append('conferente', finalName);
-                          fd.append('status', status);
-                          fd.append('vehicle', vehicle_text);
-                          fd.append('observations', observations);
-                          fd.append('tipo_de_romaneio', 'montagem');
-                          for (const d of documentos) fd.append('documentos[]', d);
-                          await fetch(String(webhookUrl), { method: 'POST', body: fd });
-                        }
-                        toast.success('Rota enviada ao grupo');
-                      } catch (e) {
-                        console.error(e);
-                        toast.error('Erro ao enviar rota em grupo');
-                      } finally {
-                        setGroupSending(false);
-                      }
-                    }}
-                    disabled={groupSending || (selectedRoute as any).status === 'completed'}
-                    className="inline-flex items-center px-3 py-2 border border-green-200 shadow-sm text-sm font-medium rounded-lg text-green-700 bg-green-50 hover:bg-green-100 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    Enviar grupo
-                  </button>
-                  <button
-                    onClick={async () => {
-                      if (!selectedRoute) return;
-                      const toastId = toast.loading('Gerando resumo...');
-                      try {
-                        const route = selectedRoute as any;
-                        const products = assemblyInRoutes.filter(ap => ap.assembly_route_id === route.id);
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Prazo de Conclusão <span className="text-red-500">*</span></label>
+                      <input
+                        type="date"
+                        value={deadline}
+                        onChange={(e) => setDeadline(e.target.value)}
+                        className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all"
+                      />
+                    </div>
 
-                        // Get Installer Name
-                        let installerName = '';
-                        if (route.assembler_id) {
-                          const m = montadores.find(u => u.id === route.assembler_id);
-                          installerName = m ? (m.name || m.email || '') : '';
-                        }
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Observações</label>
+                      <textarea
+                        value={observations}
+                        onChange={(e) => setObservations(e.target.value)}
+                        rows={3}
+                        placeholder="Observações sobre a montagem..."
+                        className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all"
+                      />
+                    </div>
+                  </>
+                )}
 
-                        // Get Vehicle Info
-                        let vehicleInfo = '';
-                        if (route.vehicle_id) {
-                          const v = vehicles.find(veh => veh.id === route.vehicle_id);
-                          vehicleInfo = v ? `${v.model} (${v.plate})` : '';
-                        }
-
-                        // Use existing products data which already has 'order' details populated from loadData
-                        const pdfBytes = await AssemblyReportGenerator.generateAssemblyReport({
-                          route: route,
-                          products: products,
-                          installerName,
-                          supervisorName: '', // Conferente left blank for signature or could be logged in user
-                          vehicleInfo,
-                          generatedAt: new Date().toISOString()
-                        });
-
-                        const blob = new Blob([pdfBytes as any], { type: 'application/pdf' });
-                        const url = URL.createObjectURL(blob);
-                        window.open(url, '_blank');
-                        toast.success('Resumo gerado!', { id: toastId });
-                      } catch (error) {
-                        console.error('Error generating assembly report:', error);
-                        toast.error('Erro ao gerar resumo da montagem', { id: toastId });
-                      }
-                    }}
-                    disabled={(selectedRoute as any).status !== 'completed' && (selectedRoute as any).status !== 'in_progress' && (selectedRoute as any).status !== 'pending'}
-                    className="inline-flex items-center px-3 py-2 border border-purple-200 shadow-sm text-sm font-medium rounded-lg text-purple-700 bg-purple-50 hover:bg-purple-100"
-                  >
-                    <ClipboardCheck className="h-4 w-4 mr-2" /> Resumo
-                  </button>
-                  <button onClick={() => { try { localStorage.setItem('am_showRouteModal', '0'); } catch { } setShowRouteModal(false); }} className="p-2 hover:bg-gray-200 rounded-full text-gray-500"><X className="h-6 w-6" /></button>
+                <div className="bg-blue-50 p-4 rounded-xl flex items-center justify-between">
+                  <span className="text-blue-900 font-medium">Pedidos Selecionados</span>
+                  <span className="bg-blue-200 text-blue-800 px-3 py-1 rounded-lg font-bold">{selectedOrders.size}</span>
                 </div>
               </div>
+              <div className="px-6 py-4 border-t border-gray-100 bg-gray-50 flex justify-end gap-3 flex-shrink-0">
+                <button onClick={() => setShowCreateModal(false)} className="px-6 py-2.5 rounded-xl border border-gray-300 text-gray-700 font-medium hover:bg-white transition-colors">Cancelar</button>
+                <button
+                  onClick={() => createAssemblyRoute()}
+                  disabled={saving || (selectedOrders.size === 0) || (!selectedExistingRoute && !routeName.trim())}
+                  className="px-6 py-2.5 rounded-xl bg-blue-600 text-white font-bold hover:bg-blue-700 shadow-lg shadow-blue-200 disabled:opacity-50 disabled:shadow-none transition-all transform active:scale-95"
+                >
+                  {saving ? 'Salvando...' : (selectedExistingRoute ? 'Adicionar à Rota' : 'Confirmar Romaneio')}
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      }
 
-              <div className="flex-1 overflow-y-auto p-6 bg-gray-50 max-h-[65vh]">
-                {/* Orders grouped */}
-                <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-                  <table className="min-w-full text-sm">
-                    <thead className="bg-gray-50 border-b border-gray-100">
-                      <tr>
-                        <th className="px-4 py-3 text-left font-semibold text-gray-600">Pedido</th>
-                        <th className="px-4 py-3 text-left font-semibold text-gray-600">Cliente / Endereço</th>
-                        <th className="px-4 py-3 text-left font-semibold text-gray-600">Status</th>
-                        <th className="px-4 py-3 text-right font-semibold text-gray-600">Ações</th>
-                      </tr>
-                    </thead>
-                    <tbody className="bg-white divide-y divide-gray-100">
-                      {(() => {
-                        const byOrder: Record<string, AssemblyProductWithDetails[]> = {};
-                        assemblyInRoutes.filter(ap => ap.assembly_route_id === selectedRoute.id).forEach(ap => {
-                          const k = String(ap.order_id);
-                          if (!byOrder[k]) byOrder[k] = [];
-                          byOrder[k].push(ap);
-                        });
-                        const statusColors = {
-                          pending: 'bg-yellow-100 text-yellow-800 border-yellow-200',
-                          completed: 'bg-green-100 text-green-800 border-green-200',
-                          cancelled: 'bg-red-100 text-red-800 border-red-200'
-                        } as Record<string, string>;
-                        const statusLabel = {
-                          pending: 'Pendente',
-                          completed: 'Concluído',
-                          cancelled: 'Retornado'
-                        } as Record<string, string>;
-                        return Object.entries(byOrder).map(([orderId, list]) => {
-                          const order = list[0]?.order || {} as any;
-                          const addr = order.address_json || {};
-                          const statuses = list.map(i => i.status);
-                          const derived = statuses.every(s => s === 'cancelled') ? 'cancelled' : (statuses.every(s => s === 'completed') ? 'completed' : 'pending');
+      {/* Columns Modal */}
+      {
+        showColumnsModal && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-xl shadow-xl w-full max-w-md overflow-hidden">
+              <div className="px-5 py-4 border-b border-gray-100 flex justify-between items-center">
+                <h3 className="font-bold text-gray-900">Configurar Colunas</h3>
+                <button onClick={() => setShowColumnsModal(false)}><X className="h-5 w-5 text-gray-400" /></button>
+              </div>
+              <div className="p-2 overflow-y-auto max-h-[60vh]">
+                {columnsConf.map((c, idx) => (
+                  <div key={c.id} className="flex items-center justify-between p-3 hover:bg-gray-50 rounded-lg group">
+                    <label className="flex items-center gap-3 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={c.visible}
+                        onChange={() => {
+                          const newCols = [...columnsConf];
+                          newCols[idx].visible = !newCols[idx].visible;
+                          setColumnsConf(newCols);
+                        }}
+                        className="h-4 w-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
+                      />
+                      <span className="text-gray-700">{c.label}</span>
+                    </label>
+                    <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <button
+                        onClick={() => {
+                          if (idx === 0) return;
+                          const newCols = [...columnsConf];
+                          [newCols[idx - 1], newCols[idx]] = [newCols[idx], newCols[idx - 1]];
+                          setColumnsConf(newCols);
+                        }}
+                        className="p-1 hover:bg-gray-200 rounded"
+                      ><ChevronUp className="h-4 w-4" /></button>
+                      <button
+                        onClick={() => {
+                          if (idx === columnsConf.length - 1) return;
+                          const newCols = [...columnsConf];
+                          [newCols[idx + 1], newCols[idx]] = [newCols[idx], newCols[idx + 1]];
+                          setColumnsConf(newCols);
+                        }}
+                        className="p-1 hover:bg-gray-200 rounded"
+                      ><ChevronDown className="h-4 w-4" /></button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="p-4 border-t border-gray-100 bg-gray-50 text-right">
+                <button
+                  onClick={async () => {
+                    if (authUser?.id) {
+                      const success = await saveUserPreference(authUser.id, 'am_columns_conf', columnsConf);
+                      if (success) {
+                        toast.success('Configuração de colunas salva com sucesso!');
+                      } else {
+                        toast.error('Erro ao salvar configuração. Tente novamente.');
+                      }
+                    } else {
+                      // Fallback to localStorage if not authenticated
+                      localStorage.setItem('am_columns_conf', JSON.stringify(columnsConf));
+                      toast.success('Configuração salva localmente.');
+                    }
+                    setShowColumnsModal(false);
+                  }}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700"
+                >
+                  Salvar Configuração
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      }
 
-                          // Get timestamp from first item (assuming batch update essentially gives same time, or we take latest)
-                          const firstItem = list[0];
-                          const timestamp = firstItem?.completion_date || firstItem?.returned_at;
-                          const formattedTime = timestamp ? new Date(timestamp).toLocaleString('pt-BR') : '-';
-
-                          return (
-                            <tr key={orderId} className="hover:bg-gray-50">
-                              <td className="px-4 py-3 font-medium">{order.order_id_erp || orderId}</td>
-                              <td className="px-4 py-3">
-                                <div className="text-sm text-gray-900">{order.customer_name}</div>
-                                <div className="text-xs text-gray-500 flex items-center gap-1">
-                                  <MapPin className="h-3 w-3" />
-                                  {addr.street}, {addr.number} - {addr.neighborhood}
-                                </div>
-                              </td>
-                              <td className="px-4 py-3">
-                                <div className="flex flex-col items-start gap-1">
-                                  <span className={`px-2 py-0.5 rounded-full text-xs font-medium border ${statusColors[derived]}`}>{statusLabel[derived]}</span>
-                                  {timestamp && (
-                                    <span className="text-[10px] text-gray-500 font-medium flex items-center gap-1">
-                                      <Clock className="w-3 h-3" /> {new Date(timestamp).toLocaleString('pt-BR')}
-                                    </span>
-                                  )}
-                                </div>
-                              </td>
-                              <td className="px-4 py-3 text-right">
-                                <div className="flex items-center justify-end gap-2">
-                                  <button
-                                    onClick={() => { setOrderProductsModal({ orderId, products: list }); setShowOrderProductsModal(true); }}
-                                    className="inline-flex items-center px-3 py-1.5 rounded-lg border border-blue-200 bg-blue-50 text-blue-700 text-xs font-medium hover:bg-blue-100"
-                                  >
-                                    Ver Produtos
-                                  </button>
-                                  {(selectedRoute as any)?.status === 'pending' && (
-                                    <button
-                                      onClick={() => {
-                                        if (confirm(`Deseja remover o pedido ${order.order_id_erp || orderId} da rota?`)) {
-                                          removeOrderFromRoute(orderId);
-                                        }
-                                      }}
-                                      className="inline-flex items-center px-2 py-1.5 rounded-lg border border-red-200 bg-red-50 text-red-700 text-xs font-medium hover:bg-red-100"
-                                      title="Remover pedido da rota"
-                                    >
-                                      <Trash2 className="h-4 w-4" />
-                                    </button>
-                                  )}
-                                </div>
-                              </td>
-                            </tr>
-                          );
-                        });
-                      })()}
-                    </tbody>
-                  </table>
-                </div>
-
-                {/* Delete Empty Route Button - only shows when route has no orders and is pending */}
-                {(() => {
-                  const productsInRoute = assemblyInRoutes.filter(ap => ap.assembly_route_id === selectedRoute.id);
-                  const isPending = (selectedRoute as any)?.status === 'pending';
-                  if (productsInRoute.length === 0 && isPending) {
-                    return (
-                      <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-lg">
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <p className="text-sm font-medium text-red-800">Esta rota está vazia</p>
-                            <p className="text-xs text-red-600">Você pode excluir esta rota pois ela não possui nenhum pedido.</p>
-                          </div>
-                          <button
-                            onClick={() => {
-                              if (confirm('Tem certeza que deseja excluir esta rota vazia?')) {
-                                deleteEmptyRoute();
-                              }
-                            }}
-                            className="inline-flex items-center px-4 py-2 rounded-lg bg-red-600 text-white text-sm font-medium hover:bg-red-700"
+      {/* Route Details Modal */}
+      {
+        showRouteModal && selectedRoute && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in zoom-in-95 duration-200">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-6xl max-h-[90vh] flex flex-col overflow-hidden">
+              <div className="px-6 py-4 border-b border-gray-100 bg-gray-50">
+                {/* Header with Edit Toggle */}
+                <div className="flex justify-between items-start">
+                  {!isEditingRoute ? (
+                    <div>
+                      <h2 className="text-xl font-bold text-gray-900">
+                        {selectedRoute.name}
+                        {(selectedRoute as any).route_code && (
+                          <span className="ml-2 px-2 py-0.5 bg-gray-100 text-gray-600 text-sm font-mono rounded">
+                            {(selectedRoute as any).route_code}
+                          </span>
+                        )}
+                      </h2>
+                      <p className="text-sm text-gray-500">
+                        {selectedRoute.status === 'pending' ? 'Pendente' : selectedRoute.status === 'in_progress' ? 'Pendente' : 'Concluído'}
+                        • {formatDate(selectedRoute.created_at)}
+                        {(selectedRoute as any).assembler_id && (() => {
+                          const m = montadores.find(m => m.id === (selectedRoute as any).assembler_id);
+                          return m ? ` • Montador: ${m.name || m.email}` : '';
+                        })()}
+                        {(selectedRoute as any).vehicle_id && (() => {
+                          const v = vehicles.find(v => v.id === (selectedRoute as any).vehicle_id);
+                          return v ? ` • ${v.model} (${v.plate})` : '';
+                        })()}
+                      </p>
+                      {selectedRoute.observations && (
+                        <p className="text-sm text-gray-500 mt-1">Obs: {selectedRoute.observations}</p>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="flex-1 mr-4">
+                      <h3 className="text-lg font-bold text-gray-900 mb-3">Editar Romaneio</h3>
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                        <div>
+                          <label className="block text-xs font-medium text-gray-700 mb-1">Nome do Romaneio *</label>
+                          <input
+                            type="text"
+                            value={editRouteName}
+                            onChange={(e) => setEditRouteName(e.target.value)}
+                            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                            placeholder="Nome do romaneio"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium text-gray-700 mb-1">Montador *</label>
+                          <select
+                            value={editRouteMontador}
+                            onChange={(e) => setEditRouteMontador(e.target.value)}
+                            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                           >
-                            <Trash2 className="h-4 w-4 mr-2" /> Excluir Rota
-                          </button>
+                            <option value="">Selecione um montador</option>
+                            {montadores.map(m => (
+                              <option key={m.id} value={m.id}>{m.name || m.email}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium text-gray-700 mb-1">Veículo</label>
+                          <select
+                            value={editRouteVehicle}
+                            onChange={(e) => setEditRouteVehicle(e.target.value)}
+                            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                          >
+                            <option value="">Selecione um veículo</option>
+                            {vehicles.map(v => (
+                              <option key={v.id} value={v.id}>{v.model} ({v.plate})</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium text-gray-700 mb-1">Prazo</label>
+                          <input
+                            type="date"
+                            value={editRouteDeadline}
+                            onChange={(e) => setEditRouteDeadline(e.target.value)}
+                            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                          />
+                        </div>
+                        <div className="md:col-span-2">
+                          <label className="block text-xs font-medium text-gray-700 mb-1">Observações</label>
+                          <input
+                            type="text"
+                            value={editRouteObservations}
+                            onChange={(e) => setEditRouteObservations(e.target.value)}
+                            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                            placeholder="Observações sobre a rota"
+                          />
                         </div>
                       </div>
-                    );
-                  }
-                  return null;
-                })()}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Order Products Modal */}
-      {showOrderProductsModal && orderProductsModal && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[55] flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-3xl max-h-[85vh] flex flex-col overflow-hidden">
-            <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
-              {(() => { const erp = orderProductsModal.products[0]?.order?.order_id_erp || orderProductsModal.orderId; return (<h3 className="text-lg font-bold text-gray-900">Produtos do Pedido {erp}</h3>); })()}
-              <button onClick={() => { setShowOrderProductsModal(false); setOrderProductsModal(null); }} className="text-gray-400 hover:text-gray-600"><X className="h-5 w-5" /></button>
-            </div>
-            <div className="p-6 overflow-y-auto">
-              <ul className="divide-y divide-gray-200">
-                {orderProductsModal.products.map((p) => (
-                  <li key={p.id} className="py-3">
-                    <div className="text-sm font-medium text-gray-900">{p.product_name}</div>
-                    <div className="text-xs text-gray-500">SKU: {p.product_sku || '-'}</div>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* --- LAUNCH AVULSO MODAL --- */}
-      {showLaunchModal && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden relative">
-            <button
-              onClick={() => setShowLaunchModal(false)}
-              className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 transition-colors"
-            >
-              <X className="h-5 w-5" />
-            </button>
-
-            <div className="p-8">
-              <div className="w-16 h-16 bg-orange-50 rounded-full flex items-center justify-center mb-6 mx-auto">
-                <FilePlus className="h-8 w-8 text-orange-600" />
-              </div>
-
-              <h3 className="text-2xl font-bold text-gray-900 text-center mb-2">Lançamento Avulso</h3>
-              <p className="text-center text-gray-500 mb-8">
-                Importe uma Troca, Assistência ou Pedido de Venda antigo usando o número do lançamento.
-              </p>
-
-              <form onSubmit={handleLaunchSubmit} className="space-y-5">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Número do Lançamento (ERP)</label>
-                  <input
-                    type="text"
-                    value={launchNumber}
-                    onChange={(e) => setLaunchNumber(e.target.value)}
-                    className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none transition-all text-lg font-mono placeholder:font-sans"
-                    placeholder="Ex: 123456"
-                    autoFocus
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Tipo de Serviço</label>
-                  <div className="grid grid-cols-3 gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setLaunchType('troca')}
-                      className={`px-3 py-3 rounded-xl border flex flex-col items-center gap-1.5 transition-all ${launchType === 'troca' ? 'bg-orange-50 border-orange-500 text-orange-700 ring-1 ring-orange-500' : 'bg-white border-gray-200 text-gray-600 hover:border-orange-200 hover:bg-orange-50/50'}`}
-                    >
-                      <RefreshCw className="h-5 w-5" />
-                      <span className="font-semibold text-xs">Troca</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setLaunchType('assistencia')}
-                      className={`px-3 py-3 rounded-xl border flex flex-col items-center gap-1.5 transition-all ${launchType === 'assistencia' ? 'bg-blue-50 border-blue-500 text-blue-700 ring-1 ring-blue-500' : 'bg-white border-gray-200 text-gray-600 hover:border-blue-200 hover:bg-blue-50/50'}`}
-                    >
-                      <Wrench className="h-5 w-5" />
-                      <span className="font-semibold text-xs">Assistência</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setLaunchType('venda')}
-                      className={`px-3 py-3 rounded-xl border flex flex-col items-center gap-1.5 transition-all ${launchType === 'venda' ? 'bg-emerald-50 border-emerald-500 text-emerald-700 ring-1 ring-emerald-500' : 'bg-white border-gray-200 text-gray-600 hover:border-emerald-200 hover:bg-emerald-50/50'}`}
-                    >
-                      <Package className="h-5 w-5" />
-                      <span className="font-semibold text-xs">Pedido Venda</span>
-                    </button>
-                  </div>
-                  {launchType === 'venda' && (
-                    <p className="mt-2 text-xs text-emerald-600 bg-emerald-50 p-2 rounded-lg border border-emerald-100">
-                      💡 Use para pedidos antigos aguardando liberação do cliente (reformas, etc.)
-                    </p>
+                    </div>
                   )}
-                </div>
-
-                <div className="pt-4">
-                  <button
-                    type="submit"
-                    disabled={launchLoading || !launchNumber}
-                    className="w-full px-6 py-4 bg-gray-900 text-white rounded-xl font-bold hover:bg-black transition-all flex items-center justify-center shadow-lg disabled:opacity-70 disabled:cursor-not-allowed group"
-                  >
-                    {launchLoading ? (
-                      <>
-                        <RefreshCw className="animate-spin h-5 w-5 mr-2" />
-                        Buscando...
-                      </>
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    {/* Edit / Save / Cancel buttons */}
+                    {!isEditingRoute ? (
+                      <button
+                        onClick={() => {
+                          const r = selectedRoute as any;
+                          setEditRouteName(r.name || '');
+                          setEditRouteMontador(r.assembler_id || '');
+                          setEditRouteVehicle(r.vehicle_id || '');
+                          setEditRouteDeadline(r.deadline ? r.deadline.split('T')[0] : '');
+                          setEditRouteObservations(r.observations || '');
+                          setIsEditingRoute(true);
+                        }}
+                        disabled={(selectedRoute as any).status === 'completed'}
+                        className="inline-flex items-center px-3 py-2 border border-yellow-200 shadow-sm text-sm font-medium rounded-lg text-yellow-700 bg-yellow-50 hover:bg-yellow-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        <Pencil className="h-4 w-4 mr-2" /> Editar
+                      </button>
                     ) : (
                       <>
-                        <RefreshCw className="h-5 w-5 mr-2 group-hover:rotate-180 transition-transform duration-500" />
-                        Buscar e Importar
+                        <button
+                          onClick={() => saveRouteEdits()}
+                          disabled={savingEdit}
+                          className="inline-flex items-center px-3 py-2 border border-green-200 shadow-sm text-sm font-medium rounded-lg text-green-700 bg-green-50 hover:bg-green-100 disabled:opacity-50"
+                        >
+                          <Save className="h-4 w-4 mr-2" /> {savingEdit ? 'Salvando...' : 'Salvar'}
+                        </button>
+                        <button
+                          onClick={() => setIsEditingRoute(false)}
+                          disabled={savingEdit}
+                          className="inline-flex items-center px-3 py-2 border border-gray-200 shadow-sm text-sm font-medium rounded-lg text-gray-700 bg-gray-50 hover:bg-gray-100 disabled:opacity-50"
+                        >
+                          Cancelar
+                        </button>
                       </>
                     )}
-                  </button>
+                    <button
+                      onClick={async () => {
+                        try {
+                          if (!selectedRoute) return;
+                          const route = selectedRoute as any;
+                          const products = assemblyInRoutes.filter(ap => ap.assembly_route_id === route.id);
+                          const orders = products.map(p => p.order).filter(Boolean) as any[];
+                          const routeOrders = products.map((p, idx) => ({ id: String(p.id), route_id: String(route.id), order_id: String(p.order_id), sequence: idx + 1, status: 'pending', created_at: route.created_at, updated_at: route.updated_at })) as any[];
+                          const routeData: any = { id: route.id, name: route.name, driver_id: '', vehicle_id: '', conferente: '', observations: route.observations, status: route.status as any, created_at: route.created_at, updated_at: route.updated_at, route_code: (route as any).route_code };
+                          const m = montadores.find(m => m.id === (route as any).assembler_id);
+                          const v = vehicles.find(v => v.id === (route as any).vehicle_id);
+                          const data = { route: routeData, routeOrders, driver: { id: '', user_id: '', cpf: '', active: true, name: '—', user: { id: '', email: '', name: '—', role: 'driver', created_at: new Date().toISOString() } } as any, vehicle: undefined, orders: orders as any, generatedAt: new Date().toISOString(), assemblyInstallerName: m?.name || m?.email || '—', assemblyVehicleModel: v?.model || '', assemblyVehiclePlate: v?.plate || '' };
+                          const pdfBytes = await DeliverySheetGenerator.generateDeliverySheet(data, 'Romaneio de Montagem');
+                          DeliverySheetGenerator.openPDFInNewTab(pdfBytes);
+                        } catch (e) {
+                          console.error(e);
+                          toast.error('Erro ao gerar PDF do romaneio');
+                        }
+                      }}
+                      className="inline-flex items-center px-3 py-2 border border-blue-200 shadow-sm text-sm font-medium rounded-lg text-blue-700 bg-blue-50 hover:bg-blue-100"
+                    >
+                      <FileText className="h-4 w-4 mr-2" /> PDF
+                    </button>
+                    <button
+                      onClick={async () => {
+                        if (!selectedRoute) return;
+                        setWaSending(true);
+                        try {
+                          const route = selectedRoute as any;
+                          const produtosDaRota = assemblyInRoutes.filter(p => p.assembly_route_id === route.id);
+                          const mapByOrder = new Map<string, any>();
+                          produtosDaRota.forEach((p: any) => {
+                            const o = p.order || {};
+                            if (!o.id) return;
+                            if (!mapByOrder.has(o.id)) {
+                              const addr = o.address_json || {};
+                              const num = addr.number ? `, ${addr.number}` : '';
+                              const endereco_completo = `${addr.street || ''}${num} - ${addr.neighborhood || ''}${addr.city ? ', ' + addr.city : ''}`.trim();
+                              mapByOrder.set(o.id, {
+                                lancamento_venda: Number(o.order_id_erp || o.id || 0),
+                                cliente_nome: String(o.customer_name || ''),
+                                cliente_celular: String(o.phone || o.raw_json?.cliente_celular || ''),
+                                endereco_completo,
+                                produtos: [] as string[],
+                              });
+                            }
+                            const entry = mapByOrder.get(o.id);
+                            const sku = String(p.product_sku || '');
+                            const nome = String(p.product_name || '');
+                            entry.produtos.push(`${sku} - ${nome}`);
+                          });
+                          const contatos = Array.from(mapByOrder.values()).map((c: any) => ({
+                            lancamento_venda: c.lancamento_venda,
+                            cliente_nome: c.cliente_nome,
+                            cliente_celular: c.cliente_celular,
+                            endereco_completo: c.endereco_completo,
+                            produtos: (c.produtos || []).join(', '),
+                          }));
+                          if (contatos.length === 0) { toast.error('Nenhum pedido para envio'); setWaSending(false); return; }
+                          let webhookUrl = import.meta.env.VITE_WEBHOOK_WHATSAPP_URL as string | undefined;
+                          if (!webhookUrl) {
+                            try {
+                              const { data } = await supabase.from('webhook_settings').select('url').eq('key', 'envia_mensagem').eq('active', true).single();
+                              webhookUrl = data?.url || 'https://n8n.lojaodosmoveis.shop/webhook-test/envia_mensagem';
+                            } catch {
+                              webhookUrl = 'https://n8n.lojaodosmoveis.shop/webhook-test/envia_mensagem';
+                            }
+                          }
+                          const payload = { contatos, tipo_de_romaneio: 'montagem' } as any;
+                          try {
+                            await fetch(String(webhookUrl), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+                          } catch {
+                            const fd = new FormData();
+                            for (const c of contatos) fd.append('contatos[]', JSON.stringify(c));
+                            fd.append('tipo_de_romaneio', 'montagem');
+                            await fetch(String(webhookUrl), { method: 'POST', body: fd });
+                          }
+                          toast.success('WhatsApp solicitado');
+                        } catch (e) {
+                          console.error(e);
+                          toast.error('Erro ao enviar WhatsApp');
+                        } finally {
+                          setWaSending(false);
+                        }
+                      }}
+                      disabled={waSending || (selectedRoute as any).status === 'completed'}
+                      className="inline-flex items-center px-3 py-2 border border-green-200 shadow-sm text-sm font-medium rounded-lg text-green-700 bg-green-50 hover:bg-green-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      Enviar cliente
+                    </button>
+                    <button
+                      onClick={async () => {
+                        if (!selectedRoute) return;
+                        setGroupSending(true);
+                        try {
+                          const route = selectedRoute as any;
+                          const produtos = assemblyInRoutes.filter(p => p.assembly_route_id === route.id);
+                          const documentos = Array.from(new Set(produtos.map((p: any) => String(p.order?.order_id_erp || '')).filter(Boolean)));
+                          if (documentos.length === 0) { toast.error('Nenhum número de lançamento encontrado'); setGroupSending(false); return; }
+                          const assemblerId = (route as any).assembler_id;
+                          let assemblerName = '';
+                          if (assemblerId) {
+                            const m = montadores.find(m => m.id === assemblerId);
+                            assemblerName = m?.name || m?.email || '';
+                          }
+
+                          // Na montagem não tem equipe, enviar sempre o nome do montador
+                          // Usar variável 'finalName' para manter consistência com o bloco anterior se necessário, ou usar assemblerName direto
+                          const finalName = assemblerName;
+
+                          let vehicle_text = '';
+                          const vehicleId = (route as any).vehicle_id;
+                          if (vehicleId) {
+                            const v = vehicles.find(v => v.id === vehicleId);
+                            if (v) vehicle_text = `${String(v.model || '')}${v.plate ? ' | ' + String(v.plate) : ''}`;
+                          }
+                          const route_name = String(route.name || '');
+                          const status = String(route.status || '');
+                          const observations = String(route.observations || '');
+                          let webhookUrl = import.meta.env.VITE_WEBHOOK_ENVIA_GRUPO_URL as string | undefined;
+                          if (!webhookUrl) {
+                            try {
+                              const { data } = await supabase.from('webhook_settings').select('url').eq('key', 'envia_grupo').eq('active', true).single();
+                              webhookUrl = data?.url || 'https://n8n.lojaodosmoveis.shop/webhook/envia_grupo';
+                            } catch {
+                              webhookUrl = 'https://n8n.lojaodosmoveis.shop/webhook/envia_grupo';
+                            }
+                          }
+                          // Envia o nome do montador no campo driver_name e route_code como route_id
+                          const payload = { route_id: (route as any).route_code, route_name, driver_name: finalName, conferente: finalName, documentos, status, vehicle: vehicle_text, observations, tipo_de_romaneio: 'montagem' } as any;
+                          try {
+                            const resp = await fetch(String(webhookUrl), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+                            if (!resp.ok) {
+                              const text = await resp.text();
+                              if (resp.status === 404 && text.includes('envia_grupo')) {
+                                toast.error('Webhook não está ativo.');
+                              } else {
+                                toast.error('Falha ao enviar informativo');
+                              }
+                              setGroupSending(false);
+                              return;
+                            }
+                          } catch {
+                            const fd = new FormData();
+                            fd.append('route_id', (route as any).route_code);
+                            fd.append('route_name', route_name);
+                            fd.append('driver_name', finalName);
+                            fd.append('conferente', finalName);
+                            fd.append('status', status);
+                            fd.append('vehicle', vehicle_text);
+                            fd.append('observations', observations);
+                            fd.append('tipo_de_romaneio', 'montagem');
+                            for (const d of documentos) fd.append('documentos[]', d);
+                            await fetch(String(webhookUrl), { method: 'POST', body: fd });
+                          }
+                          toast.success('Rota enviada ao grupo');
+                        } catch (e) {
+                          console.error(e);
+                          toast.error('Erro ao enviar rota em grupo');
+                        } finally {
+                          setGroupSending(false);
+                        }
+                      }}
+                      disabled={groupSending || (selectedRoute as any).status === 'completed'}
+                      className="inline-flex items-center px-3 py-2 border border-green-200 shadow-sm text-sm font-medium rounded-lg text-green-700 bg-green-50 hover:bg-green-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      Enviar grupo
+                    </button>
+                    <button
+                      onClick={async () => {
+                        if (!selectedRoute) return;
+                        const toastId = toast.loading('Gerando resumo...');
+                        try {
+                          const route = selectedRoute as any;
+                          const products = assemblyInRoutes.filter(ap => ap.assembly_route_id === route.id);
+
+                          // Get Installer Name
+                          let installerName = '';
+                          if (route.assembler_id) {
+                            const m = montadores.find(u => u.id === route.assembler_id);
+                            installerName = m ? (m.name || m.email || '') : '';
+                          }
+
+                          // Get Vehicle Info
+                          let vehicleInfo = '';
+                          if (route.vehicle_id) {
+                            const v = vehicles.find(veh => veh.id === route.vehicle_id);
+                            vehicleInfo = v ? `${v.model} (${v.plate})` : '';
+                          }
+
+                          // Use existing products data which already has 'order' details populated from loadData
+                          const pdfBytes = await AssemblyReportGenerator.generateAssemblyReport({
+                            route: route,
+                            products: products,
+                            installerName,
+                            supervisorName: '', // Conferente left blank for signature or could be logged in user
+                            vehicleInfo,
+                            generatedAt: new Date().toISOString()
+                          });
+
+                          const blob = new Blob([pdfBytes as any], { type: 'application/pdf' });
+                          const url = URL.createObjectURL(blob);
+                          window.open(url, '_blank');
+                          toast.success('Resumo gerado!', { id: toastId });
+                        } catch (error) {
+                          console.error('Error generating assembly report:', error);
+                          toast.error('Erro ao gerar resumo da montagem', { id: toastId });
+                        }
+                      }}
+                      disabled={(selectedRoute as any).status !== 'completed' && (selectedRoute as any).status !== 'in_progress' && (selectedRoute as any).status !== 'pending'}
+                      className="inline-flex items-center px-3 py-2 border border-purple-200 shadow-sm text-sm font-medium rounded-lg text-purple-700 bg-purple-50 hover:bg-purple-100"
+                    >
+                      <ClipboardCheck className="h-4 w-4 mr-2" /> Resumo
+                    </button>
+                    <button onClick={() => { try { localStorage.setItem('am_showRouteModal', '0'); } catch { } setShowRouteModal(false); }} className="p-2 hover:bg-gray-200 rounded-full text-gray-500"><X className="h-6 w-6" /></button>
+                  </div>
                 </div>
-              </form>
+
+                <div className="flex-1 overflow-y-auto p-6 bg-gray-50 max-h-[65vh]">
+                  {/* Orders grouped */}
+                  <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                    <table className="min-w-full text-sm">
+                      <thead className="bg-gray-50 border-b border-gray-100">
+                        <tr>
+                          <th className="px-4 py-3 text-left font-semibold text-gray-600">Pedido</th>
+                          <th className="px-4 py-3 text-left font-semibold text-gray-600">Cliente / Endereço</th>
+                          <th className="px-4 py-3 text-left font-semibold text-gray-600">Status</th>
+                          <th className="px-4 py-3 text-right font-semibold text-gray-600">Ações</th>
+                        </tr>
+                      </thead>
+                      <tbody className="bg-white divide-y divide-gray-100">
+                        {(() => {
+                          const byOrder: Record<string, AssemblyProductWithDetails[]> = {};
+                          assemblyInRoutes.filter(ap => ap.assembly_route_id === selectedRoute.id).forEach(ap => {
+                            const k = String(ap.order_id);
+                            if (!byOrder[k]) byOrder[k] = [];
+                            byOrder[k].push(ap);
+                          });
+                          const statusColors = {
+                            pending: 'bg-yellow-100 text-yellow-800 border-yellow-200',
+                            completed: 'bg-green-100 text-green-800 border-green-200',
+                            cancelled: 'bg-red-100 text-red-800 border-red-200'
+                          } as Record<string, string>;
+                          const statusLabel = {
+                            pending: 'Pendente',
+                            completed: 'Concluído',
+                            cancelled: 'Retornado'
+                          } as Record<string, string>;
+                          return Object.entries(byOrder).map(([orderId, list]) => {
+                            const order = list[0]?.order || {} as any;
+                            const addr = order.address_json || {};
+                            const statuses = list.map(i => i.status);
+                            const derived = statuses.every(s => s === 'cancelled') ? 'cancelled' : (statuses.every(s => s === 'completed') ? 'completed' : 'pending');
+
+                            // Get timestamp from first item (assuming batch update essentially gives same time, or we take latest)
+                            const firstItem = list[0];
+                            const timestamp = firstItem?.completion_date || firstItem?.returned_at;
+                            const formattedTime = timestamp ? new Date(timestamp).toLocaleString('pt-BR') : '-';
+
+                            return (
+                              <tr key={orderId} className="hover:bg-gray-50">
+                                <td className="px-4 py-3 font-medium">{order.order_id_erp || orderId}</td>
+                                <td className="px-4 py-3">
+                                  <div className="text-sm text-gray-900">{order.customer_name}</div>
+                                  <div className="text-xs text-gray-500 flex items-center gap-1">
+                                    <MapPin className="h-3 w-3" />
+                                    {addr.street}, {addr.number} - {addr.neighborhood}
+                                  </div>
+                                </td>
+                                <td className="px-4 py-3">
+                                  <div className="flex flex-col items-start gap-1">
+                                    <span className={`px-2 py-0.5 rounded-full text-xs font-medium border ${statusColors[derived]}`}>{statusLabel[derived]}</span>
+                                    {timestamp && (
+                                      <span className="text-[10px] text-gray-500 font-medium flex items-center gap-1">
+                                        <Clock className="w-3 h-3" /> {new Date(timestamp).toLocaleString('pt-BR')}
+                                      </span>
+                                    )}
+                                    {derived === 'cancelled' && list.some(i => i.observations) && (
+                                      <span className="text-[11px] text-red-600 leading-tight mt-1">
+                                        {(() => {
+                                          const item = list.find(i => i.status === 'cancelled' && i.observations) || list[0];
+                                          let text = item?.observations || '';
+                                          // Format: (Retorno: Reason) Notes -> Reason - Notes
+                                          if (text.startsWith('(Retorno:')) {
+                                            text = text.replace('(Retorno:', '').replace(')', ' -');
+                                          } else if (text.startsWith('Retorno:')) {
+                                            text = text.replace('Retorno:', '');
+                                          }
+                                          return text.trim();
+                                        })()}
+                                      </span>
+                                    )}
+                                  </div>
+                                </td>
+                                <td className="px-4 py-3 text-right">
+                                  <div className="flex items-center justify-end gap-2">
+                                    <button
+                                      onClick={() => { setOrderProductsModal({ orderId, products: list }); setShowOrderProductsModal(true); }}
+                                      className="inline-flex items-center px-3 py-1.5 rounded-lg border border-blue-200 bg-blue-50 text-blue-700 text-xs font-medium hover:bg-blue-100"
+                                    >
+                                      Ver Produtos
+                                    </button>
+                                    {(selectedRoute as any)?.status === 'pending' && (
+                                      <button
+                                        onClick={() => {
+                                          if (confirm(`Deseja remover o pedido ${order.order_id_erp || orderId} da rota?`)) {
+                                            removeOrderFromRoute(orderId);
+                                          }
+                                        }}
+                                        className="inline-flex items-center px-2 py-1.5 rounded-lg border border-red-200 bg-red-50 text-red-700 text-xs font-medium hover:bg-red-100"
+                                        title="Remover pedido da rota"
+                                      >
+                                        <Trash2 className="h-4 w-4" />
+                                      </button>
+                                    )}
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          });
+                        })()}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Delete Empty Route Button - only shows when route has no orders and is pending */}
+                  {(() => {
+                    const productsInRoute = assemblyInRoutes.filter(ap => ap.assembly_route_id === selectedRoute.id);
+                    const isPending = (selectedRoute as any)?.status === 'pending';
+                    if (productsInRoute.length === 0 && isPending) {
+                      return (
+                        <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-lg">
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <p className="text-sm font-medium text-red-800">Esta rota está vazia</p>
+                              <p className="text-xs text-red-600">Você pode excluir esta rota pois ela não possui nenhum pedido.</p>
+                            </div>
+                            <button
+                              onClick={() => {
+                                if (confirm('Tem certeza que deseja excluir esta rota vazia?')) {
+                                  deleteEmptyRoute();
+                                }
+                              }}
+                              className="inline-flex items-center px-4 py-2 rounded-lg bg-red-600 text-white text-sm font-medium hover:bg-red-700"
+                            >
+                              <Trash2 className="h-4 w-4 mr-2" /> Excluir Rota
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    }
+                    return null;
+                  })()}
+                </div>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )
+      }
 
-    </div>
+      {/* Order Products Modal */}
+      {
+        showOrderProductsModal && orderProductsModal && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[55] flex items-center justify-center p-4">
+            <div className="bg-white rounded-xl shadow-xl w-full max-w-3xl max-h-[85vh] flex flex-col overflow-hidden">
+              <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
+                {(() => { const erp = orderProductsModal.products[0]?.order?.order_id_erp || orderProductsModal.orderId; return (<h3 className="text-lg font-bold text-gray-900">Produtos do Pedido {erp}</h3>); })()}
+                <button onClick={() => { setShowOrderProductsModal(false); setOrderProductsModal(null); }} className="text-gray-400 hover:text-gray-600"><X className="h-5 w-5" /></button>
+              </div>
+              <div className="p-6 overflow-y-auto">
+                <ul className="divide-y divide-gray-200">
+                  {orderProductsModal.products.map((p) => (
+                    <li key={p.id} className="py-3">
+                      <div className="text-sm font-medium text-gray-900">{p.product_name}</div>
+                      <div className="text-xs text-gray-500">SKU: {p.product_sku || '-'}</div>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          </div>
+        )
+      }
+
+      {/* --- LAUNCH AVULSO MODAL --- */}
+      {
+        showLaunchModal && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden relative">
+              <button
+                onClick={() => setShowLaunchModal(false)}
+                className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 transition-colors"
+              >
+                <X className="h-5 w-5" />
+              </button>
+
+              <div className="p-8">
+                <div className="w-16 h-16 bg-orange-50 rounded-full flex items-center justify-center mb-6 mx-auto">
+                  <FilePlus className="h-8 w-8 text-orange-600" />
+                </div>
+
+                <h3 className="text-2xl font-bold text-gray-900 text-center mb-2">Lançamento Avulso</h3>
+                <p className="text-center text-gray-500 mb-8">
+                  Importe uma Troca, Assistência ou Pedido de Venda antigo usando o número do lançamento.
+                </p>
+
+                <form onSubmit={handleLaunchSubmit} className="space-y-5">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Número do Lançamento (ERP)</label>
+                    <input
+                      type="text"
+                      value={launchNumber}
+                      onChange={(e) => setLaunchNumber(e.target.value)}
+                      className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none transition-all text-lg font-mono placeholder:font-sans"
+                      placeholder="Ex: 123456"
+                      autoFocus
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Tipo de Serviço</label>
+                    <div className="grid grid-cols-3 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setLaunchType('troca')}
+                        className={`px-3 py-3 rounded-xl border flex flex-col items-center gap-1.5 transition-all ${launchType === 'troca' ? 'bg-orange-50 border-orange-500 text-orange-700 ring-1 ring-orange-500' : 'bg-white border-gray-200 text-gray-600 hover:border-orange-200 hover:bg-orange-50/50'}`}
+                      >
+                        <RefreshCw className="h-5 w-5" />
+                        <span className="font-semibold text-xs">Troca</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setLaunchType('assistencia')}
+                        className={`px-3 py-3 rounded-xl border flex flex-col items-center gap-1.5 transition-all ${launchType === 'assistencia' ? 'bg-blue-50 border-blue-500 text-blue-700 ring-1 ring-blue-500' : 'bg-white border-gray-200 text-gray-600 hover:border-blue-200 hover:bg-blue-50/50'}`}
+                      >
+                        <Wrench className="h-5 w-5" />
+                        <span className="font-semibold text-xs">Assistência</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setLaunchType('venda')}
+                        className={`px-3 py-3 rounded-xl border flex flex-col items-center gap-1.5 transition-all ${launchType === 'venda' ? 'bg-emerald-50 border-emerald-500 text-emerald-700 ring-1 ring-emerald-500' : 'bg-white border-gray-200 text-gray-600 hover:border-emerald-200 hover:bg-emerald-50/50'}`}
+                      >
+                        <Package className="h-5 w-5" />
+                        <span className="font-semibold text-xs">Pedido Venda</span>
+                      </button>
+                    </div>
+                    {launchType === 'venda' && (
+                      <p className="mt-2 text-xs text-emerald-600 bg-emerald-50 p-2 rounded-lg border border-emerald-100">
+                        💡 Use para pedidos antigos aguardando liberação do cliente (reformas, etc.)
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="pt-4">
+                    <button
+                      type="submit"
+                      disabled={launchLoading || !launchNumber}
+                      className="w-full px-6 py-4 bg-gray-900 text-white rounded-xl font-bold hover:bg-black transition-all flex items-center justify-center shadow-lg disabled:opacity-70 disabled:cursor-not-allowed group"
+                    >
+                      {launchLoading ? (
+                        <>
+                          <RefreshCw className="animate-spin h-5 w-5 mr-2" />
+                          Buscando...
+                        </>
+                      ) : (
+                        <>
+                          <RefreshCw className="h-5 w-5 mr-2 group-hover:rotate-180 transition-transform duration-500" />
+                          Buscar e Importar
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          </div>
+        )
+      }
+
+    </div >
   );
 }
 

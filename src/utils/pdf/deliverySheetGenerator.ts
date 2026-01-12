@@ -127,7 +127,21 @@ export class DeliverySheetGenerator {
     this.drawText(page, vehicleText, margin + 180, nextRowY - 14, { font: helveticaFont, size: 11, color: { r: 0, g: 0, b: 0 } });
     this.drawText(page, plateText, margin + 360, nextRowY - 14, { font: helveticaFont, size: 11, color: { r: 0, g: 0, b: 0 } });
 
-    y = nextRowY - 30;
+    if (isAssemblySheet) {
+      nextRowY -= 32;
+      this.drawText(page, 'Observação', margin, nextRowY, { font: helveticaBoldFont, size: 10, color: { r: 0, g: 0, b: 0 } });
+      const obsText = data.route.observations || '-';
+      const obsLines = this.wrapText(obsText, width - margin * 2, helveticaFont, 11);
+
+      // Print up to 2 lines of observations to avoid layout breaking, or standard wrap
+      for (let i = 0; i < obsLines.length; i++) {
+        this.drawText(page, obsLines[i], margin, nextRowY - 14 - (i * 12), { font: helveticaFont, size: 11, color: { r: 0, g: 0, b: 0 } });
+      }
+      // Adjust spacing based on number of lines
+      y = nextRowY - 14 - (obsLines.length * 12) - 10;
+    } else {
+      y = nextRowY - 30;
+    }
     page.drawLine({ start: { x: margin, y }, end: { x: width - margin, y }, thickness: 1, color: rgb(0, 0, 0) });
     y -= 10;
 
