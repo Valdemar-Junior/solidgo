@@ -115,8 +115,9 @@ export class SeparationSheetGenerator {
             let hItemsTotal = 0;
             const colX = {
                 qtd: margin,
-                vols: margin + 30,
-                prod: margin + 65,
+                vols: margin + 25,
+                local: margin + 50, // 70
+                prod: margin + 140, // 160 (Increased from 110 to give 90px for Local)
                 marca: width - margin - 80,
                 check: width - margin - 15
             };
@@ -126,9 +127,19 @@ export class SeparationSheetGenerator {
                 const sku = item.sku || '';
                 const name = item.name || 'Item sem nome';
                 const fullName = sku ? `[${sku}] ${name}` : name;
+
+                // Location wrapping
+                const location = (item as any).location || (item as any).local_estocagem || '-';
+                const maxLocalWidth = colX.prod - colX.local - 5;
+                const locLines = wrapText(String(location), maxLocalWidth, fontRegular, fontSizeContent);
+
                 const lines = wrapText(fullName, maxProdWidth, fontRegular, fontSizeContent);
-                const h = Math.max(lines.length * lineHeight, 12) + 4; // +4 gap
-                return { item, lines, height: h };
+
+                // Height based on max lines (Product OR Location)
+                const maxLines = Math.max(lines.length, locLines.length);
+                const h = Math.max(maxLines * lineHeight, 12) + 4; // +4 gap
+
+                return { item, lines, locLines, height: h };
             });
             hItemsTotal = itemsWithLines.reduce((acc, curr) => acc + curr.height, 0);
 
@@ -185,6 +196,7 @@ export class SeparationSheetGenerator {
             // Cabeçalho da Tabela
             drawText('Qtd', colX.qtd, y, fontBold, 7);
             drawText('Vol', colX.vols, y, fontBold, 7);
+            drawText('Local', colX.local, y, fontBold, 7); // Header
             drawText('Produto / SKU', colX.prod, y, fontBold, 7);
             drawText('Marca', colX.marca, y, fontBold, 7);
             drawText('Conf', colX.check - 5, y, fontBold, 7);
@@ -194,7 +206,7 @@ export class SeparationSheetGenerator {
             y -= 10;
 
             // Itens
-            for (const { item, lines, height: itemH } of itemsWithLines) {
+            for (const { item, lines, locLines, height: itemH } of itemsWithLines) {
                 if (y - itemH < margin) {
                     page = pdfDoc.addPage([595.28, 841.89]);
                     drawHeader();
@@ -206,9 +218,18 @@ export class SeparationSheetGenerator {
                 const vols = (item.volumes_per_unit || 1) * qtd;
                 const brand = (item as any).brand || (order as any).brand || '-';
 
+                // Draw Qty/Vol
                 drawText(String(qtd), colX.qtd + 5, y, fontRegular, fontSizeContent);
                 drawText(String(vols), colX.vols + 5, y, fontRegular, fontSizeContent);
 
+                // Draw Location (Wrapped)
+                if (locLines) {
+                    locLines.forEach((line: string, i: number) => {
+                        drawText(line, colX.local, y - (i * lineHeight), fontRegular, fontSizeContent);
+                    });
+                }
+
+                // Draw Product (Wrapped)
                 lines.forEach((line, i) => {
                     drawText(line, colX.prod, y - (i * lineHeight), fontRegular, fontSizeContent);
                 });

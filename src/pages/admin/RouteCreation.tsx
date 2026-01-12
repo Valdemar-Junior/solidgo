@@ -206,6 +206,10 @@ function RouteCreationContent() {
   const [mixedConfirmOrders, setMixedConfirmOrders] = useState<Array<{ id: string, pedido: string, otherLocs: string[] }>>([]);
   const [mixedConfirmAction, setMixedConfirmAction] = useState<'create' | 'add' | 'none'>('none');
 
+  // Realtime Refs (to access latest function version inside effect)
+  const fetchRoutesRef = useRef<any>(null);
+  const loadDataRef = useRef<any>(null);
+
   // Tabs State - expandido para incluir bloqueados e coletas
   const [activeRoutesTab, setActiveRoutesTab] = useState<'deliveries' | 'pickups' | 'blocked' | 'pickupOrders'>('deliveries');
 
@@ -1264,9 +1268,14 @@ function RouteCreationContent() {
             // Recuperação de falhas: se estiver 'assigned' mas não bloqueado (passou filtro),
             // significa que está "solto" (ex: rota concluída mas status não atualizou).
             // Tratamos como pending para permitir nova roteirização.
-            if (String(o.status) === 'assigned') {
-              updated.status = 'pending';
-            }
+            // TENTATIVA DE RECUPERAÇÃO REMOVIDA:
+            // Anteriormente, se o pedido estava 'assigned' mas não bloqueado (rota concluída),
+            // o sistema forçava 'pending'. Isso causava duplicidade se o sync falhasse.
+            // Agora, se houver descompasso, o pedido fica 'assigned' e invisível aqui,
+            // devendo ser tratado na tela de Auditoria.
+            // if (String(o.status) === 'assigned') {
+            //   updated.status = 'pending';
+            // }
             return updated;
           });
         // DEBUG: Log orders with return data
@@ -1370,10 +1379,23 @@ function RouteCreationContent() {
       if (selectedRouteIdRef.current && processedRoutes.length > 0) {
         const found = processedRoutes.find(r => String(r.id) === String(selectedRouteIdRef.current));
         if (found) {
-          // Only set if modal is not currently open (to avoid overwriting user's current view)
-          if (!showRouteModal) {
+          // UPDATE: Allow update even if modal is open, BUT ONLY if we are NOT editing
+          // This allows Realtime updates to reflect in the modal (e.g. status change) while viewing details.
+          // We use the ref or state to check if editing? We have isEditingRoute state.
+          // Since we are inside loadData closure, we need to be careful about stale state.
+          // Ideally we should trust the Realtime update to be "truth".
+
+          // SAFETY: If `isEditingRoute` is true (state), we skip update to not lose typed text.
+          // BUT: `isEditingRoute` state might be stale here if loadData is captured.
+          // However, we are using `loadDataRef.current = loadData` in the render body, so `loadData` 
+          // assumes the closure of the render it was defined in.
+          // If the component re-rendered when `isEditingRoute` changed, `loadData` was recreated.
+          // SO usage of `isEditingRoute` here is safe (it's from the current closure).
+
+          if (!isEditingRoute) {
             setSelectedRoute(found);
           }
+
           if (showRouteModalRef.current && !showRouteModal) {
             setShowRouteModal(true);
           }
@@ -1388,6 +1410,48 @@ function RouteCreationContent() {
       isLoadingRef.current = false;
     }
   };
+
+  // --- REALTIME SETUP ---
+  // Ensure refs always point to latest function versions (avoid stale closures)
+  fetchRoutesRef.current = fetchRoutes;
+  loadDataRef.current = loadData;
+
+  useEffect(() => {
+    // Realtime Subscription
+    const channel = supabase
+      .channel('route-creation-changes')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'orders' },
+        (payload) => {
+          console.log('[Realtime] Orders changed');
+          if (loadDataRef.current) loadDataRef.current(true);
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'route_orders' },
+        (payload) => {
+          console.log('[Realtime] Route Orders changed');
+          if (loadDataRef.current) loadDataRef.current(true);
+          if (fetchRoutesRef.current) fetchRoutesRef.current(true); // Reset to page 0
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'routes' },
+        (payload) => {
+          console.log('[Realtime] Routes changed');
+          if (fetchRoutesRef.current) fetchRoutesRef.current(true);
+          if (loadDataRef.current) loadDataRef.current(true);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
 
   const toggleOrderSelection = (orderId: string) => {
     const newSelected = new Set(selectedOrders);

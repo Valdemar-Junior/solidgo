@@ -25,6 +25,8 @@ import AssemblyRouteDetails from './pages/montador/AssemblyRouteDetails';
 import TesteImportacao from './pages/teste-importacao';
 import DiagnosticoOrders from './pages/diagnostico-orders';
 import VerificarColunasOrders from './pages/verificar-colunas';
+import AuditDashboard from './pages/admin/AuditDashboard';
+
 import ProtectedRoute from './components/ProtectedRoute';
 import { Toaster } from 'sonner';
 import AppErrorBoundary from './components/AppErrorBoundary';
@@ -129,6 +131,14 @@ function App() {
             element={
               <ProtectedRoute allowedRoles={['admin']}>
                 <Reports />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/audit"
+            element={
+              <ProtectedRoute allowedRoles={['admin']}>
+                <AuditDashboard />
               </ProtectedRoute>
             }
           />

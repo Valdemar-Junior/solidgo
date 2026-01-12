@@ -3,20 +3,21 @@ import { Link } from 'react-router-dom';
 import { useAuthStore } from '../../stores/authStore';
 import { supabase } from '../../supabase/client';
 import type { DashboardMetrics } from '../../types/database';
-import { 
-  BarChart3, 
-  Package, 
-  Truck, 
-  Users, 
-  Settings, 
-  LogOut, 
-  Hammer, 
+import {
+  BarChart3,
+  Package,
+  Truck,
+  Users,
+  Settings,
+  LogOut,
+  Hammer,
   UserCircle,
   TrendingUp,
   AlertTriangle,
   CheckCircle2,
   Bell,
-  Search
+  Search,
+  AlertOctagon
 } from 'lucide-react';
 
 export default function AdminDashboard() {
@@ -38,7 +39,7 @@ export default function AdminDashboard() {
     try {
       setLoading(true);
       const today = new Date().toISOString().split('T')[0];
-      
+
       const { count: routesCount } = await supabase
         .from('routes')
         .select('*', { count: 'exact', head: true })
@@ -59,7 +60,7 @@ export default function AdminDashboard() {
         .from('route_orders')
         .select('*', { count: 'exact', head: true });
 
-      const successRate = totalCount && totalCount > 0 
+      const successRate = totalCount && totalCount > 0
         ? Math.round((completedCount || 0) / totalCount * 100)
         : 0;
 
@@ -139,6 +140,14 @@ export default function AdminDashboard() {
       color: 'bg-gray-700',
       gradient: 'from-gray-600 to-gray-700',
     },
+    {
+      title: 'Auditoria',
+      description: 'Verificar inconsistências',
+      icon: AlertOctagon,
+      href: '/admin/audit',
+      color: 'bg-red-600',
+      gradient: 'from-red-500 to-red-600',
+    },
   ];
 
   const StatCard = ({ title, value, icon: Icon, colorClass, gradientClass }: any) => (
@@ -174,15 +183,15 @@ export default function AdminDashboard() {
                 </p>
               </div>
             </div>
-            
+
             <div className="flex items-center gap-4">
               <button className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-full transition-colors relative">
                 <Bell className="h-5 w-5" />
                 <span className="absolute top-2 right-2 h-2 w-2 bg-red-500 rounded-full border border-white"></span>
               </button>
-              
+
               <div className="h-8 w-px bg-gray-200 mx-2 hidden sm:block"></div>
-              
+
               <div className="flex items-center gap-3 pl-2">
                 <div className="hidden sm:flex flex-col items-end">
                   <span className="text-sm font-medium text-gray-900">{user?.name || 'Administrador'}</span>
@@ -206,37 +215,37 @@ export default function AdminDashboard() {
       </header>
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
-        
+
         {/* KPI Stats Grid */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
-          <StatCard 
-            title="Rotas Hoje" 
-            value={metrics.total_routes_today} 
-            icon={Truck} 
+          <StatCard
+            title="Rotas Hoje"
+            value={metrics.total_routes_today}
+            icon={Truck}
             gradientClass="from-blue-500 to-blue-600"
           />
-          <StatCard 
-            title="Pendentes" 
-            value={metrics.pending_deliveries} 
-            icon={Package} 
+          <StatCard
+            title="Pendentes"
+            value={metrics.pending_deliveries}
+            icon={Package}
             gradientClass="from-yellow-400 to-orange-500"
           />
-          <StatCard 
-            title="Concluídas" 
-            value={metrics.completed_deliveries} 
-            icon={CheckCircle2} 
+          <StatCard
+            title="Concluídas"
+            value={metrics.completed_deliveries}
+            icon={CheckCircle2}
             gradientClass="from-green-500 to-emerald-600"
           />
-          <StatCard 
-            title="Taxa Sucesso" 
-            value={`${metrics.success_rate}%`} 
-            icon={TrendingUp} 
+          <StatCard
+            title="Taxa Sucesso"
+            value={`${metrics.success_rate}%`}
+            icon={TrendingUp}
             gradientClass="from-purple-500 to-indigo-600"
           />
-          <StatCard 
-            title="Retornos" 
-            value={metrics.expired_returns} 
-            icon={AlertTriangle} 
+          <StatCard
+            title="Retornos"
+            value={metrics.expired_returns}
+            icon={AlertTriangle}
             gradientClass="from-red-500 to-rose-600"
           />
         </div>
@@ -268,7 +277,7 @@ export default function AdminDashboard() {
                     </p>
                   </div>
                 </div>
-                
+
                 <div className="absolute bottom-4 right-4 opacity-0 group-hover:opacity-100 transition-all duration-300 transform translate-x-2 group-hover:translate-x-0">
                   <span className="text-xs font-semibold text-blue-600 bg-blue-50 px-2 py-1 rounded-full">
                     Acessar &rarr;
@@ -280,7 +289,7 @@ export default function AdminDashboard() {
         </div>
 
       </main>
-      
+
       {/* Footer discreto */}
       <footer className="max-w-7xl mx-auto px-4 py-6 text-center text-sm text-gray-400">
         <p>&copy; {new Date().getFullYear()} SOLIDGO Logística. v2.5.0</p>
