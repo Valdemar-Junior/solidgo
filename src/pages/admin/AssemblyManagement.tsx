@@ -159,6 +159,11 @@ function AssemblyManagementContent() {
   const isMountedRef = useRef(true);
   const [deliveryInfo, setDeliveryInfo] = useState<Record<string, string>>({});
 
+  // Realtime Refs (to access latest function version inside effect)
+  const fetchRoutesRef = useRef<any>(null);
+  const loadDataRef = useRef<any>(null);
+  const assemblyRoutesRef = useRef<AssemblyRoute[]>([]); // To pass current routes to loadData on product updates
+
   // --- SINGLE LAUNCH IMPORT (TROCAS/ASSISTENCIAS/VENDAS) ---
   const [showLaunchModal, setShowLaunchModal] = useState(false);
   const [launchNumber, setLaunchNumber] = useState('');
@@ -455,6 +460,10 @@ function AssemblyManagementContent() {
       if (resetPage) setPage(1); // Next page
       else setPage(prev => prev + 1);
 
+      // Update ref for Realtime usage
+      if (resetPage) assemblyRoutesRef.current = fetchedRoutes;
+      else assemblyRoutesRef.current = [...assemblyRoutesRef.current, ...fetchedRoutes];
+
       return fetchedRoutes;
 
     } catch (err) {
@@ -579,6 +588,47 @@ function AssemblyManagementContent() {
   };
 
   // --- EFFECTS ---
+
+  useEffect(() => {
+    // Update refs for Realtime
+    fetchRoutesRef.current = fetchAssemblyRoutes;
+    loadDataRef.current = loadData;
+  });
+
+  useEffect(() => {
+    // Realtime Subscription
+    const channel = supabase
+      .channel('assembly-management-changes')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'assembly_routes' },
+        (payload) => {
+          console.log('[Realtime] Assembly Routes changed');
+          // If routes change, we must re-fetch routes first
+          if (fetchRoutesRef.current) {
+            fetchRoutesRef.current(true).then((newRoutes: any[]) => {
+              if (loadDataRef.current) loadDataRef.current(true, newRoutes);
+            });
+          }
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'assembly_products' },
+        (payload) => {
+          console.log('[Realtime] Assembly Products changed');
+          // If products change, we can just reload data (using current routes)
+          if (loadDataRef.current) {
+            loadDataRef.current(true, assemblyRoutesRef.current);
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
 
   useEffect(() => {
     // This effect runs on mount and when filters change

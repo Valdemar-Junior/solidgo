@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { supabase } from '../supabase/client';
 import { OfflineStorage, SyncQueue, NetworkStatus } from '../utils/offline/storage';
 import { backgroundSync } from '../utils/offline/backgroundSync';
@@ -33,6 +33,10 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
   const [routeStatus, setRouteStatus] = useState<string>('pending');
   const [searchQuery, setSearchQuery] = useState('');
 
+  // Realtime Ref
+  const loadItemsRef = useRef<any>(null); // To access latest load function
+  useEffect(() => { loadItemsRef.current = loadRouteItems; }); // Always keep ref updated
+
   useEffect(() => {
     loadRouteItems();
     loadReturnReasons();
@@ -42,8 +46,22 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
     };
     NetworkStatus.addListener(listener);
 
+    // Realtime Subscription
+    const channel = supabase
+      .channel(`assembly-marking-${routeId}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'assembly_products', filter: `assembly_route_id=eq.${routeId}` },
+        (payload) => {
+          console.log('[Realtime] Assembly Items changed for route', routeId);
+          if (loadItemsRef.current) loadItemsRef.current();
+        }
+      )
+      .subscribe();
+
     return () => {
       NetworkStatus.removeListener(listener);
+      supabase.removeChannel(channel);
     };
   }, [routeId]);
 
