@@ -173,6 +173,9 @@ function AssemblyManagementContent() {
   const [launchNumber, setLaunchNumber] = useState('');
   const [launchType, setLaunchType] = useState<'troca' | 'assistencia' | 'venda'>('troca');
   const [launchLoading, setLaunchLoading] = useState(false);
+  const [launchPreviewData, setLaunchPreviewData] = useState<any[] | null>(null); // New: Store fetched data for preview
+  const [selectedPreviewIndices, setSelectedPreviewIndices] = useState<Set<string>>(new Set()); // New: Track selected products
+
 
   // Filters
   const [filterCity, setFilterCity] = useState<string>('');
@@ -1003,11 +1006,20 @@ function AssemblyManagementContent() {
   // Esta função importa lançamentos avulsos (troca/assistência) diretamente para a tabela assembly_products,
   // pulando o gatilho normal de entrega. O pedido é salvo em orders com status 'delivered' 
   // e os produtos são inseridos diretamente em assembly_products com status 'pending'.
-  const handleLaunchSubmit = async (e: React.FormEvent) => {
+  // --- SINGLE LAUNCH IMPORT HANDLER ---
+  // Steps:
+  // 1. Fetch data from webhook
+  // 2. Show preview modal with product selection
+  // 3. Confirm import with selected products only
+
+  const fetchLaunchData = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!launchNumber.trim()) { toast.error('Digite o número do lançamento'); return; }
 
     setLaunchLoading(true);
+    setLaunchPreviewData(null);
+    setSelectedPreviewIndices(new Set());
+
     try {
       let webhookUrl = import.meta.env.VITE_WEBHOOK_URL_CONSULTA as string | undefined;
       if (!webhookUrl) {
@@ -1044,13 +1056,79 @@ function AssemblyManagementContent() {
         return;
       }
 
+      // Pre-process items to facilitate selection
+      // We will flatten products for selection, but keep structure for final import
+      const previewItems: any[] = [];
+
+      items.forEach((item: any, itemIdx: number) => {
+        const produtos = Array.isArray(item.produtos) ? item.produtos : (Array.isArray(item.produtos_locais) ? item.produtos_locais : []);
+        // Filter 'Sim' assembly products here for the preview? Or show all?
+        // User requested: "selecionar o produto que quero importar"
+        // Logic shows only assembly products in the end, so let's show only 'Sim' products in preview to avoid confusion
+
+        const validProducts = produtos.filter((p: any) => {
+          const checkMontavel = String(p.produto_e_montavel || 'Sim').trim().toUpperCase();
+          return checkMontavel === 'SIM';
+        });
+
+        if (validProducts.length > 0) {
+          // Attach a unique key for selection
+          const enrichedProducts = validProducts.map((p: any, pIdx: number) => ({
+            ...p,
+            _selectionKey: `${itemIdx}-${pIdx}`, // Simple key
+            _parentItem: item
+          }));
+
+          // We'll store the full item but replace products with enriched ones for this view context
+          previewItems.push({
+            ...item,
+            _originalProducts: produtos, // Keep original
+            produtos: enrichedProducts
+          });
+        }
+      });
+
+      if (previewItems.length === 0) {
+        toast.warning('Pedido encontrado, mas não possui produtos marcados como montáveis.');
+        setLaunchLoading(false);
+        return;
+      }
+
+      setLaunchPreviewData(previewItems);
+      // Auto-select all by default? Or none? Let's select all by default for convenience
+      const allKeys = new Set<string>();
+      previewItems.forEach(item => {
+        item.produtos.forEach((p: any) => allKeys.add(p._selectionKey));
+      });
+      setSelectedPreviewIndices(allKeys);
+      setLaunchLoading(false);
+
+    } catch (e: any) {
+      console.error(e);
+      toast.error(`Erro: ${e.message}`);
+      setLaunchLoading(false);
+    }
+  };
+
+  const confirmLaunchImport = async () => {
+    if (!launchPreviewData) return;
+
+    if (selectedPreviewIndices.size === 0) {
+      toast.error('Selecione pelo menos um produto para importar.');
+      return;
+    }
+
+    setLaunchLoading(true);
+    try {
+      const items = launchPreviewData;
+
       let insertedProductsCount = 0;
       let errors = 0;
       const now = new Date().toISOString();
-      const importedOrderIds: string[] = []; // Rastrear IDs dos pedidos importados para seleção automática
+      const importedOrderIds: string[] = [];
 
       for (const o of items) {
-        const produtos = Array.isArray(o.produtos) ? o.produtos : (Array.isArray(o.produtos_locais) ? o.produtos_locais : []);
+        const produtos = o.produtos; // These are the enriched ones
         const getVal = (v: any) => String(v ?? '').trim();
 
         const pickZip = (raw: any) => {
@@ -1059,7 +1137,6 @@ function AssemblyManagementContent() {
           return '';
         };
 
-        // Construir ID do pedido com sufixo para troca/assistência
         let erpId = String(o.numero_lancamento ?? o.lancamento_venda ?? o.codigo_cliente ?? launchNumber);
         if (launchType !== 'venda') {
           const suffix = launchType === 'troca' ? '-T' : '-A';
@@ -1068,7 +1145,6 @@ function AssemblyManagementContent() {
           }
         }
 
-        // Verificar se o pedido já existe no sistema
         const { data: existingOrder } = await supabase
           .from('orders')
           .select('id, order_id_erp')
@@ -1078,7 +1154,6 @@ function AssemblyManagementContent() {
         let orderId: string;
 
         if (existingOrder) {
-          // Se o pedido já existe, verificar se já tem produtos de montagem
           const { data: existingProducts } = await supabase
             .from('assembly_products')
             .select('id')
@@ -1090,14 +1165,27 @@ function AssemblyManagementContent() {
           }
           orderId = existingOrder.id;
         } else {
-          // Criar o pedido na tabela orders com status 'delivered' (pula a roteirização de entrega)
-          const itemsJson = produtos.filter((p: any) => {
-            // FILTRO ESTRITO: Apenas produtos montáveis são importados no Lançamento Avulso.
-            // Ignora ventiladores, travesseiros, etc.
-            const checkMontavel = String(p.produto_e_montavel || 'Sim').trim().toUpperCase();
-            // Se for explicitamente NÃO, filtra fora. Se for VAZIO ou SIM, mantém.
-            return checkMontavel === 'SIM';
-          }).map((p: any) => ({
+          // Create order with FULL original products list (from _originalProducts if available, or just use what we have logic)
+          // User requested: "na tabela orders salva somente as infromaçoes daquele pedido importado"
+          // Wait, user said: "na tabela orders salva somente as infromaçoes daquele pedido importado"
+          // Typically we want the order record to be accurate to what was imported.
+          // If we import only 1 product, should the order JSON contain only that product? 
+          // "na tabela orders salva somente as infromaçoes daquele pedido importado" -> "in the orders table save only the information of that imported order"
+          // I will stick to saving the order with ALL items in items_json to maintain data integrity of the "Order" entity as it exists in ERP,
+          // BUT, the Assembly Products will strictly be the selected ones.
+          // Actually, re-reading: "ao realizar uma assintencia por exemplo o cliente pode ter comprado dois ou mais produtos mas so um produto vai precisar de assitencia então nessa importação eu so irei importar esse produto que precisa de assistencia"
+          // "no formato atual eu so consigo importar todos os produtos ai contabilizo pra o montador variso porodutos e não somente o que ele de fato prestou o serviço"
+          // So the core issue is the ASSEMBLY PRODUCTS being too many.
+          // I will use ALL products for the Order JSON (so we know what the order *was*), but ONLY selected for Assembly Products (what is being worked on).
+
+          // To ensure we don't break the "order" view, let's use the full original list for the JSON if possible.
+          // But my previewItems logic put _originalProducts in the item loop.
+
+          // Filter enriched products by selection first
+          const selectedProductsForOrder = o.produtos.filter((p: any) => selectedPreviewIndices.has(p._selectionKey));
+
+          // Map SELECTED products to items_json
+          const itemsJson = selectedProductsForOrder.map((p: any) => ({
             sku: getVal(p.codigo_produto),
             name: getVal(p.nome_produto),
             quantity: Number(p.quantidade_volumes ?? 1),
@@ -1109,17 +1197,12 @@ function AssemblyManagementContent() {
             total_price: Number(p.valor_total_real ?? p.valor_total_item ?? 0),
             price: Number(p.valor_unitario_real ?? p.valor_unitario ?? 0),
             location: getVal(p.local_estocagem),
-            has_assembly: 'Sim', // Forçar montagem para importação avulsa de produto montável
-            produto_e_montavel: getVal(p.produto_e_montavel), // Persistir o dado original
+            has_assembly: 'Sim',
+            produto_e_montavel: getVal(p.produto_e_montavel),
             labels: Array.isArray(p.etiquetas) ? p.etiquetas : [],
             department: getVal(p.departamento),
             brand: getVal(p.marca),
           }));
-
-          // Se itemsJson estiver vazio após filtro, o que acontece? 
-          // O insert abaixo vai criar um pedido sem itens no JSON. 
-          // Depois o loop de criação de assembly_products não vai criar nada se baseando nesse JSON?
-          // Precisamos verificar o loop de productsInsert depois.
 
           const orderRecord = {
             order_id_erp: erpId,
@@ -1144,7 +1227,7 @@ function AssemblyManagementContent() {
               lng: o.lng ?? o.longitude ?? o.long ?? null
             },
             items_json: itemsJson,
-            status: 'delivered', // IMPORTANTE: Status 'delivered' para pular roteirização de entrega
+            status: 'delivered',
             raw_json: o,
             service_type: launchType === 'venda' ? undefined : launchType,
             department: String(itemsJson[0]?.department || ''),
@@ -1166,7 +1249,7 @@ function AssemblyManagementContent() {
           orderId = insertedOrder.id;
         }
 
-        // Agora inserir os produtos diretamente na tabela assembly_products (pulando o gatilho de entrega)
+        // --- FILTER PRODUCTS BASED ON SELECTION ---
         const addressJson = {
           street: getVal(o.destinatario_endereco),
           neighborhood: getVal(o.destinatario_bairro),
@@ -1176,10 +1259,10 @@ function AssemblyManagementContent() {
           complement: getVal(o.destinatario_complemento)
         };
 
+        // Filter ONLY selected products for assembly_products table
         const assemblyProducts = produtos.filter((p: any) => {
-          // Apply strict filter again for insertion into assembly_products table
-          const checkMontavel = String(p.produto_e_montavel || 'Sim').trim().toUpperCase();
-          return checkMontavel === 'SIM';
+          // Must be selected
+          return selectedPreviewIndices.has(p._selectionKey);
         }).map((p: any) => ({
           order_id: orderId,
           product_name: getVal(p.nome_produto) || 'Produto sem nome',
@@ -1202,9 +1285,11 @@ function AssemblyManagementContent() {
             errors++;
           } else {
             insertedProductsCount += assemblyProducts.length;
-            importedOrderIds.push(orderId); // Adicionar para seleção automática
-            console.log(`[AssemblyManagement] Inseridos ${assemblyProducts.length} produtos de montagem para pedido ${erpId}`);
+            importedOrderIds.push(orderId);
+            console.log(`[AssemblyManagement] Inseridos ${assemblyProducts.length} produtos de montagem (selecionados) para pedido ${erpId}`);
           }
+        } else {
+          toast.info(`Nenhum produto selecionado para o pedido ${erpId}`);
         }
       }
 
@@ -1212,7 +1297,6 @@ function AssemblyManagementContent() {
         toast.error(`Erro ao importar. Verifique se o pedido já existe.`);
       } else if (errors > 0) {
         toast.warning(`${insertedProductsCount} produto(s) importado(s), ${errors} erro(s).`);
-        // Mesmo com erros, selecionar os que foram importados com sucesso
         if (importedOrderIds.length > 0) {
           await loadData(false);
           setSelectedOrders(prev => {
@@ -1226,16 +1310,16 @@ function AssemblyManagementContent() {
         toast.success(`${tipoLabel} importado(s) com sucesso! ${insertedProductsCount} produto(s) disponíveis para montagem.`);
         setShowLaunchModal(false);
         setLaunchNumber('');
+        setLaunchPreviewData(null); // Clear preview
         await loadData(false);
 
-        // Selecionar automaticamente os pedidos importados
         setSelectedOrders(prev => {
           const newSet = new Set(prev);
           importedOrderIds.forEach(id => newSet.add(id));
           return newSet;
         });
       } else {
-        toast.info('Nenhum produto importado. Verifique se o pedido possui produtos.');
+        toast.info('Nenhum produto importado.');
       }
 
     } catch (e: any) {
@@ -1245,6 +1329,9 @@ function AssemblyManagementContent() {
       setLaunchLoading(false);
     }
   };
+
+  const handleLaunchSubmit = fetchLaunchData;
+
 
   // --- RENDER ---
 
@@ -2725,92 +2812,172 @@ function AssemblyManagementContent() {
       {
         showLaunchModal && (
           <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
-            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden relative">
-              <button
-                onClick={() => setShowLaunchModal(false)}
-                className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 transition-colors"
-              >
-                <X className="h-5 w-5" />
-              </button>
+            <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[85vh] overflow-hidden flex flex-col relative">
 
-              <div className="p-8">
-                <div className="w-16 h-16 bg-orange-50 rounded-full flex items-center justify-center mb-6 mx-auto">
-                  <FilePlus className="h-8 w-8 text-orange-600" />
-                </div>
+              <div className="p-5 border-b border-gray-100 flex justify-between items-center bg-white z-10">
+                <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
+                  <FilePlus className="h-5 w-5 text-orange-600" />
+                  Lançamento Avulso
+                </h2>
+                <button
+                  onClick={() => { setShowLaunchModal(false); setLaunchPreviewData(null); }}
+                  className="text-gray-400 hover:text-gray-600 transition-colors p-1"
+                >
+                  <X className="h-6 w-6" />
+                </button>
+              </div>
 
-                <h3 className="text-2xl font-bold text-gray-900 text-center mb-2">Lançamento Avulso</h3>
-                <p className="text-center text-gray-500 mb-8">
-                  Importe uma Troca, Assistência ou Pedido de Venda antigo usando o número do lançamento.
-                </p>
+              <div className="p-6 overflow-y-auto flex-1">
+                {!launchPreviewData ? (
+                  /* STEP 1: SEARCH */
+                  <form onSubmit={handleLaunchSubmit} className="space-y-6">
+                    <div className="text-center mb-6">
+                      <div className="w-16 h-16 bg-orange-50 rounded-full flex items-center justify-center mb-4 mx-auto">
+                        <Search className="h-8 w-8 text-orange-600" />
+                      </div>
+                      <p className="text-gray-500">
+                        Importe uma Troca, Assistência ou Pedido de Venda antigo usando o número do lançamento.
+                      </p>
+                    </div>
 
-                <form onSubmit={handleLaunchSubmit} className="space-y-5">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">Número do Lançamento (ERP)</label>
-                    <input
-                      type="text"
-                      value={launchNumber}
-                      onChange={(e) => setLaunchNumber(e.target.value)}
-                      className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none transition-all text-lg font-mono placeholder:font-sans"
-                      placeholder="Ex: 123456"
-                      autoFocus
-                    />
-                  </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Número do Lançamento (ERP)</label>
+                      <input
+                        type="text"
+                        value={launchNumber}
+                        onChange={(e) => setLaunchNumber(e.target.value)}
+                        className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none transition-all text-lg font-mono placeholder:font-sans"
+                        placeholder="Ex: 123456"
+                        autoFocus
+                      />
+                    </div>
 
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">Tipo de Serviço</label>
-                    <div className="grid grid-cols-3 gap-2">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Tipo de Serviço</label>
+                      <div className="grid grid-cols-3 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setLaunchType('troca')}
+                          className={`px-3 py-3 rounded-xl border flex flex-col items-center gap-1.5 transition-all ${launchType === 'troca' ? 'bg-orange-50 border-orange-500 text-orange-700 ring-1 ring-orange-500' : 'bg-white border-gray-200 text-gray-600 hover:border-orange-200 hover:bg-orange-50/50'}`}
+                        >
+                          <RefreshCw className="h-5 w-5" />
+                          <span className="font-semibold text-xs">Troca</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setLaunchType('assistencia')}
+                          className={`px-3 py-3 rounded-xl border flex flex-col items-center gap-1.5 transition-all ${launchType === 'assistencia' ? 'bg-blue-50 border-blue-500 text-blue-700 ring-1 ring-blue-500' : 'bg-white border-gray-200 text-gray-600 hover:border-blue-200 hover:bg-blue-50/50'}`}
+                        >
+                          <Wrench className="h-5 w-5" />
+                          <span className="font-semibold text-xs">Assistência</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setLaunchType('venda')}
+                          className={`px-3 py-3 rounded-xl border flex flex-col items-center gap-1.5 transition-all ${launchType === 'venda' ? 'bg-emerald-50 border-emerald-500 text-emerald-700 ring-1 ring-emerald-500' : 'bg-white border-gray-200 text-gray-600 hover:border-emerald-200 hover:bg-emerald-50/50'}`}
+                        >
+                          <Package className="h-5 w-5" />
+                          <span className="font-semibold text-xs">Venda</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="pt-2">
                       <button
-                        type="button"
-                        onClick={() => setLaunchType('troca')}
-                        className={`px-3 py-3 rounded-xl border flex flex-col items-center gap-1.5 transition-all ${launchType === 'troca' ? 'bg-orange-50 border-orange-500 text-orange-700 ring-1 ring-orange-500' : 'bg-white border-gray-200 text-gray-600 hover:border-orange-200 hover:bg-orange-50/50'}`}
+                        type="submit"
+                        disabled={launchLoading || !launchNumber}
+                        className="w-full px-6 py-3 bg-gray-900 text-white rounded-xl font-bold hover:bg-black transition-all flex items-center justify-center shadow-lg disabled:opacity-70 disabled:cursor-not-allowed"
                       >
-                        <RefreshCw className="h-5 w-5" />
-                        <span className="font-semibold text-xs">Troca</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setLaunchType('assistencia')}
-                        className={`px-3 py-3 rounded-xl border flex flex-col items-center gap-1.5 transition-all ${launchType === 'assistencia' ? 'bg-blue-50 border-blue-500 text-blue-700 ring-1 ring-blue-500' : 'bg-white border-gray-200 text-gray-600 hover:border-blue-200 hover:bg-blue-50/50'}`}
-                      >
-                        <Wrench className="h-5 w-5" />
-                        <span className="font-semibold text-xs">Assistência</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setLaunchType('venda')}
-                        className={`px-3 py-3 rounded-xl border flex flex-col items-center gap-1.5 transition-all ${launchType === 'venda' ? 'bg-emerald-50 border-emerald-500 text-emerald-700 ring-1 ring-emerald-500' : 'bg-white border-gray-200 text-gray-600 hover:border-emerald-200 hover:bg-emerald-50/50'}`}
-                      >
-                        <Package className="h-5 w-5" />
-                        <span className="font-semibold text-xs">Pedido Venda</span>
+                        {launchLoading ? (
+                          <>
+                            <Loader2 className="animate-spin h-5 w-5 mr-2" />
+                            Buscando...
+                          </>
+                        ) : (
+                          <>
+                            <Search className="h-5 w-5 mr-2" />
+                            Buscar Pedido
+                          </>
+                        )}
                       </button>
                     </div>
-                    {launchType === 'venda' && (
-                      <p className="mt-2 text-xs text-emerald-600 bg-emerald-50 p-2 rounded-lg border border-emerald-100">
-                        💡 Use para pedidos antigos aguardando liberação do cliente (reformas, etc.)
-                      </p>
-                    )}
-                  </div>
+                  </form>
+                ) : (
+                  /* STEP 2: SELECT PRODUCTS */
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="font-medium text-gray-700">Selecione os produtos para importar:</span>
+                      <span className="bg-orange-100 text-orange-800 py-0.5 px-2 rounded-full text-xs font-medium">
+                        {selectedPreviewIndices.size} selecionado(s)
+                      </span>
+                    </div>
 
-                  <div className="pt-4">
-                    <button
-                      type="submit"
-                      disabled={launchLoading || !launchNumber}
-                      className="w-full px-6 py-4 bg-gray-900 text-white rounded-xl font-bold hover:bg-black transition-all flex items-center justify-center shadow-lg disabled:opacity-70 disabled:cursor-not-allowed group"
-                    >
-                      {launchLoading ? (
-                        <>
-                          <RefreshCw className="animate-spin h-5 w-5 mr-2" />
-                          Buscando...
-                        </>
-                      ) : (
-                        <>
-                          <RefreshCw className="h-5 w-5 mr-2 group-hover:rotate-180 transition-transform duration-500" />
-                          Buscar e Importar
-                        </>
-                      )}
-                    </button>
+                    <div className="border border-gray-200 rounded-xl divide-y divide-gray-100 max-h-[400px] overflow-y-auto">
+                      {launchPreviewData.map((item, i) => (
+                        <React.Fragment key={i}>
+                          {item.produtos.map((prod: any) => {
+                            const key = prod._selectionKey;
+                            const isSelected = selectedPreviewIndices.has(key);
+                            return (
+                              <div
+                                key={key}
+                                className={`p-4 flex items-start gap-4 cursor-pointer transition-colors ${isSelected ? 'bg-orange-50/60 hover:bg-orange-50' : 'hover:bg-gray-50'}`}
+                                onClick={() => {
+                                  const next = new Set(selectedPreviewIndices);
+                                  if (next.has(key)) next.delete(key);
+                                  else next.add(key);
+                                  setSelectedPreviewIndices(next);
+                                }}
+                              >
+                                <div className={`mt-1 w-5 h-5 rounded border flex items-center justify-center flex-shrink-0 transition-colors ${isSelected ? 'bg-orange-500 border-orange-500' : 'border-gray-300 bg-white'}`}>
+                                  {isSelected && <CheckCircle2 className="w-3.5 h-3.5 text-white" />}
+                                </div>
+                                <div className="flex-1">
+                                  <div className={`font-medium text-sm ${isSelected ? 'text-orange-900' : 'text-gray-900'}`}>{prod.nome_produto || 'Produto sem nome'}</div>
+                                  <div className="text-gray-500 text-xs mt-0.5">SKU: {prod.codigo_produto}</div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </React.Fragment>
+                      ))}
+                    </div>
+
+                    <div className="bg-blue-50 p-4 rounded-xl text-sm text-blue-700 flex items-start gap-3">
+                      <AlertCircle className="w-5 h-5 mt-0.5 flex-shrink-0 text-blue-600" />
+                      <p className="leading-relaxed text-xs">
+                        <strong>Atenção:</strong> Apenas os produtos selecionados serão importados e salvos no histórico do pedido.
+                      </p>
+                    </div>
+
+                    <div className="pt-4 flex gap-3">
+                      <button
+                        type="button"
+                        onClick={() => setLaunchPreviewData(null)}
+                        className="flex-1 px-4 py-3 border border-gray-300 text-gray-700 font-medium rounded-xl hover:bg-gray-50 transition-colors"
+                      >
+                        Voltar
+                      </button>
+                      <button
+                        onClick={confirmLaunchImport}
+                        disabled={launchLoading || selectedPreviewIndices.size === 0}
+                        className="flex-[2] flex items-center justify-center px-4 py-3 bg-green-600 text-white font-bold rounded-xl hover:bg-green-700 disabled:opacity-50 shadow-lg transition-all"
+                      >
+                        {launchLoading ? (
+                          <>
+                            <Loader2 className="animate-spin h-5 w-5 mr-2" />
+                            Importando...
+                          </>
+                        ) : (
+                          <>
+                            <CheckCircle2 className="h-5 w-5 mr-2" />
+                            Confirmar Importação
+                          </>
+                        )}
+                      </button>
+                    </div>
                   </div>
-                </form>
+                )}
               </div>
             </div>
           </div>

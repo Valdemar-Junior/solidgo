@@ -20,6 +20,7 @@ interface RouteOrderInfo {
 interface AssemblyInfo {
   id: string;
   status: string;
+  product_name?: string;
   assembly_route_id?: string;
   assembly_route?: any;
   assembly_date?: string;
@@ -456,7 +457,8 @@ export default function OrderLookup() {
                   <div className="space-y-2">
                     {assemblies.map((ap) => (
                       <div key={ap.id} className="border border-gray-100 rounded-lg p-3">
-                        <p className="text-sm font-semibold text-gray-900">{ap.assembly_route?.name || ap.assembly_route_id}</p>
+                        <p className="text-sm font-semibold text-gray-900">{ap.assembly_route?.name || ap.assembly_route_id || 'Sem Rota'}</p>
+                        <p className="text-xs font-medium text-gray-700 mt-1 mb-1">{ap.product_name || 'Produto não identificado'}</p>
                         <p className="text-xs text-gray-500 capitalize">Status: {statusLabelMontagem[(ap.status || '').toLowerCase()] || ap.status}</p>
                         <p className="text-xs text-gray-500">Montador: {ap.assembly_route?.assembler?.name || '-'}</p>
                         <p className="text-xs text-gray-500">Prazo: {formatDate(ap.assembly_route?.deadline)}</p>
