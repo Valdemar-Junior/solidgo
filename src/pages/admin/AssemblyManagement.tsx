@@ -38,7 +38,8 @@ import {
   FilePlus,
   RefreshCw,
   Wrench,
-  Loader2
+  Loader2,
+  FileSpreadsheet
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { DeliverySheetGenerator } from '../../utils/pdf/deliverySheetGenerator';
@@ -2813,6 +2814,64 @@ function AssemblyManagementContent() {
                                       className="inline-flex items-center px-3 py-1.5 rounded-lg border border-blue-200 bg-blue-50 text-blue-700 text-xs font-medium hover:bg-blue-100"
                                     >
                                       Ver Produtos
+                                    </button>
+                                    {/* Individual Assembly Romaneio Print */}
+                                    <button
+                                      className="p-1.5 text-purple-600 hover:text-purple-800 hover:bg-purple-50 rounded-lg border border-purple-200 transition-colors"
+                                      title="Imprimir Romaneio Individual"
+                                      onClick={async () => {
+                                        const toastId = toast.loading('Gerando Romaneio Individual...');
+                                        try {
+                                          if (!order || !selectedRoute) throw new Error("Dados não encontrados");
+
+                                          const route = selectedRoute as any;
+                                          const m = montadores.find(u => u.id === route.assembler_id);
+                                          const v = vehicles.find(veh => veh.id === route.vehicle_id);
+
+                                          // Build single order data structure
+                                          const singleRouteOrder = {
+                                            id: String(list[0].id),
+                                            route_id: String(route.id),
+                                            order_id: String(list[0].order_id),
+                                            sequence: 1,
+                                            status: 'pending' as 'pending' | 'delivered' | 'returned',
+                                            created_at: route.created_at,
+                                            updated_at: route.updated_at
+                                          };
+
+                                          const data = {
+                                            route: {
+                                              id: route.id,
+                                              name: route.name,
+                                              driver_id: '',
+                                              vehicle_id: '',
+                                              conferente: '',
+                                              observations: route.observations,
+                                              status: route.status,
+                                              created_at: route.created_at,
+                                              updated_at: route.updated_at,
+                                              route_code: route.route_code
+                                            },
+                                            routeOrders: [singleRouteOrder],
+                                            driver: { id: '', user_id: '', cpf: '', active: true, name: '—', user: { id: '', email: '', name: '—', role: 'driver', created_at: new Date().toISOString() } } as any,
+                                            vehicle: undefined,
+                                            orders: [order] as any,
+                                            generatedAt: new Date().toISOString(),
+                                            assemblyInstallerName: m?.name || m?.email || '—',
+                                            assemblyVehicleModel: v?.model || '',
+                                            assemblyVehiclePlate: v?.plate || ''
+                                          };
+
+                                          const pdfBytes = await DeliverySheetGenerator.generateDeliverySheet(data, 'Romaneio de Montagem');
+                                          DeliverySheetGenerator.openPDFInNewTab(pdfBytes);
+                                          toast.success('Romaneio Individual gerado!', { id: toastId });
+                                        } catch (e) {
+                                          console.error(e);
+                                          toast.error('Erro ao gerar romaneio', { id: toastId });
+                                        }
+                                      }}
+                                    >
+                                      <FileSpreadsheet className="h-4 w-4" />
                                     </button>
                                     {(selectedRoute as any)?.status === 'pending' && (
                                       <button

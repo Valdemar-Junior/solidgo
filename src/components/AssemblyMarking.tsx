@@ -28,8 +28,8 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
   const [isOnline, setIsOnline] = useState(NetworkStatus.isOnline());
   const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'completed' | 'error'>('idle');
   const [processingIds, setProcessingIds] = useState<Set<string>>(new Set());
-  const [returnReasonByOrder, setReturnReasonByOrder] = useState<Record<string, string>>({});
-  const [returnObservationsByOrder, setReturnObservationsByOrder] = useState<Record<string, string>>({});
+  const [returnReasonByProduct, setReturnReasonByProduct] = useState<Record<string, string>>({});
+  const [returnObservationsByProduct, setReturnObservationsByProduct] = useState<Record<string, string>>({});
   const [routeStatus, setRouteStatus] = useState<string>('pending');
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -300,21 +300,23 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
     }
   };
 
-  const markAsReturned = async (itemsToMark: any[], groupId: string) => {
-    const currentReason = returnReasonByOrder[groupId] || '';
-    const currentObs = returnObservationsByOrder[groupId] || '';
-
-    if (!currentReason) {
-      toast.error('Selecione um motivo para o retorno');
-      return;
+  const markAsReturned = async (itemsToMark: any[]) => {
+    // Check reasons for ALL items individually
+    for (const item of itemsToMark) {
+      const reason = returnReasonByProduct[item.id];
+      const obsPromise = returnObservationsByProduct[item.id];
+      if (!reason) {
+        toast.error(`Selecione um motivo para o produto: ${item.product_name}`);
+        return;
+      }
+      const isOther = reason === 'other' || reason === '99' || reason === 'Outro';
+      if (isOther && !obsPromise?.trim()) {
+        toast.error(`Informe o motivo nas observações para: ${item.product_name}`);
+        return;
+      }
     }
 
-    const isOther = currentReason === 'other';
-    const reasonValue = isOther ? currentObs.trim() : currentReason;
-    if (isOther && !reasonValue) {
-      toast.error('Informe o motivo nas observações');
-      return;
-    }
+
 
     try {
       const ids = itemsToMark.map(i => i.id);
@@ -325,28 +327,45 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
       const userId = (await supabase.auth.getUser()).data.user?.id || '';
 
       if (isOnline) {
-        const { error } = await supabase
-          .from('assembly_products')
-          .update({
-            status: 'cancelled', // Retornado
-            returned_at: now,
-            observations: currentObs ? `(Retorno: ${reasonValue}) ${currentObs}` : `Retorno: ${reasonValue}`
-          })
-          .in('id', ids);
+        // Update each item individually
+        for (const item of itemsToMark) {
+          const reason = returnReasonByProduct[item.id];
+          const obs = returnObservationsByProduct[item.id] || '';
+          const isOther = reason === 'other' || reason === '99' || reason === 'Outro';
+          const reasonValue = isOther ? obs.trim() : reason;
+          const fullObs = obs ? `(Retorno: ${reasonValue}) ${obs}` : `Retorno: ${reasonValue}`;
 
-        if (error) throw error;
+          const { error } = await supabase
+            .from('assembly_products')
+            .update({
+              status: 'cancelled',
+              returned_at: now,
+              observations: fullObs
+            })
+            .eq('id', item.id);
+
+          if (error) throw error;
+        }
 
         // CORREÇÃO: Atualizar estado local após sucesso no Supabase
-        const updated = assemblyItems.map(it =>
-          ids.includes(it.id)
-            ? {
+        // CORREÇÃO: Atualizar estado local após sucesso no Supabase
+        const updated = assemblyItems.map(it => {
+          if (ids.includes(it.id)) {
+            const reason = returnReasonByProduct[it.id];
+            const obs = returnObservationsByProduct[it.id] || '';
+            const isOther = reason === 'other' || reason === '99' || reason === 'Outro';
+            const reasonValue = isOther ? obs.trim() : reason;
+            const fullObs = obs ? `(Retorno: ${reasonValue}) ${obs}` : `Retorno: ${reasonValue}`;
+
+            return {
               ...it,
               status: 'cancelled',
               returned_at: now,
-              observations: currentObs ? `(Retorno: ${reasonValue}) ${currentObs}` : `Retorno: ${reasonValue}`
-            }
-            : it
-        );
+              observations: fullObs
+            };
+          }
+          return it;
+        });
         setAssemblyItems(updated);
         await OfflineStorage.setItem(`assembly_items_${routeId}`, updated);
 
@@ -355,13 +374,19 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
         if (onUpdated) onUpdated();
       } else {
         // Offline
+        // Offline
         for (const item of itemsToMark) {
+          const reason = returnReasonByProduct[item.id];
+          const obs = returnObservationsByProduct[item.id] || '';
+          const isOther = reason === 'other' || reason === '99' || reason === 'Outro';
+          const reasonValue = isOther ? obs.trim() : reason;
+
           const confirmation = {
             item_id: item.id,
             route_id: routeId,
             action: 'returned',
             return_reason: reasonValue,
-            observations: currentObs,
+            observations: obs,
             local_timestamp: now,
             user_id: userId,
           };
@@ -375,8 +400,8 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
         toast.success('Marcado como RETORNADO (offline)!');
       }
 
-      setReturnReasonByOrder(prev => { const copy = { ...prev }; delete copy[groupId]; return copy; });
-      setReturnObservationsByOrder(prev => { const copy = { ...prev }; delete copy[groupId]; return copy; });
+      setReturnReasonByProduct(prev => { const copy = { ...prev }; ids.forEach(id => delete copy[id]); return copy; });
+      setReturnObservationsByProduct(prev => { const copy = { ...prev }; ids.forEach(id => delete copy[id]); return copy; });
 
     } catch (error) {
       console.error('Error marking return:', error);
@@ -481,8 +506,8 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
         toast.success('Ação desfeita (offline)!');
       }
 
-      setReturnReasonByOrder(prev => { const copy = { ...prev }; delete copy[groupId]; return copy; });
-      setReturnObservationsByOrder(prev => { const copy = { ...prev }; delete copy[groupId]; return copy; });
+      setReturnReasonByProduct(prev => { const copy = { ...prev }; ids.forEach(id => delete copy[id]); return copy; });
+      setReturnObservationsByProduct(prev => { const copy = { ...prev }; ids.forEach(id => delete copy[id]); return copy; });
 
     } catch (error) {
       console.error('Error undoing action:', error);
@@ -732,9 +757,6 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
           if (allCompleted) groupStatus = 'completed';
           else if (allCancelled) groupStatus = 'cancelled';
 
-          const selectedReason = returnReasonByOrder[groupId] || '';
-          const selectedObs = returnObservationsByOrder[groupId] || '';
-
           return (
             <div key={groupId} className="bg-white rounded-lg shadow p-4 mb-4">
               <div className="flex items-start justify-between">
@@ -779,85 +801,109 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
                   </div>
 
                   {/* Lista de Produtos do Pedido */}
-                  <div className="bg-gray-50 rounded p-3 text-sm space-y-2 border border-gray-100">
-                    {groupItems.map(item => (
-                      <div key={item.id} className="flex justify-between items-start border-b border-gray-200 last:border-0 pb-1 last:pb-0">
-                        <div>
-                          <div className="font-medium text-gray-700">{item.product_name}</div>
-                          <div className="text-xs text-gray-500">SKU: {item.product_sku}</div>
-                          {item.observations && (
-                            <div className="text-yellow-600 text-xs mt-0.5">Note: {item.observations}</div>
+                  <div className="bg-gray-50 rounded p-3 text-sm space-y-3 border border-gray-100">
+                    {groupItems.map(item => {
+                      const itemStatus = item.status || 'pending';
+                      const isPending = itemStatus === 'pending';
+                      const isCompleted = itemStatus === 'completed';
+                      const isCancelled = itemStatus === 'cancelled';
+
+                      const reason = returnReasonByProduct[item.id] || '';
+                      const obs = returnObservationsByProduct[item.id] || '';
+
+                      return (
+                        <div key={item.id} className="border-b border-gray-200 last:border-0 pb-3 last:pb-0">
+                          <div className="flex justify-between items-start mb-2">
+                            <div className="flex-1 pr-2">
+                              <div className="font-medium text-gray-700">{item.product_name}</div>
+                              <div className="text-xs text-gray-500">SKU: {item.product_sku}</div>
+                              {item.observations && (
+                                <div className="text-yellow-600 text-xs mt-0.5">Note: {item.observations}</div>
+                              )}
+                            </div>
+
+                            {/* Badge de Status Individual */}
+                            <span className={`px-2 py-1 rounded-full text-xs font-bold uppercase tracking-wider ${isCompleted ? 'bg-green-100 text-green-700' :
+                              isCancelled ? 'bg-red-100 text-red-700' :
+                                'bg-yellow-100 text-yellow-700'
+                              }`}>
+                              {isCompleted ? 'Montado' : isCancelled ? 'Retornado' : 'Pendente'}
+                            </span>
+                          </div>
+
+                          {/* Ações por Produto */}
+                          {routeStatus !== 'completed' && (
+                            <div className="mt-2 space-y-2">
+                              {isPending && (
+                                <div className="flex gap-2">
+                                  <button
+                                    onClick={() => markAsCompleted([item])}
+                                    disabled={processingIds.has(item.id)}
+                                    className="flex-1 flex items-center justify-center py-2 bg-green-600 text-white rounded hover:bg-green-700 disabled:opacity-50 text-xs font-bold shadow-sm"
+                                  >
+                                    <CheckCircle className="h-4 w-4 mr-1" />
+                                    MONTAR
+                                  </button>
+
+                                  <button
+                                    onClick={() => {
+                                      if (reason) {
+                                        markAsReturned([item]);
+                                      } else {
+                                        toast.error('Selecione o motivo do retorno abaixo');
+                                      }
+                                    }}
+                                    disabled={!reason || processingIds.has(item.id)}
+                                    className="flex-1 flex items-center justify-center py-2 bg-red-100 text-red-700 rounded hover:bg-red-200 disabled:opacity-50 text-xs font-bold shadow-sm"
+                                  >
+                                    <XCircle className="h-4 w-4 mr-1" />
+                                    RETORNAR
+                                  </button>
+                                </div>
+                              )}
+
+                              {isPending && (
+                                <div className="bg-white p-2 rounded border border-gray-200 text-xs space-y-2">
+                                  <p className="font-semibold text-gray-500">Motivo (se retornar):</p>
+                                  <select
+                                    value={reason}
+                                    onChange={(e) => setReturnReasonByProduct(prev => ({ ...prev, [item.id]: e.target.value }))}
+                                    className="w-full px-2 py-1.5 border border-gray-300 rounded text-xs"
+                                  >
+                                    <option value="">Selecione...</option>
+                                    {returnReasons.map((r: any) => (
+                                      <option key={r.id || r.reason} value={r.reason || r.id}>{r.reason || r.reason_text}</option>
+                                    ))}
+                                  </select>
+                                  {(reason === 'Outro' || reason === '99' || reason === 'other') && (
+                                    <input
+                                      type="text"
+                                      placeholder="Descreva o motivo..."
+                                      value={obs}
+                                      onChange={(e) => setReturnObservationsByProduct(prev => ({ ...prev, [item.id]: e.target.value }))}
+                                      className="w-full px-2 py-1.5 border border-gray-300 rounded text-xs"
+                                    />
+                                  )}
+                                </div>
+                              )}
+
+                              {(isCompleted || isCancelled) && (
+                                <div className="flex justify-end">
+                                  <button
+                                    onClick={() => undoAction([item], groupId)}
+                                    disabled={processingIds.has(item.id)}
+                                    className="px-3 py-1.5 bg-gray-100 text-gray-600 rounded hover:bg-gray-200 disabled:opacity-50 text-xs font-medium border border-gray-200 shadow-sm flex items-center"
+                                  >
+                                    <Clock className="w-3 h-3 mr-1" /> Desfazer
+                                  </button>
+                                </div>
+                              )}
+                            </div>
                           )}
                         </div>
-                        {/* Status individual se precisar debug, mas visualmente o card domina */}
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
-
-                  {/* Return Form (Group Level) */}
-                  {groupStatus === 'pending' && (
-                    <div className="mt-4 p-3 bg-gray-50 rounded-lg">
-                      <div className="grid grid-cols-1 gap-3">
-                        <label className="block text-xs font-medium text-gray-700">
-                          Se houver problema com o pedido, informe o motivo:
-                        </label>
-                        <select
-                          value={selectedReason}
-                          onChange={(e) => setReturnReasonByOrder(prev => ({ ...prev, [groupId]: e.target.value }))}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
-                        >
-                          <option value="">Selecione...</option>
-                          {returnReasons.map((r: any) => (
-                            <option key={r.id || r.reason} value={r.reason || r.id}>{r.reason || r.reason_text}</option>
-                          ))}
-                        </select>
-                        {(selectedReason === 'Outro' || selectedReason === '99' || selectedReason === 'other') && (
-                          <input
-                            type="text"
-                            placeholder="Descreva o motivo..."
-                            value={selectedObs}
-                            onChange={(e) => setReturnObservationsByOrder(prev => ({ ...prev, [groupId]: e.target.value }))}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
-                          />
-                        )}
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                <div className="ml-4 flex flex-col space-y-2 min-w-[120px]">
-                  {groupStatus === 'pending' && (
-                    <>
-                      <button
-                        onClick={() => markAsCompleted(groupItems)}
-                        disabled={groupItems.some(i => processingIds.has(i.id))}
-                        className="flex items-center justify-center w-full px-4 py-3 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 transition-colors text-sm font-bold shadow-sm"
-                      >
-                        <CheckCircle className="h-5 w-5 mr-1" />
-                        MONTADO
-                      </button>
-
-                      <button
-                        onClick={() => markAsReturned(groupItems, groupId)}
-                        disabled={!selectedReason || groupItems.some(i => processingIds.has(i.id))}
-                        className="flex items-center justify-center w-full px-4 py-3 bg-red-100 text-red-700 rounded-md hover:bg-red-200 disabled:opacity-50 transition-colors text-sm font-bold shadow-sm"
-                      >
-                        <XCircle className="h-5 w-5 mr-1" />
-                        RETORNAR
-                      </button>
-                    </>
-                  )}
-
-                  {(groupStatus === 'completed' || groupStatus === 'cancelled') && routeStatus !== 'completed' && (
-                    <button
-                      onClick={() => undoAction(groupItems, groupId)}
-                      disabled={groupItems.some(i => processingIds.has(i.id))}
-                      className="flex items-center justify-center px-3 py-2 bg-gray-100 text-gray-600 rounded-md hover:bg-gray-200 disabled:opacity-50 transition-colors text-xs font-medium w-full border border-gray-200 shadow-sm"
-                      title="Desfazer ação"
-                    >
-                      Desfazer
-                    </button>
-                  )}
                 </div>
               </div>
             </div>
