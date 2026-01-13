@@ -24,6 +24,8 @@ interface AssemblyInfo {
   assembly_route_id?: string;
   assembly_route?: any;
   assembly_date?: string;
+  completion_date?: string;
+  updated_at?: string;
 }
 
 export default function OrderLookup() {
@@ -133,7 +135,7 @@ export default function OrderLookup() {
       try {
         setLoading(true);
         // Query com vehicle via join (igual RouteCreation)
-        const selectRouteOrder = '*, route:routes(*, vehicle:vehicles!vehicle_id(id, model, plate)), order:orders(id, order_id_erp)';
+        const selectRouteOrder = '*, route:routes(*, route_code, vehicle:vehicles!vehicle_id(id, model, plate)), order:orders(id, order_id_erp)';
 
         // Primeiro tenta pelo order_id (uuid do pedido)
         const { data: roById, error: roErrById } = await supabase
@@ -400,6 +402,7 @@ export default function OrderLookup() {
                     <p className="text-sm font-bold text-gray-900 capitalize">{statusLabelEntrega[derivedStatus] || '-'}</p>
                   </div>
                 </div>
+                {/* ... Delivery Card Logic ... */}
                 {routeOrders.length === 0 ? (
                   <p className="text-sm text-gray-500">
                     {derivedStatus === 'delivered'
@@ -409,34 +412,42 @@ export default function OrderLookup() {
                 ) : (
                   <div className="space-y-2">
                     {routeOrders.map((ro) => (
-                      <div key={ro.id} className="border border-gray-100 rounded-lg p-3">
-                        <p className="text-sm font-semibold text-gray-900">{ro.route?.name || ro.route_id}</p>
-                        <p className="text-xs text-gray-500 capitalize">
+                      <div key={ro.id} className="border border-gray-100 rounded-lg p-3 relative group hover:border-blue-200 transition-colors">
+                        <div className="flex justify-between items-start">
+                          <div>
+                            <p className="text-sm font-semibold text-gray-900">{ro.route?.name || 'Rota sem nome'}</p>
+                            {(ro.route?.route_code || ro.route_id) && (
+                              <p className="text-[10px] items-center text-gray-400 font-mono mt-0.5">
+                                ID: {ro.route?.route_code || ro.route_id?.slice(0, 8) + '...'}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+
+                        <p className="text-xs text-gray-500 capitalize mt-2">
                           Status: {statusLabelEntrega[ro.status || ''] || statusLabelEntrega[ro.route?.status || ''] || ro.status || ro.route?.status || '-'}
                         </p>
                         <p className="text-xs text-gray-500">Motorista: {(ro.route as any)?.driver_name || (ro.route as any)?.driver?.user?.name || (ro.route as any)?.driver?.name || '-'}</p>
                         <p className="text-xs text-gray-500">Veículo: {ro.route?.vehicle ? `${(ro.route?.vehicle as any)?.model || ''} ${(ro.route?.vehicle as any)?.plate || ''}`.trim() || '-' : '-'}</p>
-                        <p className="text-xs text-gray-500">Conferente: {ro.route?.conferente || '-'}</p>
-                        <p className="text-xs text-gray-500">
+                        <p className="text-xs text-gray-500 mb-2">
                           {ro.status === 'returned' ? 'Retornado em: ' : 'Entregue em: '}
                           {ro.delivered_at ? formatDate(ro.delivered_at) : formatDate(ro.route?.updated_at)}
                         </p>
-                        <div className="mt-2 flex gap-2">
-                          <button
-                            onClick={() => {
-                              try {
-                                if (ro.route_id) {
-                                  localStorage.setItem('rc_selectedRouteId', String(ro.route_id));
-                                  localStorage.setItem('rc_showRouteModal', '1');
-                                }
-                              } catch { }
-                              window.open('/admin/routes', '_blank');
-                            }}
-                            className="text-xs px-2 py-1 rounded border border-gray-300 text-gray-700 hover:bg-gray-50 transition-colors"
-                          >
-                            Detalhes da rota
-                          </button>
-                        </div>
+
+                        <button
+                          onClick={() => {
+                            try {
+                              if (ro.route_id) {
+                                localStorage.setItem('rc_selectedRouteId', String(ro.route_id));
+                                localStorage.setItem('rc_showRouteModal', '1');
+                                window.open('/admin/routes', '_blank');
+                              }
+                            } catch { }
+                          }}
+                          className="w-full mt-1 text-xs px-2 py-1.5 rounded border border-blue-200 text-blue-700 hover:bg-blue-50 transition-colors flex items-center justify-center gap-1"
+                        >
+                          Detalhes da rota
+                        </button>
                       </div>
                     ))}
                   </div>
@@ -456,12 +467,42 @@ export default function OrderLookup() {
                 ) : (
                   <div className="space-y-2">
                     {assemblies.map((ap) => (
-                      <div key={ap.id} className="border border-gray-100 rounded-lg p-3">
-                        <p className="text-sm font-semibold text-gray-900">{ap.assembly_route?.name || ap.assembly_route_id || 'Sem Rota'}</p>
-                        <p className="text-xs font-medium text-gray-700 mt-1 mb-1">{ap.product_name || 'Produto não identificado'}</p>
+                      <div key={ap.id} className="border border-gray-100 rounded-lg p-3 hover:border-purple-200 transition-colors">
+                        <div className="flex justify-between items-start">
+                          <div>
+                            <p className="text-sm font-semibold text-gray-900">{ap.assembly_route?.name || 'Sem Rota'}</p>
+                            {(ap.assembly_route?.route_code || ap.assembly_route_id) && (
+                              <p className="text-[10px] items-center text-gray-400 font-mono mt-0.5">
+                                ID: {ap.assembly_route?.route_code || ap.assembly_route_id?.slice(0, 8) + '...'}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+
+                        <p className="text-xs font-medium text-gray-700 mt-2 mb-1">{ap.product_name || 'Produto não identificado'}</p>
                         <p className="text-xs text-gray-500 capitalize">Status: {statusLabelMontagem[(ap.status || '').toLowerCase()] || ap.status}</p>
                         <p className="text-xs text-gray-500">Montador: {ap.assembly_route?.assembler?.name || '-'}</p>
-                        <p className="text-xs text-gray-500">Prazo: {formatDate(ap.assembly_route?.deadline)}</p>
+
+                        {ap.status === 'completed' ? (
+                          <p className="text-xs text-green-600 font-medium mb-2">Finalizado em: {formatDate(ap.completion_date || ap.assembly_date || ap.updated_at)}</p>
+                        ) : (
+                          <p className="text-xs text-gray-500 mb-2">Prazo: {formatDate(ap.assembly_route?.deadline)}</p>
+                        )}
+
+                        <button
+                          onClick={() => {
+                            try {
+                              if (ap.assembly_route_id) {
+                                localStorage.setItem('am_selectedRouteId', String(ap.assembly_route_id));
+                                localStorage.setItem('am_showRouteModal', '1');
+                                window.open('/admin/assembly', '_blank');
+                              }
+                            } catch { }
+                          }}
+                          className="w-full mt-1 text-xs px-2 py-1.5 rounded border border-purple-200 text-purple-700 hover:bg-purple-50 transition-colors flex items-center justify-center gap-1"
+                        >
+                          Detalhes da rota
+                        </button>
                       </div>
                     ))}
                   </div>

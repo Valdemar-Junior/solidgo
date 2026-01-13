@@ -623,6 +623,29 @@ function RouteCreationContent() {
     // Load data on mount
     loadData(true);
 
+    // AUTO-OPEN LOGIC: Check for route details request from other screens
+    const autoOpenId = localStorage.getItem('rc_selectedRouteId');
+    const shouldOpen = localStorage.getItem('rc_showRouteModal');
+
+    if (autoOpenId && shouldOpen === '1') {
+      // Clear flags immediately
+      localStorage.removeItem('rc_selectedRouteId');
+      localStorage.removeItem('rc_showRouteModal');
+
+      // Fetch route details to populate modal
+      supabase
+        .from('routes')
+        .select(`*, driver:drivers!driver_id(*, user:users!user_id(*)), vehicle:vehicles!vehicle_id(*), route_orders(*, order:orders!order_id(*))`)
+        .eq('id', autoOpenId)
+        .single()
+        .then(({ data, error }) => {
+          if (!error && data) {
+            setSelectedRoute(data as any);
+            setShowRouteModal(true);
+          }
+        });
+    }
+
     // Set up visibility change listener for background refresh (without resetting state)
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {

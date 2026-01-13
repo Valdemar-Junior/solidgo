@@ -662,10 +662,78 @@ function AssemblyManagementContent() {
   // --- EFFECTS ---
 
   useEffect(() => {
+    loadData(true);
+
     // Update refs for Realtime
     fetchRoutesRef.current = fetchAssemblyRoutes;
     loadDataRef.current = loadData;
-  });
+  }, []);
+
+  // Separate effect for auto-open logic
+  useEffect(() => {
+    const checkAutoOpen = async () => {
+      // Small delay to ensure initial load has started/stabilized
+      await new Promise(r => setTimeout(r, 500));
+
+      const autoOpenId = localStorage.getItem('am_selectedRouteId');
+      const shouldOpen = localStorage.getItem('am_showRouteModal');
+
+      if (autoOpenId && shouldOpen === '1') {
+        localStorage.removeItem('am_selectedRouteId');
+        localStorage.removeItem('am_showRouteModal');
+
+        const { data, error } = await supabase
+          .from('assembly_routes')
+          .select(`
+            *,
+            assembler:users!assembler_id(id, name),
+            vehicle:vehicles!vehicle_id(model, plate),
+            assembly_products(
+              *,
+              order:orders!order_id(
+                id,
+                order_id_erp,
+                customer_name,
+                customer_cpf,
+                phone,
+                address_json,
+                items_json
+              )
+            )
+          `)
+          .eq('id', autoOpenId)
+          .single();
+
+        if (!error && data) {
+          const formattedRoute: AssemblyRoute = {
+            ...data,
+            assembler_name: data.assembler?.name,
+            vehicle_model: data.vehicle?.model,
+            vehicle_plate: data.vehicle?.plate,
+            assembly_products: (data.assembly_products || []).map((ap: any) => ({
+              ...ap,
+              order_id_erp: ap.order?.order_id_erp,
+              customer_name: ap.order?.customer_name,
+              customer_address: ap.order?.address_json ?
+                `${ap.order.address_json.street || ''}, ${ap.order.address_json.neighborhood || ''} - ${ap.order.address_json.city || ''}` : '',
+              products: ap.order?.items_json || []
+            }))
+          };
+
+          // Safe update: Add these products to the global list without overwriting
+          setAssemblyInRoutes(prev => {
+            const others = prev.filter(p => p.assembly_route_id !== formattedRoute.id);
+            return [...others, ...formattedRoute.assembly_products];
+          });
+
+          setSelectedRoute(formattedRoute);
+          setShowRouteModal(true);
+        }
+      }
+    };
+
+    checkAutoOpen();
+  }, []);
 
   // Fetch all pending routes when modal opens
   useEffect(() => {
@@ -1073,6 +1141,8 @@ function AssemblyManagementContent() {
 
         if (validProducts.length > 0) {
           // Attach a unique key for selection
+          // We do NOT expand here anymore as per user request. 
+          // We will expand during the INSERTION phase.
           const enrichedProducts = validProducts.map((p: any, pIdx: number) => ({
             ...p,
             _selectionKey: `${itemIdx}-${pIdx}`, // Simple key
@@ -1260,20 +1330,31 @@ function AssemblyManagementContent() {
         };
 
         // Filter ONLY selected products for assembly_products table
-        const assemblyProducts = produtos.filter((p: any) => {
+        const assemblyProducts: any[] = [];
+
+        produtos.filter((p: any) => {
           // Must be selected
           return selectedPreviewIndices.has(p._selectionKey);
-        }).map((p: any) => ({
-          order_id: orderId,
-          product_name: getVal(p.nome_produto) || 'Produto sem nome',
-          product_sku: getVal(p.codigo_produto) || null,
-          customer_name: getVal(o.nome_cliente),
-          customer_phone: getVal(o.cliente_celular),
-          installation_address: addressJson,
-          status: 'pending',
-          created_at: now,
-          updated_at: now
-        }));
+        }).forEach((p: any) => {
+          // Determine quantity for this product
+          // Try 'quantidade_comprada', 'quantidade', or 'quantidade_volumes'
+          const qty = Math.max(1, Number(p.quantidade_comprada ?? p.quantidade ?? p.quantidade_volumes ?? 1));
+
+          // Generate MULTIPLE rows based on quantity (as table has no qty column)
+          for (let i = 0; i < qty; i++) {
+            assemblyProducts.push({
+              order_id: orderId,
+              product_name: getVal(p.nome_produto) || 'Produto sem nome',
+              product_sku: getVal(p.codigo_produto) || null,
+              customer_name: getVal(o.nome_cliente),
+              customer_phone: getVal(o.cliente_celular),
+              installation_address: addressJson,
+              status: 'pending',
+              created_at: now,
+              updated_at: now
+            });
+          }
+        });
 
         if (assemblyProducts.length > 0) {
           const { error: assemblyError } = await supabase
@@ -2657,7 +2738,14 @@ function AssemblyManagementContent() {
                       <tbody className="bg-white divide-y divide-gray-100">
                         {(() => {
                           const byOrder: Record<string, AssemblyProductWithDetails[]> = {};
-                          assemblyInRoutes.filter(ap => ap.assembly_route_id === selectedRoute.id).forEach(ap => {
+
+                          // Use products directly from the route object if available (e.g. from auto-open), 
+                          // otherwise fallback to filtering the global list.
+                          const productsSource = ((selectedRoute as any).assembly_products && (selectedRoute as any).assembly_products.length > 0)
+                            ? (selectedRoute as any).assembly_products
+                            : assemblyInRoutes.filter(ap => String(ap.assembly_route_id) === String(selectedRoute.id));
+
+                          productsSource.forEach((ap: any) => {
                             const k = String(ap.order_id);
                             if (!byOrder[k]) byOrder[k] = [];
                             byOrder[k].push(ap);
@@ -2933,7 +3021,9 @@ function AssemblyManagementContent() {
                                   {isSelected && <CheckCircle2 className="w-3.5 h-3.5 text-white" />}
                                 </div>
                                 <div className="flex-1">
-                                  <div className={`font-medium text-sm ${isSelected ? 'text-orange-900' : 'text-gray-900'}`}>{prod.nome_produto || 'Produto sem nome'}</div>
+                                  <div className={`font-medium text-sm ${isSelected ? 'text-orange-900' : 'text-gray-900'}`}>
+                                    {prod.nome_produto || 'Produto sem nome'}
+                                  </div>
                                   <div className="text-gray-500 text-xs mt-0.5">SKU: {prod.codigo_produto}</div>
                                 </div>
                               </div>
