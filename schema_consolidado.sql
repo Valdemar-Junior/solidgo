@@ -280,13 +280,31 @@ ALTER TABLE route_orders ENABLE ROW LEVEL SECURITY;
 ALTER TABLE assembly_routes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE assembly_products ENABLE ROW LEVEL SECURITY;
 
--- Simple "Admins can do everything" policy example (Shortened for consolidation)
--- Real apps should copy the full 002_rls_policies.sql content here if needed detailed granular control.
--- For this consolidated dump, we ensure Admins have access:
-CREATE POLICY "Admins all" ON users FOR ALL USING (EXISTS (SELECT 1 FROM users u WHERE u.id = auth.uid() AND u.role = 'admin'));
-CREATE POLICY "Admins all drivers" ON drivers FOR ALL USING (EXISTS (SELECT 1 FROM users u WHERE u.id = auth.uid() AND u.role = 'admin'));
--- And basic read for others:
-CREATE POLICY "Auth read orders" ON orders FOR SELECT USING (auth.role() = 'authenticated');
+-- 🛠️ SECURITY DEFINER FUNCTION FOR ROLES (Silver Bullet to avoid recursion)
+CREATE OR REPLACE FUNCTION public.is_admin()
+RETURNS BOOLEAN
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  SELECT EXISTS (
+    SELECT 1 FROM public.users 
+    WHERE id = auth.uid() 
+    AND role = 'admin'
+  );
+$$;
+
+-- RLS POLICIES (Simplified and Loop-Free)
+
+-- 1. Users can ALWAYS see their own profile (Critical for login)
+CREATE POLICY "Users view self" ON users FOR SELECT USING (auth.uid() = id);
+
+-- 2. Admins have full access (Using the safe function)
+CREATE POLICY "Admins full access" ON users FOR ALL USING (is_admin());
+
+-- 3. Drivers read/update their own profile (Optional, but good practice)
+-- CREATE POLICY "Drivers view self" ... (covered by "Users view self")
+
 
 -- 6. FUNCTIONS & TRIGGERS
 

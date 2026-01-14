@@ -6,7 +6,7 @@
 
 DO $$
 DECLARE
-    target_email TEXT := 'admin@cliente.com'; -- <--- COLOQUE O EMAIL AQUI
+    target_email TEXT := 'lojasjoylar@gmail.com'; -- <--- JÁ PREENCHIDO COM SEU EMAIL CORRETO
     user_uid UUID;
 BEGIN
     -- Busca o ID do usuário que você acabou de criar no painel

@@ -196,6 +196,7 @@ function AssemblyManagementContent() {
   const [filterForecastDateEnd, setFilterForecastDateEnd] = useState<string>('');
 
   const [filterReturned, setFilterReturned] = useState<boolean>(false);
+  const [filterFull, setFilterFull] = useState<boolean>(false);
   const [filterServiceType, setFilterServiceType] = useState<string>('');
 
   const [showFilters, setShowFilters] = useState(true);
@@ -361,6 +362,7 @@ function AssemblyManagementContent() {
           if ('forecastDateStart' in f) setFilterForecastDateStart(f.forecastDateStart || '');
           if ('forecastDateEnd' in f) setFilterForecastDateEnd(f.forecastDateEnd || '');
           if ('returned' in f) setFilterReturned(Boolean(f.returned));
+          if ('full' in f) setFilterFull(Boolean(f.full));
           if ('serviceType' in f) setFilterServiceType(f.serviceType || '');
         }
       }
@@ -382,11 +384,12 @@ function AssemblyManagementContent() {
         forecastDateStart: filterForecastDateStart,
         forecastDateEnd: filterForecastDateEnd,
         returned: filterReturned,
+        full: filterFull,
         serviceType: filterServiceType,
       };
       localStorage.setItem('am_filters', JSON.stringify(payload));
     } catch { }
-  }, [filterCity, filterNeighborhood, filterDeadline, filterOrder, filterClient, filterSaleDateStart, filterSaleDateEnd, filterDeliveryDateStart, filterDeliveryDateEnd, filterForecastDateStart, filterForecastDateEnd, filterReturned, filterServiceType]);
+  }, [filterCity, filterNeighborhood, filterDeadline, filterOrder, filterClient, filterSaleDateStart, filterSaleDateEnd, filterDeliveryDateStart, filterDeliveryDateEnd, filterForecastDateStart, filterForecastDateEnd, filterReturned, filterFull, filterServiceType]);
 
   // --- MEMOS (Options) ---
   const cityOptions = useMemo(() => {
@@ -567,7 +570,7 @@ function AssemblyManagementContent() {
         .from('assembly_products')
         .select(`
           id, order_id, product_name, product_sku, status, assembly_route_id, created_at, updated_at, was_returned,
-          order:order_id!inner (id, order_id_erp, customer_name, phone, address_json, raw_json, data_venda, previsao_entrega, observacoes_publicas, observacoes_internas, status, service_type),
+          order:order_id!inner (id, order_id_erp, customer_name, phone, address_json, raw_json, data_venda, previsao_entrega, observacoes_publicas, observacoes_internas, status, service_type, tem_frete_full),
           installer:installer_id (id, name)
         `)
         .is('assembly_route_id', null)
@@ -1437,6 +1440,13 @@ function AssemblyManagementContent() {
   const filteredGroupedProducts = useMemo(() => {
     const filtered: Record<string, AssemblyProductWithDetails[]> = {};
 
+    // Helper para verificar valores "verdadeiros"
+    const isTrueValue = (v: any) => {
+      if (typeof v === 'boolean') return v;
+      const s = String(v || '').trim().toLowerCase();
+      return s === 'true' || s === '1' || s === 'sim' || s === 's' || s === 'y' || s === 'yes' || s === 't';
+    };
+
     Object.entries(groupedProducts).forEach(([orderId, products]) => {
       const firstProduct = products[0];
       const order = firstProduct?.order as any;
@@ -1481,7 +1491,9 @@ function AssemblyManagementContent() {
       const matchDeliveryDate = checkDateRange(deliveryDateStr, filterDeliveryDateStart, filterDeliveryDateEnd);
       const matchForecastDate = checkDateRange(forecastDateStr, filterForecastDateStart, filterForecastDateEnd);
 
-      const isReturnedFlag = Boolean(order?.return_flag) || String(order?.status) === 'returned';
+      // Retornados: verificar se algum produto do grupo foi retornado (was_returned)
+      const hasReturnedProduct = products.some((ap: any) => ap.was_returned === true);
+      const isReturnedFlag = hasReturnedProduct || Boolean(order?.return_flag) || String(order?.status) === 'returned';
       const matchReturned = filterReturned ? isReturnedFlag : true;
 
       // Service Type Filter
@@ -1497,16 +1509,29 @@ function AssemblyManagementContent() {
         }
       }
 
-      if (matchCity && matchNeighborhood && matchPrazo && matchOrder && matchClient && matchSaleDate && matchDeliveryDate && matchForecastDate && matchReturned && matchServiceType) {
+      // Frete Full Filter
+      const raw = order?.raw_json || {};
+      const obsInternas = String(order?.observacoes_internas || raw?.observacoes_internas || '').toLowerCase();
+      const isFullFlag = isTrueValue(order?.tem_frete_full) || isTrueValue(raw?.tem_frete_full) || obsInternas.includes('*frete full*');
+      const matchFull = filterFull ? isFullFlag : true;
+
+      if (matchCity && matchNeighborhood && matchPrazo && matchOrder && matchClient && matchSaleDate && matchDeliveryDate && matchForecastDate && matchReturned && matchFull && matchServiceType) {
         filtered[orderId] = products;
       }
     });
 
     return filtered;
-  }, [groupedProducts, filterCity, filterNeighborhood, filterDeadline, filterOrder, filterClient, filterSaleDateStart, filterSaleDateEnd, filterDeliveryDateStart, filterDeliveryDateEnd, filterForecastDateStart, filterForecastDateEnd, filterReturned, filterServiceType, deliveryInfo]);
+  }, [groupedProducts, filterCity, filterNeighborhood, filterDeadline, filterOrder, filterClient, filterSaleDateStart, filterSaleDateEnd, filterDeliveryDateStart, filterDeliveryDateEnd, filterForecastDateStart, filterForecastDateEnd, filterReturned, filterFull, filterServiceType, deliveryInfo]);
 
   const orderRows = useMemo(() => {
-    const rows: Array<{ key: string; orderId: string; dataVenda: string; entrega: string; previsao: string; pedido: string; cliente: string; telefone: string; produto: string; sku: string; obsPublicas: string; obsInternas: string; cidade: string; bairro: string; endereco: string; selected: boolean; wasReturned: boolean; isForaPrazo: boolean; }> = [];
+    const rows: Array<{ key: string; orderId: string; dataVenda: string; entrega: string; previsao: string; pedido: string; cliente: string; telefone: string; produto: string; sku: string; obsPublicas: string; obsInternas: string; cidade: string; bairro: string; endereco: string; selected: boolean; wasReturned: boolean; isForaPrazo: boolean; temFreteFull: boolean; }> = [];
+
+    // Helper para verificar se pedido tem Frete Full
+    const isTrueValue = (v: any) => {
+      if (typeof v === 'boolean') return v;
+      const s = String(v || '').trim().toLowerCase();
+      return s === 'true' || s === '1' || s === 'sim' || s === 's' || s === 'y' || s === 'yes' || s === 't';
+    };
     Object.entries(filteredGroupedProducts).forEach(([orderId, products]) => {
       const order = products[0]?.order || {} as any;
       const raw = order?.raw_json || {};
@@ -1525,9 +1550,11 @@ function AssemblyManagementContent() {
       const selected = selectedOrders.has(orderId);
       const prazoStatus = getPrazoStatusForOrder(order);
       const isForaPrazo = prazoStatus === 'out';
+      // Verificar Frete Full: campo direto OU observações internas com *frete full*
+      const temFreteFull = isTrueValue(order?.tem_frete_full) || isTrueValue(raw?.tem_frete_full) || obsInternas.toLowerCase().includes('*frete full*');
       products.forEach((ap, idx) => {
         const wasReturned = (ap as any).was_returned === true;
-        rows.push({ key: `${orderId}-${ap.id}-${idx}`, orderId, dataVenda, entrega, previsao, pedido, cliente, telefone, produto: ap.product_name || '-', sku: ap.product_sku || '-', obsPublicas, obsInternas, cidade, bairro, endereco, selected, wasReturned, isForaPrazo });
+        rows.push({ key: `${orderId}-${ap.id}-${idx}`, orderId, dataVenda, entrega, previsao, pedido, cliente, telefone, produto: ap.product_name || '-', sku: ap.product_sku || '-', obsPublicas, obsInternas, cidade, bairro, endereco, selected, wasReturned, isForaPrazo, temFreteFull });
       });
     });
     return rows;
@@ -1759,6 +1786,13 @@ function AssemblyManagementContent() {
                     </div>
                   </div>
 
+                  <div className="space-y-1">
+                    <label className="text-xs font-semibold text-gray-500 uppercase">Frete Full</label>
+                    <div className="flex items-center gap-2 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg">
+                      <input id="ffull" type="checkbox" className="h-4 w-4" checked={filterFull} onChange={(e) => setFilterFull(e.target.checked)} />
+                      <label htmlFor="ffull" className="text-sm text-gray-700">Apenas pedidos Full</label>
+                    </div>
+                  </div>
 
                   <div className="space-y-1">
                     <label className="text-xs font-semibold text-gray-500 uppercase">Tipo Serviço</label>
@@ -1786,6 +1820,7 @@ function AssemblyManagementContent() {
                       setFilterForecastDateStart('');
                       setFilterForecastDateEnd('');
                       setFilterReturned(false);
+                      setFilterFull(false);
                       setFilterServiceType('');
                     }}
                     className="text-sm text-red-600 hover:text-red-800 font-medium flex items-center"
@@ -1897,6 +1932,11 @@ function AssemblyManagementContent() {
                                                   {row.wasReturned && (
                                                     <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-orange-100 text-orange-800">
                                                       🔄 Retornado
+                                                    </span>
+                                                  )}
+                                                  {row.temFreteFull && (
+                                                    <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-yellow-100 text-yellow-800 border border-yellow-200" title="Frete Full - Prioridade na montagem">
+                                                      ⚡ Full
                                                     </span>
                                                   )}
                                                   {row.isForaPrazo ? (
