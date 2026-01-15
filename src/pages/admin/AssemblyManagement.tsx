@@ -1238,6 +1238,42 @@ function AssemblyManagementContent() {
             continue;
           }
           orderId = existingOrder.id;
+
+          // ============ CORREÇÃO: Atualizar items_json para marcar has_assembly='Sim' ============
+          // Isso garante que o romaneio de montagem exiba corretamente os produtos
+          try {
+            // Buscar items_json atual do pedido
+            const { data: orderData } = await supabase
+              .from('orders')
+              .select('items_json')
+              .eq('id', existingOrder.id)
+              .single();
+
+            if (orderData && Array.isArray(orderData.items_json)) {
+              const selectedSkus = o.produtos
+                .filter((p: any) => selectedPreviewIndices.has(p._selectionKey))
+                .map((p: any) => String(p.codigo_produto || '').toLowerCase().trim());
+
+              // Atualizar has_assembly='Sim' nos itens correspondentes
+              const updatedItemsJson = orderData.items_json.map((item: any) => {
+                const itemSku = String(item.sku || '').toLowerCase().trim();
+                if (selectedSkus.includes(itemSku)) {
+                  return { ...item, has_assembly: 'Sim' };
+                }
+                return item;
+              });
+
+              // Fazer UPDATE na tabela orders
+              await supabase
+                .from('orders')
+                .update({ items_json: updatedItemsJson })
+                .eq('id', existingOrder.id);
+            }
+          } catch (updateErr) {
+            console.warn('Aviso: não foi possível atualizar items_json com has_assembly:', updateErr);
+            // Continua mesmo se falhar - o assembly_product ainda será criado
+          }
+          // ============ FIM DA CORREÇÃO ============
         } else {
           // Create order with FULL original products list (from _originalProducts if available, or just use what we have logic)
           // User requested: "na tabela orders salva somente as infromaçoes daquele pedido importado"
