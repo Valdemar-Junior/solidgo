@@ -385,6 +385,14 @@ export default function OrderLookup() {
                       <AlertTriangle className="h-3 w-3" /> Retornado
                     </span>
                   )}
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2 text-xs">
+                  {(() => {
+                    const raw = selectedOrder.raw_json || {};
+                    const saleDate = (selectedOrder as any).data_venda || raw.data_venda;
+                    if (!saleDate) return null;
+                    return <span className="px-2 py-1 rounded-full bg-gray-100 text-gray-700 border border-gray-200 font-medium">Venda: {formatDate(saleDate)}</span>;
+                  })()}
                   {(() => {
                     const raw = selectedOrder.raw_json || {};
                     const prev = raw.previsao_entrega || selectedOrder.delivery_date || (selectedOrder as any).previsao_entrega;
@@ -429,10 +437,21 @@ export default function OrderLookup() {
                         </p>
                         <p className="text-xs text-gray-500">Motorista: {(ro.route as any)?.driver_name || (ro.route as any)?.driver?.user?.name || (ro.route as any)?.driver?.name || '-'}</p>
                         <p className="text-xs text-gray-500">Veículo: {ro.route?.vehicle ? `${(ro.route?.vehicle as any)?.model || ''} ${(ro.route?.vehicle as any)?.plate || ''}`.trim() || '-' : '-'}</p>
-                        <p className="text-xs text-gray-500 mb-2">
-                          {ro.status === 'returned' ? 'Retornado em: ' : 'Entregue em: '}
-                          {ro.delivered_at ? formatDate(ro.delivered_at) : formatDate(ro.route?.updated_at)}
-                        </p>
+                        {ro.status === 'delivered' && (
+                          <p className="text-xs text-green-600 font-medium">
+                            Entregue em: {ro.delivered_at ? formatDate(ro.delivered_at) : formatDate(ro.route?.updated_at)}
+                          </p>
+                        )}
+                        {ro.status === 'returned' && (
+                          <p className="text-xs text-red-600 font-medium">
+                            Retornado em: {ro.delivered_at ? formatDate(ro.delivered_at) : formatDate(ro.route?.updated_at)}
+                          </p>
+                        )}
+                        {(selectedOrder as any).import_source && (
+                          <p className="text-xs text-gray-400 mb-2">
+                            Origem: {(selectedOrder as any).import_source === 'avulsa' ? 'Avulsa' : 'Lote'}
+                          </p>
+                        )}
 
                         <button
                           onClick={() => {
@@ -484,9 +503,14 @@ export default function OrderLookup() {
                         <p className="text-xs text-gray-500">Montador: {ap.assembly_route?.assembler?.name || '-'}</p>
 
                         {ap.status === 'completed' ? (
-                          <p className="text-xs text-green-600 font-medium mb-2">Finalizado em: {formatDate(ap.completion_date || ap.assembly_date || ap.updated_at)}</p>
+                          <p className="text-xs text-green-600 font-medium">Montado em: {formatDate(ap.completion_date || ap.assembly_date || ap.updated_at)}</p>
                         ) : (
-                          <p className="text-xs text-gray-500 mb-2">Prazo: {formatDate(ap.assembly_route?.deadline)}</p>
+                          <p className="text-xs text-gray-500">Prazo: {formatDate(ap.assembly_route?.deadline)}</p>
+                        )}
+                        {(ap as any).import_source && (
+                          <p className="text-xs text-gray-400 mb-2">
+                            Origem: {(ap as any).import_source === 'avulsa' ? 'Avulsa' : 'Lote'}
+                          </p>
                         )}
 
                         <button

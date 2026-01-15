@@ -214,6 +214,7 @@ export default function OrdersImport() {
           status: 'pending' as const,
           raw_json: o,
           xml_documento: xmlDanfe.conteudo_xml || null,
+          import_source: 'lote',
         } as any;
       });
 

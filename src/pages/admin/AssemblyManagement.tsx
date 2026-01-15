@@ -1341,7 +1341,8 @@ function AssemblyManagementContent() {
             raw_json: o,
             service_type: launchType === 'venda' ? undefined : launchType,
             department: String(itemsJson[0]?.department || ''),
-            brand: String(itemsJson[0]?.brand || '')
+            brand: String(itemsJson[0]?.brand || ''),
+            import_source: 'avulsa',
           };
 
           const { data: insertedOrder, error: orderError } = await supabase
@@ -1391,7 +1392,8 @@ function AssemblyManagementContent() {
               installation_address: addressJson,
               status: 'pending',
               created_at: now,
-              updated_at: now
+              updated_at: now,
+              import_source: 'avulsa',
             });
           }
         });
