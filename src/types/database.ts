@@ -2,7 +2,7 @@ export interface User {
   id: string;
   email: string;
   name: string;
-  role: 'admin' | 'driver' | 'helper' | 'montador' | 'conferente';
+  role: 'admin' | 'driver' | 'helper' | 'montador' | 'conferente' | 'consultor';
   phone?: string;
   must_change_password?: boolean;
   created_at: string;

@@ -8,7 +8,7 @@ import { toast } from 'sonner';
 export default function FirstLogin() {
   const navigate = useNavigate();
   const { user } = useAuthStore();
-  
+
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -75,10 +75,11 @@ export default function FirstLogin() {
         });
         const role = String(refreshed.role || '').toLowerCase();
         target = role === 'admin' ? '/admin'
-              : role === 'driver' ? '/driver'
-              : role === 'conferente' ? '/conferente'
+          : role === 'driver' ? '/driver'
+            : role === 'conferente' ? '/conferente'
               : role === 'montador' ? '/montador'
-              : '/';
+                : role === 'consultor' ? '/consultor'
+                  : '/';
       } else {
         await useAuthStore.getState().checkAuth();
       }

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { ArrowLeft, Loader2, MapPin, Phone, Search, Truck, Hammer, FileText, AlertTriangle } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../../supabase/client';
+import { useAuthStore } from '../../stores/authStore';
 import type { Order } from '../../types/database';
 import { toast } from 'sonner';
 
@@ -36,6 +37,10 @@ export default function OrderLookup() {
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
   const [routeOrders, setRouteOrders] = useState<RouteOrderInfo[]>([]);
   const [assemblies, setAssemblies] = useState<AssemblyInfo[]>([]);
+
+  // Check if user is consultor to hide certain elements
+  const { user } = useAuthStore();
+  const isConsultor = user?.role === 'consultor';
 
   const fetchOrders = async (term: string) => {
     const q = term.trim();
@@ -303,9 +308,11 @@ export default function OrderLookup() {
     <div className="min-h-screen bg-gray-50">
       <header className="bg-white border-b border-gray-200 sticky top-0 z-10">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex items-center gap-3">
-          <button onClick={() => navigate(-1)} className="p-2 hover:bg-gray-100 rounded-lg text-gray-600">
-            <ArrowLeft className="h-5 w-5" />
-          </button>
+          {!isConsultor && (
+            <button onClick={() => navigate(-1)} className="p-2 hover:bg-gray-100 rounded-lg text-gray-600">
+              <ArrowLeft className="h-5 w-5" />
+            </button>
+          )}
           <div>
             <p className="text-xs text-gray-500">Consulta</p>
             <h1 className="text-xl font-bold text-gray-900 flex items-center gap-2">
@@ -453,20 +460,22 @@ export default function OrderLookup() {
                           </p>
                         )}
 
-                        <button
-                          onClick={() => {
-                            try {
-                              if (ro.route_id) {
-                                localStorage.setItem('rc_selectedRouteId', String(ro.route_id));
-                                localStorage.setItem('rc_showRouteModal', '1');
-                                window.open('/admin/routes', '_blank');
-                              }
-                            } catch { }
-                          }}
-                          className="w-full mt-1 text-xs px-2 py-1.5 rounded border border-blue-200 text-blue-700 hover:bg-blue-50 transition-colors flex items-center justify-center gap-1"
-                        >
-                          Detalhes da rota
-                        </button>
+                        {!isConsultor && (
+                          <button
+                            onClick={() => {
+                              try {
+                                if (ro.route_id) {
+                                  localStorage.setItem('rc_selectedRouteId', String(ro.route_id));
+                                  localStorage.setItem('rc_showRouteModal', '1');
+                                  window.open('/admin/routes', '_blank');
+                                }
+                              } catch { }
+                            }}
+                            className="w-full mt-1 text-xs px-2 py-1.5 rounded border border-blue-200 text-blue-700 hover:bg-blue-50 transition-colors flex items-center justify-center gap-1"
+                          >
+                            Detalhes da rota
+                          </button>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -513,20 +522,22 @@ export default function OrderLookup() {
                           </p>
                         )}
 
-                        <button
-                          onClick={() => {
-                            try {
-                              if (ap.assembly_route_id) {
-                                localStorage.setItem('am_selectedRouteId', String(ap.assembly_route_id));
-                                localStorage.setItem('am_showRouteModal', '1');
-                                window.open('/admin/assembly', '_blank');
-                              }
-                            } catch { }
-                          }}
-                          className="w-full mt-1 text-xs px-2 py-1.5 rounded border border-purple-200 text-purple-700 hover:bg-purple-50 transition-colors flex items-center justify-center gap-1"
-                        >
-                          Detalhes da rota
-                        </button>
+                        {!isConsultor && (
+                          <button
+                            onClick={() => {
+                              try {
+                                if (ap.assembly_route_id) {
+                                  localStorage.setItem('am_selectedRouteId', String(ap.assembly_route_id));
+                                  localStorage.setItem('am_showRouteModal', '1');
+                                  window.open('/admin/assembly', '_blank');
+                                }
+                              } catch { }
+                            }}
+                            className="w-full mt-1 text-xs px-2 py-1.5 rounded border border-purple-200 text-purple-700 hover:bg-purple-50 transition-colors flex items-center justify-center gap-1"
+                          >
+                            Detalhes da rota
+                          </button>
+                        )}
                       </div>
                     ))}
                   </div>

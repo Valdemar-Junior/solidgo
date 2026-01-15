@@ -30,7 +30,7 @@ export default function Login() {
   const navigate = useNavigate();
   const location = useLocation();
   const { login, isLoading, error, clearError, user, isAuthenticated } = useAuthStore();
-  
+
   const [name, setName] = useState('');
   const [password, setPassword] = useState('');
   const [activeFeature, setActiveFeature] = useState(0);
@@ -56,11 +56,12 @@ export default function Login() {
       }
       const path = user.role === 'admin' ? '/admin'
         : user.role === 'driver' ? '/driver'
-        : user.role === 'conferente' ? '/conferente'
-        : user.role === 'montador' ? '/montador'
-        : '/driver';
+          : user.role === 'conferente' ? '/conferente'
+            : user.role === 'montador' ? '/montador'
+              : user.role === 'consultor' ? '/consultor'
+                : '/driver';
       navigate(path);
-      setTimeout(()=>{ try { window.location.replace(path); } catch {} }, 100);
+      setTimeout(() => { try { window.location.replace(path); } catch { } }, 100);
     }
   }, [isAuthenticated, user, navigate, location.search]);
 
@@ -80,7 +81,7 @@ export default function Login() {
       <div className="hidden lg:flex lg:w-1/2 bg-blue-600 relative overflow-hidden flex-col justify-between p-12 text-white">
         <div className="absolute inset-0 bg-gradient-to-br from-blue-600 to-indigo-900 opacity-90"></div>
         <div className="absolute inset-0 bg-[url('https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?ixlib=rb-4.0.3&auto=format&fit=crop&w=2070&q=80')] bg-cover bg-center mix-blend-overlay opacity-20"></div>
-        
+
         <div className="relative z-10">
           <div className="flex items-center space-x-3 mb-8">
             <div className="bg-white/20 p-2 rounded-lg backdrop-blur-sm">
@@ -92,11 +93,10 @@ export default function Login() {
 
         <div className="relative z-10 flex-1 flex flex-col justify-center max-w-lg">
           {features.map((feature, idx) => (
-            <div 
+            <div
               key={idx}
-              className={`transition-all duration-700 absolute inset-x-0 top-1/2 -translate-y-1/2 transform ${
-                idx === activeFeature ? 'opacity-100 translate-x-0' : 'opacity-0 translate-x-8 pointer-events-none'
-              }`}
+              className={`transition-all duration-700 absolute inset-x-0 top-1/2 -translate-y-1/2 transform ${idx === activeFeature ? 'opacity-100 translate-x-0' : 'opacity-0 translate-x-8 pointer-events-none'
+                }`}
             >
               <div className="mb-6 inline-block p-4 rounded-2xl bg-white/10 backdrop-blur-md border border-white/20">
                 <feature.icon className="h-10 w-10 text-blue-200" />
@@ -112,9 +112,8 @@ export default function Login() {
             <button
               key={idx}
               onClick={() => setActiveFeature(idx)}
-              className={`h-1.5 rounded-full transition-all duration-300 ${
-                idx === activeFeature ? 'w-8 bg-white' : 'w-2 bg-white/40 hover:bg-white/60'
-              }`}
+              className={`h-1.5 rounded-full transition-all duration-300 ${idx === activeFeature ? 'w-8 bg-white' : 'w-2 bg-white/40 hover:bg-white/60'
+                }`}
             />
           ))}
         </div>
@@ -214,8 +213,8 @@ export default function Login() {
               </div>
             </div>
             <div className="mt-6 flex justify-center space-x-6 text-gray-400">
-               <ShieldCheck className="h-5 w-5" />
-               <CheckCircle2 className="h-5 w-5" />
+              <ShieldCheck className="h-5 w-5" />
+              <CheckCircle2 className="h-5 w-5" />
             </div>
           </div>
         </div>

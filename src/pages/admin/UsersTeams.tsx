@@ -4,20 +4,20 @@ import supabase from '../../supabase/client';
 import type { User } from '../../types/database';
 import { slugifyName, toLoginEmailFromName } from '../../lib/utils';
 import { toast } from 'sonner';
-import { 
-  Users, 
-  UserPlus, 
-  Truck, 
-  Briefcase, 
-  Search, 
-  Filter, 
-  MoreVertical, 
-  Edit, 
-  Trash2, 
-  Key, 
-  Plus, 
-  X, 
-  Check, 
+import {
+  Users,
+  UserPlus,
+  Truck,
+  Briefcase,
+  Search,
+  Filter,
+  MoreVertical,
+  Edit,
+  Trash2,
+  Key,
+  Plus,
+  X,
+  Check,
   Shield,
   User as UserIcon,
   Settings,
@@ -29,7 +29,7 @@ export default function UsersTeams() {
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<'users' | 'teams' | 'vehicles'>('users');
   const [loading, setLoading] = useState(true);
-  
+
   // Data States
   const [users, setUsers] = useState<User[]>([]);
   const [teams, setTeams] = useState<any[]>([]);
@@ -43,7 +43,7 @@ export default function UsersTeams() {
   // Form States - User
   const [uName, setUName] = useState('');
   const [uPassword, setUPassword] = useState('');
-  const [uRole, setURole] = useState<'admin' | 'driver' | 'helper' | 'montador' | 'conferente'>('driver');
+  const [uRole, setURole] = useState<'admin' | 'driver' | 'helper' | 'montador' | 'conferente' | 'consultor'>('driver');
   const [generatedPassword, setGeneratedPassword] = useState<string | null>(null);
   const [isCreatingUser, setIsCreatingUser] = useState(false);
 
@@ -102,7 +102,7 @@ export default function UsersTeams() {
         pseudoEmail = `${base}.${String(Date.now()).slice(-4)}@solidgo.local`;
       }
       const { data: prev } = await supabase.auth.getSession();
-      localStorage.setItem('auth_lock','1');
+      localStorage.setItem('auth_lock', '1');
       let uid = '';
       let signRes = await supabase.auth.signUp({ email: pseudoEmail, password: pwd });
       if (signRes.error) {
@@ -120,7 +120,7 @@ export default function UsersTeams() {
         uid = signRes.data.user?.id || '';
       }
       if (!uid) throw new Error('Falha ao obter id do usuário');
-      
+
       if (prev?.session?.access_token && prev?.session?.refresh_token) {
         await supabase.auth.setSession({ access_token: prev.session.access_token, refresh_token: prev.session.refresh_token });
       }
@@ -143,7 +143,7 @@ export default function UsersTeams() {
         } catch (error) {
           try {
             await supabase.from('drivers').upsert({ user_id: uid, active: true }, { onConflict: 'user_id' });
-          } catch {}
+          } catch { }
         }
       }
       toast.success('Usuário criado com sucesso!');
@@ -195,7 +195,7 @@ export default function UsersTeams() {
       setVModel(''); setVPlate('');
       setShowVehicleModal(false);
       await loadAll();
-    } catch (e:any) {
+    } catch (e: any) {
       toast.error(String(e.message || 'Falha ao salvar veículo'));
     } finally {
       setIsCreatingVehicle(false);
@@ -234,14 +234,16 @@ export default function UsersTeams() {
       driver: 'bg-blue-100 text-blue-800',
       helper: 'bg-gray-100 text-gray-800',
       montador: 'bg-orange-100 text-orange-800',
-      conferente: 'bg-teal-100 text-teal-800'
+      conferente: 'bg-teal-100 text-teal-800',
+      consultor: 'bg-cyan-100 text-cyan-800'
     };
     const labels: any = {
       admin: 'Admin',
       driver: 'Motorista',
       helper: 'Ajudante',
       montador: 'Montador',
-      conferente: 'Conferente'
+      conferente: 'Conferente',
+      consultor: 'Consultor'
     };
     return (
       <span className={`px-2.5 py-0.5 rounded-full text-xs font-medium ${styles[role] || 'bg-gray-100 text-gray-800'}`}>
@@ -257,8 +259,8 @@ export default function UsersTeams() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
             <div className="flex items-center gap-4">
-              <button 
-                onClick={() => navigate(-1)} 
+              <button
+                onClick={() => navigate(-1)}
                 className="p-2 -ml-2 hover:bg-gray-100 rounded-lg text-gray-600 transition-colors"
                 title="Voltar"
               >
@@ -273,19 +275,19 @@ export default function UsersTeams() {
               </div>
             </div>
             <div className="flex items-center gap-3 bg-gray-100 p-1 rounded-lg">
-              <button 
+              <button
                 onClick={() => setActiveTab('users')}
                 className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${activeTab === 'users' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
               >
                 Usuários
               </button>
-              <button 
+              <button
                 onClick={() => setActiveTab('teams')}
                 className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${activeTab === 'teams' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
               >
                 Equipes
               </button>
-              <button 
+              <button
                 onClick={() => setActiveTab('vehicles')}
                 className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${activeTab === 'vehicles' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
               >
@@ -297,20 +299,20 @@ export default function UsersTeams() {
       </div>
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
-        
+
         {/* Controls */}
         <div className="flex flex-col sm:flex-row justify-between items-center gap-4 bg-white p-4 rounded-xl shadow-sm border border-gray-200">
           <div className="relative w-full sm:w-96">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-            <input 
-              type="text" 
+            <input
+              type="text"
               placeholder={`Buscar ${activeTab === 'users' ? 'usuários' : activeTab === 'teams' ? 'equipes' : 'veículos'}...`}
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               className="w-full pl-10 pr-4 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
             />
           </div>
-          <button 
+          <button
             onClick={() => activeTab === 'users' ? setShowUserModal(true) : activeTab === 'teams' ? setShowTeamModal(true) : setShowVehicleModal(true)}
             className="w-full sm:w-auto flex items-center justify-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors shadow-sm"
           >
@@ -343,7 +345,7 @@ export default function UsersTeams() {
                     {/* Action Menu Mockup - simpler to just have buttons for now */}
                   </div>
                 </div>
-                
+
                 <div className="mt-4 pt-4 border-t border-gray-100 flex justify-end gap-2">
                   <button
                     onClick={async () => {
@@ -356,13 +358,13 @@ export default function UsersTeams() {
                         });
                         if (!resp.ok) {
                           let msg = 'Falha ao resetar senha';
-                          try { const j = await resp.json(); if (j?.error) msg = j.error; } catch {}
+                          try { const j = await resp.json(); if (j?.error) msg = j.error; } catch { }
                           throw new Error(msg);
                         }
                         await supabase.from('users').update({ must_change_password: true }).eq('id', user.id);
                         toast.success(`Senha resetada: ${temp}`, { duration: 10000 });
                         loadAll();
-                      } catch (e:any) {
+                      } catch (e: any) {
                         toast.error(String(e.message || 'Erro ao resetar senha'));
                       }
                     }}
@@ -461,41 +463,42 @@ export default function UsersTeams() {
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
             <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
               <h3 className="text-lg font-bold text-gray-900">Novo Usuário</h3>
-              <button onClick={() => { setShowUserModal(false); setGeneratedPassword(null); }} className="text-gray-400 hover:text-gray-600"><X className="h-5 w-5"/></button>
+              <button onClick={() => { setShowUserModal(false); setGeneratedPassword(null); }} className="text-gray-400 hover:text-gray-600"><X className="h-5 w-5" /></button>
             </div>
-            
+
             <div className="p-6 space-y-4">
               {!generatedPassword ? (
                 <>
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">Nome Completo</label>
-                    <input 
-                      value={uName} 
-                      onChange={e => setUName(e.target.value)} 
+                    <input
+                      value={uName}
+                      onChange={e => setUName(e.target.value)}
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
                       placeholder="Ex: João da Silva"
                     />
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">Função</label>
-                    <select 
-                      value={uRole} 
-                      onChange={e => setURole(e.target.value as any)} 
+                    <select
+                      value={uRole}
+                      onChange={e => setURole(e.target.value as any)}
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
                     >
                       <option value="driver">Motorista</option>
                       <option value="helper">Ajudante</option>
                       <option value="montador">Montador</option>
                       <option value="conferente">Conferente</option>
+                      <option value="consultor">Consultor</option>
                       <option value="admin">Administrador</option>
                     </select>
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">Senha Inicial (Opcional)</label>
-                    <input 
-                      type="password" 
-                      value={uPassword} 
-                      onChange={e => setUPassword(e.target.value)} 
+                    <input
+                      type="password"
+                      value={uPassword}
+                      onChange={e => setUPassword(e.target.value)}
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
                       placeholder="Deixe vazio para gerar automaticamente"
                     />
@@ -508,14 +511,14 @@ export default function UsersTeams() {
                   </div>
                   <h4 className="text-lg font-bold text-green-800">Usuário Criado!</h4>
                   <p className="text-sm text-green-700">Copie a senha inicial abaixo:</p>
-                  
+
                   <div className="flex items-center gap-2 bg-white border border-green-200 p-3 rounded-lg">
                     <code className="flex-1 text-lg font-mono font-bold text-gray-800">{generatedPassword}</code>
                     <button onClick={copyPwd} className="p-2 hover:bg-gray-100 rounded-lg text-gray-500 hover:text-gray-700" title="Copiar">
                       <Copy className="h-5 w-5" />
                     </button>
                   </div>
-                  
+
                   <p className="text-xs text-gray-500">Esta senha só será exibida uma vez.</p>
                 </div>
               )}
@@ -525,8 +528,8 @@ export default function UsersTeams() {
               {!generatedPassword ? (
                 <>
                   <button onClick={() => setShowUserModal(false)} className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg font-medium transition-colors">Cancelar</button>
-                  <button 
-                    onClick={createUser} 
+                  <button
+                    onClick={createUser}
                     disabled={isCreatingUser}
                     className="px-4 py-2 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 transition-colors disabled:opacity-50"
                   >
@@ -549,9 +552,9 @@ export default function UsersTeams() {
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
             <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
               <h3 className="text-lg font-bold text-gray-900">Nova Equipe</h3>
-              <button onClick={() => setShowTeamModal(false)} className="text-gray-400 hover:text-gray-600"><X className="h-5 w-5"/></button>
+              <button onClick={() => setShowTeamModal(false)} className="text-gray-400 hover:text-gray-600"><X className="h-5 w-5" /></button>
             </div>
-            
+
             <div className="p-6 space-y-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Motorista</label>
@@ -571,8 +574,8 @@ export default function UsersTeams() {
 
             <div className="px-6 py-4 bg-gray-50 border-t border-gray-100 flex justify-end gap-3">
               <button onClick={() => setShowTeamModal(false)} className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg font-medium transition-colors">Cancelar</button>
-              <button 
-                onClick={createTeam} 
+              <button
+                onClick={createTeam}
                 disabled={isCreatingTeam}
                 className="px-4 py-2 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 transition-colors disabled:opacity-50"
               >
@@ -589,24 +592,24 @@ export default function UsersTeams() {
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
             <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
               <h3 className="text-lg font-bold text-gray-900">Novo Veículo</h3>
-              <button onClick={() => setShowVehicleModal(false)} className="text-gray-400 hover:text-gray-600"><X className="h-5 w-5"/></button>
+              <button onClick={() => setShowVehicleModal(false)} className="text-gray-400 hover:text-gray-600"><X className="h-5 w-5" /></button>
             </div>
-            
+
             <div className="p-6 space-y-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Modelo</label>
-                <input 
-                  value={vModel} 
-                  onChange={e => setVModel(e.target.value)} 
+                <input
+                  value={vModel}
+                  onChange={e => setVModel(e.target.value)}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
                   placeholder="Ex: Fiat Ducato"
                 />
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Placa</label>
-                <input 
-                  value={vPlate} 
-                  onChange={e => setVPlate(e.target.value)} 
+                <input
+                  value={vPlate}
+                  onChange={e => setVPlate(e.target.value)}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
                   placeholder="ABC-1234"
                 />
@@ -615,8 +618,8 @@ export default function UsersTeams() {
 
             <div className="px-6 py-4 bg-gray-50 border-t border-gray-100 flex justify-end gap-3">
               <button onClick={() => setShowVehicleModal(false)} className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg font-medium transition-colors">Cancelar</button>
-              <button 
-                onClick={createVehicle} 
+              <button
+                onClick={createVehicle}
                 disabled={isCreatingVehicle}
                 className="px-4 py-2 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 transition-colors disabled:opacity-50"
               >

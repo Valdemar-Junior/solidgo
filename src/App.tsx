@@ -196,6 +196,16 @@ function App() {
             }
           />
 
+          {/* Consultor Routes - Acesso restrito à consulta de pedidos */}
+          <Route
+            path="/consultor"
+            element={
+              <ProtectedRoute allowedRoles={['consultor']}>
+                <OrderLookup />
+              </ProtectedRoute>
+            }
+          />
+
           {/* Default redirect based on role */}
           <Route
             path="/"
@@ -250,7 +260,9 @@ function RoleBasedRedirect() {
         ? <Navigate to="/conferente" replace />
         : user.role === 'montador'
           ? <Navigate to="/montador" replace />
-          : <Navigate to="/driver" replace />;
+          : user.role === 'consultor'
+            ? <Navigate to="/consultor" replace />
+            : <Navigate to="/driver" replace />;
 }
 
 export default App;
