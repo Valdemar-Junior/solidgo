@@ -340,7 +340,7 @@ export default function OrderLookup() {
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5 flex flex-col gap-4">
           <div className="flex flex-col md:flex-row gap-3 md:items-center">
             <div className="flex-1">
-              <label className="text-sm font-medium text-gray-700">Pedido, CPF ou cliente</label>
+              <label className="text-xs font-semibold text-gray-500 uppercase">Busca Rápida</label>
               <input
                 type="text"
                 value={query}
@@ -357,7 +357,7 @@ export default function OrderLookup() {
                   }
                 }}
                 onKeyDown={(e) => e.key === 'Enter' && handleSearch(query)}
-                placeholder="Ex: 115675 ou 8499..."
+                placeholder="Pedido, cliente ou CPF..."
                 className="w-full mt-1 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
               />
             </div>
