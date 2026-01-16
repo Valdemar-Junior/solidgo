@@ -319,7 +319,6 @@ export default function OrderLookup() {
             </button>
           )}
           <div className="flex-1">
-            <p className="text-xs text-gray-500">Consulta</p>
             <h1 className="text-xl font-bold text-gray-900 flex items-center gap-2">
               <Search className="h-5 w-5 text-blue-600" /> Consulta de Pedido
             </h1>
@@ -338,9 +337,9 @@ export default function OrderLookup() {
 
       <main className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5 flex flex-col gap-4">
-          <div className="flex flex-col md:flex-row gap-3 md:items-center">
+          <div className="flex flex-col md:flex-row gap-3 md:items-end">
             <div className="flex-1">
-              <label className="text-xs font-semibold text-gray-500 uppercase">Busca Rápida</label>
+              <label className="text-xs font-bold text-gray-500 uppercase">Busca Rápida</label>
               <input
                 type="text"
                 value={query}
