@@ -569,7 +569,7 @@ function AssemblyManagementContent() {
       const { data: productsPending } = await supabase
         .from('assembly_products')
         .select(`
-          id, order_id, product_name, product_sku, status, assembly_route_id, created_at, updated_at, was_returned,
+          id, order_id, product_name, product_sku, status, assembly_route_id, created_at, updated_at, was_returned, observations, returned_at,
           order:order_id!inner (id, order_id_erp, customer_name, phone, address_json, raw_json, data_venda, previsao_entrega, observacoes_publicas, observacoes_internas, status, service_type, tem_frete_full),
           installer:installer_id (id, name)
         `)
@@ -1562,7 +1562,7 @@ function AssemblyManagementContent() {
   }, [groupedProducts, filterCity, filterNeighborhood, filterDeadline, filterOrder, filterClient, filterSaleDateStart, filterSaleDateEnd, filterDeliveryDateStart, filterDeliveryDateEnd, filterForecastDateStart, filterForecastDateEnd, filterReturned, filterFull, filterServiceType, deliveryInfo]);
 
   const orderRows = useMemo(() => {
-    const rows: Array<{ key: string; orderId: string; dataVenda: string; entrega: string; previsao: string; pedido: string; cliente: string; telefone: string; produto: string; sku: string; obsPublicas: string; obsInternas: string; cidade: string; bairro: string; endereco: string; selected: boolean; wasReturned: boolean; isForaPrazo: boolean; temFreteFull: boolean; }> = [];
+    const rows: Array<{ key: string; orderId: string; dataVenda: string; entrega: string; previsao: string; pedido: string; cliente: string; telefone: string; produto: string; sku: string; obsPublicas: string; obsInternas: string; cidade: string; bairro: string; endereco: string; selected: boolean; wasReturned: boolean; isForaPrazo: boolean; temFreteFull: boolean; returnReason: string; returnObservation: string; }> = [];
 
     // Helper para verificar se pedido tem Frete Full
     const isTrueValue = (v: any) => {
@@ -1592,7 +1592,21 @@ function AssemblyManagementContent() {
       const temFreteFull = isTrueValue(order?.tem_frete_full) || isTrueValue(raw?.tem_frete_full) || obsInternas.toLowerCase().includes('*frete full*');
       products.forEach((ap, idx) => {
         const wasReturned = (ap as any).was_returned === true;
-        rows.push({ key: `${orderId}-${ap.id}-${idx}`, orderId, dataVenda, entrega, previsao, pedido, cliente, telefone, produto: ap.product_name || '-', sku: ap.product_sku || '-', obsPublicas, obsInternas, cidade, bairro, endereco, selected, wasReturned, isForaPrazo, temFreteFull });
+        // Extract return reason from observations field (format: "Retorno: <motivo>" or "(Retorno: <motivo>) <obs>")
+        const obsValue = String((ap as any).observations || '');
+        let returnReason = '';
+        let returnObservation = '';
+        if (wasReturned && obsValue) {
+          const matchParens = obsValue.match(/^\(Retorno:\s*(.+?)\)\s*(.*)/);
+          const matchSimple = obsValue.match(/^Retorno:\s*(.+)$/);
+          if (matchParens) {
+            returnReason = matchParens[1].trim();
+            returnObservation = matchParens[2]?.trim() || '';
+          } else if (matchSimple) {
+            returnReason = matchSimple[1].trim();
+          }
+        }
+        rows.push({ key: `${orderId}-${ap.id}-${idx}`, orderId, dataVenda, entrega, previsao, pedido, cliente, telefone, produto: ap.product_name || '-', sku: ap.product_sku || '-', obsPublicas, obsInternas, cidade, bairro, endereco, selected, wasReturned, isForaPrazo, temFreteFull, returnReason, returnObservation });
       });
     });
     return rows;
@@ -1967,11 +1981,21 @@ function AssemblyManagementContent() {
                                             ) :
                                               c.id === 'sinais' ? (
                                                 <div className="flex items-center gap-1 flex-wrap">
-                                                  {row.wasReturned && (
-                                                    <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-orange-100 text-orange-800">
-                                                      🔄 Retornado
-                                                    </span>
-                                                  )}
+                                                  {row.wasReturned && (() => {
+                                                    // Check if the reason is a known quick-pick or if it's "Outro" (longer text)
+                                                    const knownReasons = ['Cliente ausente', 'Endereço incorreto / não localizado', 'Cliente sem contato', 'Cliente recusou / cancelou', 'Horário excedido'];
+                                                    const isKnownReason = knownReasons.some(r => row.returnReason.includes(r));
+                                                    const displayReason = isKnownReason ? row.returnReason : (row.returnReason ? 'Outro' : '');
+                                                    const fullText = row.returnReason + (row.returnObservation ? ` - ${row.returnObservation}` : '');
+                                                    return (
+                                                      <span
+                                                        className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-orange-100 text-orange-800 cursor-default"
+                                                        title={fullText || 'Pedido retornado'}
+                                                      >
+                                                        🔄 Retornado{displayReason ? ` · ${displayReason}` : ''}
+                                                      </span>
+                                                    );
+                                                  })()}
                                                   {row.temFreteFull && (
                                                     <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-yellow-100 text-yellow-800 border border-yellow-200" title="Frete Full - Prioridade na montagem">
                                                       ⚡ Full
