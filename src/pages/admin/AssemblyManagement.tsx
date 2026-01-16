@@ -1958,8 +1958,8 @@ function AssemblyManagementContent() {
                             return e164 ? `https://wa.me/${e164}` : '';
                           })();
                           return (
-                            <tr key={row.key} onClick={() => toggleOrderSelection(row.orderId)} className={`group hover:bg-gray-50 transition-colors cursor-pointer ${row.selected ? 'bg-blue-50/60 hover:bg-blue-100/50' : ''}`}>
-                              <td className="px-4 py-3">
+                            <tr key={row.key} className={`group hover:bg-gray-50 transition-colors ${row.selected ? 'bg-blue-50/60 hover:bg-blue-100/50' : ''}`}>
+                              <td className="px-4 py-3 cursor-pointer" onClick={() => toggleOrderSelection(row.orderId)}>
                                 <div className={`w-5 h-5 rounded border flex items-center justify-center transition-colors ${row.selected ? 'bg-blue-600 border-blue-600' : 'border-gray-300 bg-white'}`}>{row.selected && <CheckCircle2 className="h-3.5 w-3.5 text-white" />}</div>
                               </td>
                               {columnsConf.filter(c => c.visible).map(c => (
