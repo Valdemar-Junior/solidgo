@@ -260,6 +260,19 @@ export default function OrderLookup() {
     fetchDetails();
   }, [selectedOrder]);
 
+  // Etapa do processo (exibida no cabeçalho do card)
+  const processStage = useMemo(() => {
+    const latestRO = routeOrders[0];
+    const routeStatus = latestRO?.route?.status;
+
+    if (!latestRO) return 'imported'; // Nenhuma rota atribuída
+    if (routeStatus === 'in_progress') return 'in_route'; // Rota em andamento
+    if (routeStatus === 'pending' || routeStatus === 'assigned') return 'separating'; // Em separação
+    if (routeStatus === 'completed') return 'completed'; // Rota finalizada
+    return 'imported';
+  }, [routeOrders]);
+
+  // Status específico do pedido (exibido dentro do card da rota)
   const derivedStatus = useMemo(() => {
     const base = selectedOrder?.status || '';
     const latestRO = routeOrders[0];
@@ -307,6 +320,31 @@ export default function OrderLookup() {
     completed: 'Concluído',
     cancelled: 'Cancelado',
     none: 'Sem montagem',
+  };
+
+  // Labels para etapa do processo (cabeçalho do card)
+  const processStageLabel: Record<string, string> = {
+    imported: 'Pedido Importado do ERP',
+    separating: 'Em Separação',
+    in_route: 'Em Rota',
+    completed: 'Rota Finalizada',
+  };
+
+  // Cores/estilos para cada etapa do processo
+  const processStageStyle: Record<string, string> = {
+    imported: 'text-gray-600',
+    separating: 'text-orange-600',
+    in_route: 'text-blue-600',
+    completed: 'text-green-600',
+  };
+
+  // Labels para status específico do pedido (dentro do card)
+  const orderStatusLabel: Record<string, string> = {
+    pending: 'Pendente',
+    in_progress: 'Pendente',
+    delivered: 'Entregue',
+    returned: 'Retornado',
+    pickup: 'Retirado em Loja',
   };
 
   return (
@@ -424,10 +462,12 @@ export default function OrderLookup() {
 
               <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm">
                 <div className="flex items-center gap-2 mb-2">
-                  <Truck className="h-5 w-5 text-blue-600" />
+                  <Truck className={`h-5 w-5 ${processStageStyle[processStage] || 'text-blue-600'}`} />
                   <div>
                     <p className="text-xs font-semibold text-gray-500 uppercase">Entrega</p>
-                    <p className="text-sm font-bold text-gray-900 capitalize">{statusLabelEntrega[derivedStatus] || '-'}</p>
+                    <p className={`text-sm font-bold capitalize ${processStageStyle[processStage] || 'text-gray-900'}`}>
+                      {processStageLabel[processStage] || 'Pedido Importado do ERP'}
+                    </p>
                   </div>
                 </div>
                 {/* ... Delivery Card Logic ... */}
@@ -435,62 +475,76 @@ export default function OrderLookup() {
                   <p className="text-sm text-gray-500">
                     {derivedStatus === 'delivered'
                       ? 'Entregue, mas rota não foi encontrada no histórico.'
-                      : 'Nenhuma rota encontrada.'}
+                      : 'Aguardando atribuição a uma rota de entrega.'}
                   </p>
                 ) : (
                   <div className="space-y-2">
-                    {routeOrders.map((ro) => (
-                      <div key={ro.id} className="border border-gray-100 rounded-lg p-3 relative group hover:border-blue-200 transition-colors">
-                        <div className="flex justify-between items-start">
-                          <div>
-                            <p className="text-sm font-semibold text-gray-900">{ro.route?.name || 'Rota sem nome'}</p>
-                            {(ro.route?.route_code || ro.route_id) && (
-                              <p className="text-[10px] items-center text-gray-400 font-mono mt-0.5">
-                                ID: {ro.route?.route_code || ro.route_id?.slice(0, 8) + '...'}
-                              </p>
-                            )}
+                    {routeOrders.map((ro) => {
+                      // Calcular status específico deste pedido nesta rota
+                      const orderStatus = ro.status === 'returned' ? 'returned'
+                        : ro.status === 'delivered' ? 'delivered'
+                          : 'pending';
+                      const orderStatusColor = orderStatus === 'delivered' ? 'text-green-600'
+                        : orderStatus === 'returned' ? 'text-red-600'
+                          : 'text-yellow-600';
+
+                      return (
+                        <div key={ro.id} className="border border-gray-100 rounded-lg p-3 relative group hover:border-blue-200 transition-colors">
+                          <div className="flex justify-between items-start">
+                            <div>
+                              <p className="text-sm font-semibold text-gray-900">{ro.route?.name || 'Rota sem nome'}</p>
+                              {(ro.route?.route_code || ro.route_id) && (
+                                <p className="text-[10px] items-center text-gray-400 font-mono mt-0.5">
+                                  ID: {ro.route?.route_code || ro.route_id?.slice(0, 8) + '...'}
+                                </p>
+                              )}
+                            </div>
+                            {/* Status do pedido como badge */}
+                            <span className={`text-xs font-semibold px-2 py-1 rounded-full ${orderStatus === 'delivered' ? 'bg-green-100 text-green-700 border border-green-200'
+                              : orderStatus === 'returned' ? 'bg-red-100 text-red-700 border border-red-200'
+                                : 'bg-yellow-100 text-yellow-700 border border-yellow-200'
+                              }`}>
+                              {orderStatusLabel[orderStatus] || 'Pendente'}
+                            </span>
                           </div>
+
+                          <p className="text-xs text-gray-500 mt-2">Motorista: {(ro.route as any)?.driver_name || (ro.route as any)?.driver?.user?.name || (ro.route as any)?.driver?.name || '-'}</p>
+                          <p className="text-xs text-gray-500">Veículo: {ro.route?.vehicle ? `${(ro.route?.vehicle as any)?.model || ''} ${(ro.route?.vehicle as any)?.plate || ''}`.trim() || '-' : '-'}</p>
+                          {ro.status === 'delivered' && (
+                            <p className="text-xs text-green-600 font-medium">
+                              Entregue em: {ro.delivered_at ? formatDate(ro.delivered_at) : formatDate(ro.route?.updated_at)}
+                            </p>
+                          )}
+                          {ro.status === 'returned' && (
+                            <p className="text-xs text-red-600 font-medium">
+                              Retornado em: {ro.delivered_at ? formatDate(ro.delivered_at) : formatDate(ro.route?.updated_at)}
+                            </p>
+                          )}
+                          {(selectedOrder as any).import_source && (
+                            <p className="text-xs text-gray-400 mb-2">
+                              Origem: {(selectedOrder as any).import_source === 'avulsa' ? 'Avulsa' : 'Lote'}
+                            </p>
+                          )}
+
+                          {!isConsultor && (
+                            <button
+                              onClick={() => {
+                                try {
+                                  if (ro.route_id) {
+                                    localStorage.setItem('rc_selectedRouteId', String(ro.route_id));
+                                    localStorage.setItem('rc_showRouteModal', '1');
+                                    window.open('/admin/routes', '_blank');
+                                  }
+                                } catch { }
+                              }}
+                              className="w-full mt-1 text-xs px-2 py-1.5 rounded border border-blue-200 text-blue-700 hover:bg-blue-50 transition-colors flex items-center justify-center gap-1"
+                            >
+                              Detalhes da rota
+                            </button>
+                          )}
                         </div>
-
-                        <p className="text-xs text-gray-500 capitalize mt-2">
-                          Status: {statusLabelEntrega[ro.status || ''] || statusLabelEntrega[ro.route?.status || ''] || ro.status || ro.route?.status || '-'}
-                        </p>
-                        <p className="text-xs text-gray-500">Motorista: {(ro.route as any)?.driver_name || (ro.route as any)?.driver?.user?.name || (ro.route as any)?.driver?.name || '-'}</p>
-                        <p className="text-xs text-gray-500">Veículo: {ro.route?.vehicle ? `${(ro.route?.vehicle as any)?.model || ''} ${(ro.route?.vehicle as any)?.plate || ''}`.trim() || '-' : '-'}</p>
-                        {ro.status === 'delivered' && (
-                          <p className="text-xs text-green-600 font-medium">
-                            Entregue em: {ro.delivered_at ? formatDate(ro.delivered_at) : formatDate(ro.route?.updated_at)}
-                          </p>
-                        )}
-                        {ro.status === 'returned' && (
-                          <p className="text-xs text-red-600 font-medium">
-                            Retornado em: {ro.delivered_at ? formatDate(ro.delivered_at) : formatDate(ro.route?.updated_at)}
-                          </p>
-                        )}
-                        {(selectedOrder as any).import_source && (
-                          <p className="text-xs text-gray-400 mb-2">
-                            Origem: {(selectedOrder as any).import_source === 'avulsa' ? 'Avulsa' : 'Lote'}
-                          </p>
-                        )}
-
-                        {!isConsultor && (
-                          <button
-                            onClick={() => {
-                              try {
-                                if (ro.route_id) {
-                                  localStorage.setItem('rc_selectedRouteId', String(ro.route_id));
-                                  localStorage.setItem('rc_showRouteModal', '1');
-                                  window.open('/admin/routes', '_blank');
-                                }
-                              } catch { }
-                            }}
-                            className="w-full mt-1 text-xs px-2 py-1.5 rounded border border-blue-200 text-blue-700 hover:bg-blue-50 transition-colors flex items-center justify-center gap-1"
-                          >
-                            Detalhes da rota
-                          </button>
-                        )}
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>
