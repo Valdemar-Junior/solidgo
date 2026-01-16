@@ -51,7 +51,11 @@ import { PDFDocument } from 'pdf-lib';
 import { useAuthStore } from '../../stores/authStore';
 import { useRouteDataStore } from '../../stores/routeDataStore';
 import { saveUserPreference, loadUserPreference, mergeColumnsConfig, type ColumnConfig } from '../../utils/userPreferences';
+import DatePicker, { registerLocale } from 'react-datepicker';
+import { ptBR } from 'date-fns/locale';
+import 'react-datepicker/dist/react-datepicker.css';
 
+registerLocale('pt-BR', ptBR);
 // --- ERROR BOUNDARY ---
 class RouteCreationErrorBoundary extends React.Component<
   { children: React.ReactNode },
@@ -184,7 +188,8 @@ function RouteCreationContent() {
   const [filterOperation, setFilterOperation] = useState<string>('');
   const [showFilters, setShowFilters] = useState(true); // Toggle filters visibility
   const [filterHasAssembly, setFilterHasAssembly] = useState<boolean>(false);
-  const [filterSaleDate, setFilterSaleDate] = useState<string>('');
+  const [filterSaleDateStart, setFilterSaleDateStart] = useState<string>('');
+  const [filterSaleDateEnd, setFilterSaleDateEnd] = useState<string>('');
   const [strictLocal, setStrictLocal] = useState<boolean>(false);
   const [filterBrand, setFilterBrand] = useState<string>('');
   const [filterDeadline, setFilterDeadline] = useState<'all' | 'within' | 'out'>('all');
@@ -197,6 +202,7 @@ function RouteCreationContent() {
   // ROUTE PAGINATION & FILTERS STATE (Moved here)
   const [dateFilter, setDateFilter] = useState<'today' | 'yesterday' | 'last7' | 'all'>('today');
   const [statusFilter, setStatusFilter] = useState<string[]>([]);
+  const [routeSearchQuery, setRouteSearchQuery] = useState<string>('');
   const [page, setPage] = useState(0);
   const [hasMoreRoutes, setHasMoreRoutes] = useState(true);
   const LIMIT = 50;
@@ -333,9 +339,23 @@ function RouteCreationContent() {
   const filteredRoutesList = useMemo(() => {
     return routesList.filter(r => {
       const isPkp = String(r.name || '').startsWith('RETIRADA');
-      return activeRoutesTab === 'pickups' ? isPkp : !isPkp;
+      const tabMatch = activeRoutesTab === 'pickups' ? isPkp : !isPkp;
+      if (!tabMatch) return false;
+
+      // Busca rápida por nome, motorista ou código
+      if (routeSearchQuery) {
+        const q = routeSearchQuery.toLowerCase().trim();
+        const routeName = String(r.name || '').toLowerCase();
+        const driverName = String((r as any).driver_name || (r as any).driver?.user?.name || (r as any).driver?.name || '').toLowerCase();
+        const routeCode = String((r as any).route_code || '').toLowerCase();
+        if (!routeName.includes(q) && !driverName.includes(q) && !routeCode.includes(q)) {
+          return false;
+        }
+      }
+
+      return true;
     });
-  }, [routesList, activeRoutesTab]);
+  }, [routesList, activeRoutesTab, routeSearchQuery]);
 
   // --- SINGLE LAUNCH IMPORT (TROCAS/ASSISTENCIAS/VENDAS) ---
   const [showLaunchModal, setShowLaunchModal] = useState(false);
@@ -771,7 +791,8 @@ function RouteCreationContent() {
           if ('freightFull' in f) setFilterFreightFull(f.freightFull ? '1' : '');
           if ('hasAssembly' in f) setFilterHasAssembly(!!f.hasAssembly);
           if ('operation' in f) setFilterOperation(f.operation || '');
-          if ('saleDate' in f) setFilterSaleDate(f.saleDate || '');
+          if ('saleDateStart' in f) setFilterSaleDateStart(f.saleDateStart || '');
+          if ('saleDateEnd' in f) setFilterSaleDateEnd(f.saleDateEnd || '');
           if ('brand' in f) setFilterBrand(f.brand || '');
           if ('serviceType' in f) setFilterServiceType(f.serviceType || '');
         }
@@ -794,13 +815,31 @@ function RouteCreationContent() {
         freightFull: Boolean(filterFreightFull),
         hasAssembly: filterHasAssembly,
         operation: filterOperation,
-        saleDate: filterSaleDate,
+        saleDateStart: filterSaleDateStart,
+        saleDateEnd: filterSaleDateEnd,
         brand: filterBrand,
         serviceType: filterServiceType
       };
       localStorage.setItem('rc_filters', JSON.stringify(payload));
     } catch { }
-  }, [filterCity, filterNeighborhood, filterFilialVenda, filterLocalEstocagem, strictLocal, filterSeller, filterClient, filterDepartment, strictDepartment, filterFreightFull, filterHasAssembly, filterOperation, filterSaleDate, filterBrand, filterServiceType]);
+  }, [filterCity, filterNeighborhood, filterFilialVenda, filterLocalEstocagem, strictLocal, filterSeller, filterClient, filterDepartment, strictDepartment, filterFreightFull, filterHasAssembly, filterOperation, filterSaleDateStart, filterSaleDateEnd, filterBrand, filterServiceType]);
+
+  // --- DATE HELPER FUNCTIONS ---
+  const stringToDate = (str: string): Date | null => {
+    if (!str) return null;
+    try {
+      const [y, m, d] = str.split('-').map(Number);
+      return new Date(y, m - 1, d);
+    } catch { return null; }
+  };
+
+  const dateToString = (date: Date | null): string => {
+    if (!date) return '';
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
 
   // --- MEMOS (Options) ---
   const cityOptions = useMemo(() => Array.from(new Set((orders || []).map((o: any) => String((o.address_json?.city || o.raw_json?.destinatario_cidade || '')).trim()).filter(Boolean))).sort(), [orders]);
@@ -1963,13 +2002,25 @@ function RouteCreationContent() {
           <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5 animate-in slide-in-from-top-2 duration-200">
             <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-4">
               <div className="space-y-1">
-                <label className="text-xs font-semibold text-gray-500 uppercase">Data da Venda</label>
-                <input
-                  type="date"
-                  value={filterSaleDate}
-                  onChange={(e) => setFilterSaleDate(e.target.value)}
-                  className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
-                />
+                <label className="text-xs font-semibold text-gray-500 uppercase">Data da Venda (Período)</label>
+                <div className="w-full">
+                  <DatePicker
+                    selectsRange={true}
+                    startDate={stringToDate(filterSaleDateStart)}
+                    endDate={stringToDate(filterSaleDateEnd)}
+                    onChange={(update) => {
+                      const [start, end] = update;
+                      setFilterSaleDateStart(dateToString(start));
+                      setFilterSaleDateEnd(dateToString(end));
+                    }}
+                    isClearable={true}
+                    locale="pt-BR"
+                    dateFormat="dd/MM/yyyy"
+                    placeholderText="Selecione o período"
+                    className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all text-gray-700 text-sm"
+                    wrapperClassName="w-full"
+                  />
+                </div>
               </div>
               <div className="space-y-1">
                 <label className="text-xs font-semibold text-gray-500 uppercase">Cidade</label>
@@ -2011,29 +2062,17 @@ function RouteCreationContent() {
                 </select>
               </div>
               <div className="relative space-y-1">
-                <label className="text-xs font-semibold text-gray-500 uppercase">Cliente</label>
+                <label className="text-xs font-semibold text-gray-500 uppercase">Busca Rápida</label>
                 <div className="relative">
                   <Search className="absolute left-3 top-2.5 h-4 w-4 text-gray-400" />
                   <input
                     type="text"
                     value={clientQuery}
-                    onFocus={() => setShowClientList(true)}
-                    onBlur={() => setTimeout(() => setShowClientList(false), 200)}
-                    onChange={(e) => { const v = e.target.value; setClientQuery(v); setFilterClient(v); setShowClientList(true); }}
-                    placeholder="Buscar cliente..."
+                    onChange={(e) => { const v = e.target.value; setClientQuery(v); setFilterClient(v); }}
+                    placeholder="Pedido, cliente ou CPF..."
                     className="w-full pl-9 pr-3 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
                   />
                 </div>
-                {showClientList && (
-                  <div className="absolute left-0 right-0 mt-1 max-h-48 overflow-auto bg-white border border-gray-200 rounded-lg shadow-xl z-30">
-                    <button onMouseDown={(e) => e.preventDefault()} onClick={() => { setFilterClient(''); setClientQuery(''); setShowClientList(false); }} className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 border-b border-gray-100">Todos</button>
-                    {filteredClients.map((c) => (
-                      <button key={c} onMouseDown={(e) => e.preventDefault()} onClick={() => { setFilterClient(c); setClientQuery(c); setShowClientList(false); }} className="w-full text-left px-4 py-2 text-sm text-gray-800 hover:bg-blue-50 hover:text-blue-700">
-                        {c}
-                      </button>
-                    ))}
-                  </div>
-                )}
               </div>
               <div className="space-y-1">
                 <label className="text-xs font-semibold text-gray-500 uppercase">Departamento</label>
@@ -2102,7 +2141,7 @@ function RouteCreationContent() {
 
             <div className="flex justify-end mt-4 pt-4 border-t border-gray-100">
               <button
-                onClick={() => { setFilterCity(''); setFilterNeighborhood(''); setFilterFilialVenda(''); setFilterLocalEstocagem(''); setStrictLocal(false); setFilterSeller(''); setFilterClient(''); setClientQuery(''); setFilterFreightFull(''); setFilterOperation(''); setFilterDepartment(''); setFilterHasAssembly(false); setFilterSaleDate(''); setFilterBrand(''); setFilterReturnedOnly(false); setFilterServiceType(''); }}
+                onClick={() => { setFilterCity(''); setFilterNeighborhood(''); setFilterFilialVenda(''); setFilterLocalEstocagem(''); setStrictLocal(false); setFilterSeller(''); setFilterClient(''); setClientQuery(''); setFilterFreightFull(''); setFilterOperation(''); setFilterDepartment(''); setFilterHasAssembly(false); setFilterSaleDateStart(''); setFilterSaleDateEnd(''); setFilterBrand(''); setFilterReturnedOnly(false); setFilterServiceType(''); }}
                 className="text-sm text-red-600 hover:text-red-800 font-medium flex items-center"
               >
                 <X className="h-3 w-3 mr-1" /> Limpar filtros
@@ -2250,12 +2289,23 @@ function RouteCreationContent() {
                       const isReturnedFlag = Boolean(o.return_flag) || String(o.status) === 'returned';
                       if (filterCity && !city.includes(filterCity.toLowerCase())) return false;
                       if (filterNeighborhood && !nb.includes(filterNeighborhood.toLowerCase())) return false;
-                      if (clientQuery && !client.includes(clientQuery.toLowerCase())) return false;
+                      // Busca rápida: pesquisa por pedido, cliente ou CPF
+                      if (clientQuery) {
+                        const q = clientQuery.toLowerCase().trim();
+                        const orderIdErp = String(o.order_id_erp || raw.lancamento_venda || '').toLowerCase();
+                        const cpf = String(o.customer_cpf || raw.cpf_cnpj || '').replace(/\D/g, '');
+                        const queryDigits = q.replace(/\D/g, '');
+                        const matchClient = client.includes(q);
+                        const matchOrder = orderIdErp.includes(q);
+                        const matchCpf = queryDigits && cpf.includes(queryDigits);
+                        if (!matchClient && !matchOrder && !matchCpf) return false;
+                      }
                       if (filterFreightFull && !hasFreteFull(o)) return false;
                       if (filterOperation && !String(raw.operacoes || '').toLowerCase().includes(filterOperation.toLowerCase())) return false;
                       if (filterFilialVenda && filial !== filterFilialVenda.toLowerCase()) return false;
                       if (filterSeller && !seller.includes(filterSeller.toLowerCase())) return false;
-                      if (filterSaleDate && saleDateStr !== filterSaleDate) return false;
+                      if (filterSaleDateStart && saleDateStr < filterSaleDateStart) return false;
+                      if (filterSaleDateEnd && saleDateStr > filterSaleDateEnd) return false;
                       if (filterReturnedOnly && !isReturnedFlag) return false;
                       if (filterDeadline !== 'all') {
                         const st = getPrazoStatusForOrder(o);
@@ -2352,10 +2402,12 @@ function RouteCreationContent() {
                       return (
                         <tr
                           key={`${o.id}-${it.sku}-${idx}`}
-                          onClick={() => toggleOrderSelection(o.id)}
-                          className={`group hover:bg-gray-50 transition-colors cursor-pointer ${isSelected ? 'bg-blue-50/60 hover:bg-blue-100/50' : ''}`}
+                          className={`group hover:bg-gray-50 transition-colors ${isSelected ? 'bg-blue-50/60 hover:bg-blue-100/50' : ''}`}
                         >
-                          <td className="px-4 py-3">
+                          <td
+                            className="px-4 py-3 cursor-pointer"
+                            onClick={() => toggleOrderSelection(o.id)}
+                          >
                             <div className={`w-5 h-5 rounded border flex items-center justify-center transition-colors ${isSelected ? 'bg-blue-600 border-blue-600' : 'border-gray-300 bg-white'}`}>
                               {isSelected && <CheckCircle2 className="h-3.5 w-3.5 text-white" />}
                             </div>
@@ -2438,7 +2490,7 @@ function RouteCreationContent() {
         {/* Routes List Section */}
         <div ref={routesSectionRef} className="space-y-4">
           {/* FILTERS BAR */}
-          <div className="flex flex-col md:flex-row gap-4 justify-between items-start md:items-center bg-gray-50 p-3 rounded-xl border border-gray-100">
+          <div className="flex flex-col md:flex-row gap-6 justify-between items-start md:items-center bg-gray-50 px-6 py-4 rounded-xl border border-gray-100">
             <div className="flex flex-col gap-2">
               <label className="text-xs font-bold text-gray-500 uppercase tracking-wide">Período</label>
               <div className="flex items-center gap-2">
@@ -2491,6 +2543,20 @@ function RouteCreationContent() {
                     </button>
                   )
                 })}
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-2">
+              <label className="text-xs font-bold text-gray-500 uppercase tracking-wide">Buscar Rota</label>
+              <div className="relative">
+                <Search className="absolute left-3 top-2 h-4 w-4 text-gray-400" />
+                <input
+                  type="text"
+                  value={routeSearchQuery}
+                  onChange={(e) => setRouteSearchQuery(e.target.value)}
+                  placeholder="Nome, motorista ou ID da rota..."
+                  className="pl-9 pr-3 py-1.5 bg-white border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all w-72"
+                />
               </div>
             </div>
           </div>

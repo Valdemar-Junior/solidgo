@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ArrowLeft, Loader2, MapPin, Phone, Search, Truck, Hammer, FileText, AlertTriangle } from 'lucide-react';
+import { ArrowLeft, Loader2, MapPin, Phone, Search, Truck, Hammer, FileText, AlertTriangle, LogOut } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../../supabase/client';
 import { useAuthStore } from '../../stores/authStore';
@@ -39,8 +39,13 @@ export default function OrderLookup() {
   const [assemblies, setAssemblies] = useState<AssemblyInfo[]>([]);
 
   // Check if user is consultor to hide certain elements
-  const { user } = useAuthStore();
+  const { user, logout } = useAuthStore();
   const isConsultor = user?.role === 'consultor';
+
+  const handleLogout = async () => {
+    await logout();
+    navigate('/login');
+  };
 
   const fetchOrders = async (term: string) => {
     const q = term.trim();
@@ -313,12 +318,21 @@ export default function OrderLookup() {
               <ArrowLeft className="h-5 w-5" />
             </button>
           )}
-          <div>
+          <div className="flex-1">
             <p className="text-xs text-gray-500">Consulta</p>
             <h1 className="text-xl font-bold text-gray-900 flex items-center gap-2">
               <Search className="h-5 w-5 text-blue-600" /> Consulta de Pedido
             </h1>
           </div>
+          {isConsultor && (
+            <button
+              onClick={handleLogout}
+              className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+            >
+              <LogOut className="h-4 w-4" />
+              Sair
+            </button>
+          )}
         </div>
       </header>
 
