@@ -127,7 +127,7 @@ export default function CustomerTracking() {
         icon: any;
         title: string;
         date?: string;
-        description?: string;
+        description?: React.ReactNode;
         isLast?: boolean;
     }) => {
         let iconClass = "bg-gray-800 text-gray-500 border-gray-700";
@@ -244,9 +244,7 @@ export default function CustomerTracking() {
                                         </p>
                                     )}
                                 </div>
-                                <div className={`px-3 py-1.5 rounded-full text-xs font-bold border ${result.delivery_timeline.current_status === 'delivered' ? 'bg-green-500/10 text-green-400 border-green-500/20' : 'bg-blue-500/10 text-blue-400 border-blue-500/20'}`}>
-                                    {result.delivery_timeline.current_status === 'delivered' ? 'Entregue' : result.delivery_timeline.current_status === 'returned' ? 'Devolvido' : 'Em Trânsito'}
-                                </div>
+
                             </div>
 
                             {/* Timeline */}
@@ -288,7 +286,7 @@ export default function CustomerTracking() {
                                     date={result.delivery_timeline.current_status === 'delivered' ? formatDateSimple(result.delivery_timeline.delivered_at) : undefined}
                                     description={
                                         result.delivery_timeline.route_status === 'in_progress' ? `Motorista a caminho!` :
-                                            result.delivery_timeline.current_status === 'delivered' ? "Entrega realizada com sucesso." :
+                                            result.delivery_timeline.current_status === 'delivered' ? "Seu pedido está a caminho." :
                                                 "Aguardando saída."
                                     }
                                 />
@@ -299,11 +297,19 @@ export default function CustomerTracking() {
                                     active={result.delivery_timeline.current_status === 'returned'}
                                     icon={CheckCircle2}
                                     title={result.delivery_timeline.current_status === 'returned' ? "Pedido Devolvido" : "Entregue"}
-                                    date={result.delivery_timeline.delivered_at ? formatDate(result.delivery_timeline.delivered_at) : formatDate(result.delivery_timeline.forecast_date)}
+                                    date={result.delivery_timeline.delivered_at ? formatDate(result.delivery_timeline.delivered_at) : undefined}
                                     description={
-                                        result.delivery_timeline.current_status === 'delivered' ? "Obrigado por comprar conosco!" :
-                                            result.delivery_timeline.current_status === 'returned' ? "Houve um problema na entrega." :
-                                                `Previsão: ${formatDateSimple(result.delivery_timeline.forecast_date)}`
+                                        <>
+                                            <span>
+                                                {result.delivery_timeline.current_status === 'delivered' ? "Obrigado por comprar conosco!" :
+                                                    result.delivery_timeline.current_status === 'returned' ? "Houve um problema na entrega." : ""}
+                                            </span>
+                                            {!result.has_assembly && (
+                                                <span className="font-semibold text-blue-400 block mt-1">
+                                                    Previsão: {formatDateSimple(result.delivery_timeline.forecast_date)}
+                                                </span>
+                                            )}
+                                        </>
                                     }
                                     isLast={!result.has_assembly}
                                 />
@@ -320,12 +326,12 @@ export default function CustomerTracking() {
                                         </div>
 
                                         {/* 6. Montagem Agendada */}
+                                        {/* 6. Ordem de Montagem Gerada */}
                                         <TimelineItem
                                             completed={!!result.assembly_timeline?.product_name}
                                             icon={Calendar}
-                                            title="Montagem Agendada"
-                                            date={formatDateSimple(result.assembly_timeline?.scheduled_date)}
-                                            description={result.assembly_timeline?.product_name ? `Agendado para ${formatDateSimple(result.assembly_timeline?.scheduled_date)}` : "Aguardando agendamento."}
+                                            title="Ordem de Montagem Gerada"
+                                            description={result.assembly_timeline?.product_name ? "Solicitação enviada para montagem." : "Aguardando solicitação."}
                                         />
 
                                         {/* 7. Em Andamento (Montador) */}
@@ -343,7 +349,16 @@ export default function CustomerTracking() {
                                             icon={CheckCircle2}
                                             title="Montagem Concluída"
                                             date={result.assembly_timeline?.completion_date ? formatDate(result.assembly_timeline.completion_date) : undefined}
-                                            description={result.assembly_timeline?.status === 'completed' ? "Produto montado e pronto para uso!" : "Aguardando finalização."}
+                                            description={
+                                                <>
+                                                    <span>
+                                                        {result.assembly_timeline?.status === 'completed' ? "Produto montado e pronto para uso!" : "Aguardando finalização."}
+                                                    </span>
+                                                    <span className="font-semibold text-blue-400 block mt-1">
+                                                        Previsão: {formatDateSimple(result.delivery_timeline.forecast_date)}
+                                                    </span>
+                                                </>
+                                            }
                                             isLast={true}
                                         />
                                     </>
