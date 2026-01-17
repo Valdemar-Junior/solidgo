@@ -8,6 +8,7 @@ import TestLogin from './pages/TestLogin';
 import CheckUsers from './pages/CheckUsers';
 import Setup from './pages/Setup';
 import FirstLogin from './pages/FirstLogin';
+import CustomerTracking from './pages/public/CustomerTracking';
 import AdminDashboard from './pages/admin/Dashboard';
 import Settings from './pages/admin/Settings';
 import UsersTeams from './pages/admin/UsersTeams';
@@ -59,6 +60,7 @@ function App() {
         <Routes>
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
+          <Route path="/rastreio" element={<CustomerTracking />} />
           <Route path="/test-login" element={<TestLogin />} />
           <Route path="/check-users" element={<CheckUsers />} />
           <Route path="/setup" element={<Setup />} />
