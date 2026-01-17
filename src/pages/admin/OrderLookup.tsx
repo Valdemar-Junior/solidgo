@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ArrowLeft, Loader2, MapPin, Phone, Search, Truck, Hammer, FileText, AlertTriangle, LogOut, Eye, ChevronDown, ChevronUp } from 'lucide-react';
+import { ArrowLeft, Loader2, MapPin, Phone, Search, Truck, Hammer, FileText, AlertTriangle, LogOut, Eye, ChevronDown, ChevronUp, Copy, Check } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../../supabase/client';
 import { useAuthStore } from '../../stores/authStore';
@@ -27,6 +27,33 @@ interface AssemblyInfo {
   assembly_date?: string;
   completion_date?: string;
   updated_at?: string;
+}
+
+// Pequeno componente auxiliar para botão de copiar
+function CopyButton({ text, label = "Copiado!" }: { text: string, label?: string }) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    navigator.clipboard.writeText(text);
+    setCopied(true);
+    toast.success(label);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  return (
+    <button
+      onClick={handleCopy}
+      className="p-1.5 hover:bg-gray-100 rounded-md transition-all ml-1 group relative"
+      title="Copiar"
+    >
+      {copied ? (
+        <Check className="h-3.5 w-3.5 text-green-600" />
+      ) : (
+        <Copy className="h-3.5 w-3.5 text-gray-400 group-hover:text-blue-600" />
+      )}
+    </button>
+  );
 }
 
 export default function OrderLookup() {
@@ -436,12 +463,16 @@ export default function OrderLookup() {
                       FULL
                     </span>
                   )}
+                  <CopyButton text={selectedOrder.order_id_erp} label="Número do pedido copiado!" />
                 </div>
                 <p className="text-sm text-gray-600 mt-1">{selectedOrder.customer_name}</p>
                 {/* CPF do cliente */}
                 <div className="mt-2 text-sm text-gray-600 flex items-center gap-2">
                   <span className="text-xs font-medium text-gray-500">CPF:</span>
                   <span>{selectedOrder.customer_cpf || (selectedOrder.raw_json as any)?.destinatario_cpf || (selectedOrder.raw_json as any)?.cliente_cpf || '-'}</span>
+                  {(selectedOrder.customer_cpf || (selectedOrder.raw_json as any)?.destinatario_cpf || (selectedOrder.raw_json as any)?.cliente_cpf) && (
+                    <CopyButton text={selectedOrder.customer_cpf || (selectedOrder.raw_json as any)?.destinatario_cpf || (selectedOrder.raw_json as any)?.cliente_cpf} label="CPF copiado!" />
+                  )}
                 </div>
                 {/* Telefone com link WhatsApp */}
                 <div className="mt-2 text-sm text-gray-600 flex items-center gap-2">
