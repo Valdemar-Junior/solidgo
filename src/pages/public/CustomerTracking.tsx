@@ -21,14 +21,30 @@ interface AssemblyTimeline {
     completion_date?: string;
     deadline?: string;
     route_name?: string;
+    route_created_at?: string;
+}
+
+interface DeliveryEvent {
+    route_name: string;
+    dispatched_at: string; // Saiu para entrega
+    status: 'pending' | 'delivered' | 'returned';
+    delivered_at?: string;
+    returned_at?: string;
+    return_reason?: string;
+    return_notes?: string;
 }
 
 interface TrackingResult {
     order_number: string;
     customer_name: string;
-    city?: string;
-    neighborhood?: string;
-    delivery_timeline: DeliveryTimeline;
+    city: string;
+    neighborhood: string;
+    delivery_timeline: {
+        sale_date?: string;
+        imported_date: string;
+        forecast_date?: string;
+    };
+    delivery_history: DeliveryEvent[];
     has_assembly: boolean;
     assembly_timeline?: AssemblyTimeline;
 }
@@ -269,50 +285,100 @@ export default function CustomerTracking() {
 
                                 {/* 3. Em Separação */}
                                 <TimelineItem
-                                    completed={!!result.delivery_timeline.assigned_date && result.delivery_timeline.route_status !== 'pending'}
-                                    active={!!result.delivery_timeline.assigned_date && result.delivery_timeline.route_status === 'pending'}
+                                    completed={!!result.delivery_timeline.imported_date && result.delivery_history.length > 0}
+                                    active={!!result.delivery_timeline.imported_date && result.delivery_history.length === 0}
                                     icon={Package}
                                     title="Em Separação"
-                                    date={formatDateSimple(result.delivery_timeline.assigned_date)}
-                                    description={result.delivery_timeline.assigned_date ? "Sendo preparado para envio." : ""}
+                                    date={formatDateSimple(result.delivery_timeline.imported_date)}
+                                    description={result.delivery_history.length > 0 ? "Sendo preparado para envio." : "Aguardando separação."}
                                 />
 
-                                {/* 4. Saiu para Entrega */}
-                                <TimelineItem
-                                    completed={result.delivery_timeline.current_status === 'delivered' || result.delivery_timeline.current_status === 'returned'}
-                                    active={result.delivery_timeline.route_status === 'in_progress'}
-                                    icon={Truck}
-                                    title="Saiu para Entrega"
-                                    date={result.delivery_timeline.current_status === 'delivered' ? formatDateSimple(result.delivery_timeline.delivered_at) : undefined}
-                                    description={
-                                        result.delivery_timeline.route_status === 'in_progress' ? `Motorista a caminho!` :
-                                            result.delivery_timeline.current_status === 'delivered' ? "Seu pedido está a caminho." :
-                                                "Aguardando saída."
-                                    }
-                                />
+                                {/* DYNAMIC DELIVERY HISTORY RENDERING */}
+                                {result.delivery_history && result.delivery_history.length > 0 ? (
+                                    result.delivery_history.map((event, index) => {
+                                        const isLastEvent = index === result.delivery_history.length - 1;
 
-                                {/* 5. Entregue */}
-                                <TimelineItem
-                                    completed={result.delivery_timeline.current_status === 'delivered'}
-                                    active={result.delivery_timeline.current_status === 'returned'}
-                                    icon={CheckCircle2}
-                                    title={result.delivery_timeline.current_status === 'returned' ? "Pedido Devolvido" : "Entregue"}
-                                    date={result.delivery_timeline.delivered_at ? formatDate(result.delivery_timeline.delivered_at) : undefined}
-                                    description={
-                                        <>
-                                            <span>
-                                                {result.delivery_timeline.current_status === 'delivered' ? "Obrigado por comprar conosco!" :
-                                                    result.delivery_timeline.current_status === 'returned' ? "Houve um problema na entrega." : ""}
-                                            </span>
-                                            {!result.has_assembly && (
-                                                <span className="font-semibold text-blue-400 block mt-1">
-                                                    Previsão: {formatDateSimple(result.delivery_timeline.forecast_date)}
-                                                </span>
-                                            )}
-                                        </>
-                                    }
-                                    isLast={!result.has_assembly}
-                                />
+                                        // 1. EVENTO DE SAÍDA PARA ENTREGA (Sempre acontece primeiro na rota)
+                                        const dispatchStep = (
+                                            <TimelineItem
+                                                key={`dispatch-${index}`}
+                                                completed={true}
+                                                icon={Truck}
+                                                title="Saiu para Entrega"
+                                                date={formatDateSimple(event.dispatched_at)}
+                                                description="Seu pedido está a caminho."
+                                            />
+                                        );
+
+                                        // 2. EVENTO DE CONCLUSÃO (Entrega ou Retorno)
+                                        let finalStep = null;
+
+                                        if (event.status === 'returned') {
+                                            // Lógica para decidir o texto do motivo
+                                            const reasonText = event.return_reason || event.return_notes || "Motivo não informado";
+                                            const showNotes = event.return_reason && event.return_notes; // Só mostra obs separada se já tiver o motivo principal
+
+                                            finalStep = (
+                                                <TimelineItem
+                                                    key={`returned-${index}`}
+                                                    completed={true}
+                                                    icon={AlertTriangle}
+                                                    title="Retornado"
+                                                    date={event.returned_at ? formatDate(event.returned_at) : undefined}
+                                                    description={
+                                                        <span className="text-red-400 block">
+                                                            {reasonText}
+                                                            {showNotes && (
+                                                                <span className="block text-xs mt-1 opacity-75">
+                                                                    Obs: {event.return_notes}
+                                                                </span>
+                                                            )}
+                                                        </span>
+                                                    }
+                                                />
+                                            );
+                                        } else if (event.status === 'delivered') {
+                                            finalStep = (
+                                                <TimelineItem
+                                                    key={`delivered-${index}`}
+                                                    completed={true}
+                                                    icon={CheckCircle2}
+                                                    title="Entregue"
+                                                    date={event.delivered_at ? formatDate(event.delivered_at) : undefined}
+                                                    description={
+                                                        <>
+                                                            <span>Obrigado por comprar conosco!</span>
+                                                            {!result.has_assembly && (
+                                                                <span className="font-semibold text-blue-400 block mt-1">
+                                                                    Previsão: {formatDateSimple(result.delivery_timeline.forecast_date)}
+                                                                </span>
+                                                            )}
+                                                        </>
+                                                    }
+                                                    isLast={!result.has_assembly} // Se tiver montagem, não é o último da timeline geral
+                                                />
+                                            );
+                                        } else {
+                                            // Se estiver pendente (ainda na rota, não finalizado)
+                                            // Apenas mostra que saiu, não tem passo final ainda
+                                        }
+
+                                        return (
+                                            <>
+                                                {dispatchStep}
+                                                {finalStep}
+                                            </>
+                                        );
+                                    })
+                                ) : (
+                                    // Fallback caso não tenha histórico ainda (ex: pedido novo, pré-rota)
+                                    <TimelineItem
+                                        completed={false}
+                                        icon={CheckCircle2}
+                                        title="Aguardando Envio"
+                                        description="Seu pedido está sendo preparado."
+                                    />
+                                )}
 
                                 {/* SEÇÃO DE MONTAGEM (SÓ SE TIVER) */}
                                 {result.has_assembly && (
@@ -325,22 +391,28 @@ export default function CustomerTracking() {
                                             </div>
                                         </div>
 
-                                        {/* 6. Montagem Agendada */}
                                         {/* 6. Ordem de Montagem Gerada */}
                                         <TimelineItem
                                             completed={!!result.assembly_timeline?.product_name}
                                             icon={Calendar}
                                             title="Ordem de Montagem Gerada"
+                                            date={
+                                                (() => {
+                                                    const deliveredEvent = result.delivery_history?.find(e => e.status === 'delivered');
+                                                    return deliveredEvent?.delivered_at ? formatDateSimple(deliveredEvent.delivered_at) : undefined;
+                                                })()
+                                            }
                                             description={result.assembly_timeline?.product_name ? "Solicitação enviada para montagem." : "Aguardando solicitação."}
                                         />
 
                                         {/* 7. Em Andamento (Montador) */}
                                         <TimelineItem
                                             completed={result.assembly_timeline?.status === 'completed'}
-                                            active={result.assembly_timeline?.status === 'in_progress'}
+                                            active={!!result.assembly_timeline?.route_created_at}
                                             icon={Hammer}
                                             title="Montador a Caminho"
-                                            description={result.assembly_timeline?.status === 'in_progress' ? "O montador está trabalhando." : ""}
+                                            date={result.assembly_timeline?.route_created_at ? formatDateSimple(result.assembly_timeline.route_created_at) : undefined}
+                                            description={result.assembly_timeline?.route_created_at ? "O montador recebeu sua rota. O prazo de conclusão da montagem pode levar até 5 dias úteis." : ""}
                                         />
 
                                         {/* 8. Montagem Concluída */}
