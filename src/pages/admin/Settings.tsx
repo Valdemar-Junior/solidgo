@@ -17,7 +17,10 @@ import {
   Truck,
   Settings as SettingsIcon,
   LayoutDashboard,
-  Zap
+  Tractor,
+  Plus,
+  X,
+  Clock // Icon for General Config
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { WorkingDaysCalendar } from '../../components/settings/WorkingDaysCalendar';
@@ -41,7 +44,12 @@ export default function Settings() {
   const [requireConference, setRequireConference] = useState(true);
 
   // State for Logistics
-  const [fullDeliveryDays, setFullDeliveryDays] = useState(1);
+  const [ruralKeywords, setRuralKeywords] = useState<string[]>([]);
+  const [newKeyword, setNewKeyword] = useState('');
+
+  // New State for General Defaults
+  const [defaultDeliveryDays, setDefaultDeliveryDays] = useState(15);
+  const [defaultAssemblyDays, setDefaultAssemblyDays] = useState(15);
 
   useEffect(() => { load() }, []);
 
@@ -53,14 +61,15 @@ export default function Settings() {
   const load = async () => {
     try {
       setLoading(true);
-      const [p, n, m, g, l, confFlag, fullDelivery] = await Promise.all([
+      const [p, n, m, g, l, confFlag, ruralKeys, generalDeadlines] = await Promise.all([
         getUrl('envia_pedidos'),
         getUrl('gera_nf'),
         getUrl('envia_mensagem'),
         getUrl('envia_grupo'),
         getUrl('consulta_lancamento'),
         supabase.from('app_settings').select('value').eq('key', 'require_route_conference').single(),
-        supabase.from('app_settings').select('value').eq('key', 'full_delivery_days').single(),
+        supabase.from('app_settings').select('value').eq('key', 'rural_keywords').single(),
+        supabase.from('app_settings').select('value').eq('key', 'general_deadlines').single(),
       ]);
       setEnviaPedidos(p || '');
       setGeraNf(n || '');
@@ -71,14 +80,33 @@ export default function Settings() {
       const enabled = (confFlag.data as any)?.value?.enabled;
       setRequireConference(enabled === false ? false : true);
 
-      const fullDays = (fullDelivery.data as any)?.value?.days;
-      setFullDeliveryDays(fullDays || 1);
+      const keywords = (ruralKeys.data as any)?.value?.keywords;
+      setRuralKeywords(Array.isArray(keywords) ? keywords : []);
+
+      const general = (generalDeadlines.data as any)?.value;
+      setDefaultDeliveryDays(general?.delivery_days || 15);
+      setDefaultAssemblyDays(general?.assembly_days || 15);
 
     } catch {
       toast.error('Erro ao carregar configurações');
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleAddKeyword = () => {
+    if (!newKeyword.trim()) return;
+    const keyword = newKeyword.trim().toUpperCase();
+    if (ruralKeywords.includes(keyword)) {
+      setNewKeyword('');
+      return;
+    }
+    setRuralKeywords([...ruralKeywords, keyword]);
+    setNewKeyword('');
+  };
+
+  const handleRemoveKeyword = (keyword: string) => {
+    setRuralKeywords(ruralKeywords.filter(k => k !== keyword));
   };
 
 
@@ -106,12 +134,19 @@ export default function Settings() {
       }], { onConflict: 'key' });
       if (flagErr) throw flagErr;
 
-      const { error: fullErr } = await supabase.from('app_settings').upsert([{
-        key: 'full_delivery_days',
-        value: { days: fullDeliveryDays },
+      const { error: ruralErr } = await supabase.from('app_settings').upsert([{
+        key: 'rural_keywords',
+        value: { keywords: ruralKeywords },
         updated_at: new Date().toISOString()
       }], { onConflict: 'key' });
-      if (fullErr) throw fullErr;
+      if (ruralErr) throw ruralErr;
+
+      const { error: generalErr } = await supabase.from('app_settings').upsert([{
+        key: 'general_deadlines',
+        value: { delivery_days: defaultDeliveryDays, assembly_days: defaultAssemblyDays },
+        updated_at: new Date().toISOString()
+      }], { onConflict: 'key' });
+      if (generalErr) throw generalErr;
 
 
       toast.success('Configurações salvas com sucesso!');
@@ -236,38 +271,107 @@ export default function Settings() {
           {activeTab === 'logistics' && (
             <div className="space-y-6 animate-in fade-in duration-300">
 
-              {/* Entrega Full Config */}
-              <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-                <div className="border-b border-gray-100 bg-gray-50 px-6 py-4 flex items-center gap-2">
-                  <Zap className="h-5 w-5 text-yellow-500 fill-yellow-500" />
-                  <h2 className="font-bold text-gray-900">Entrega Full</h2>
-                </div>
-                <div className="p-6 flex items-center justify-between bg-yellow-50/30">
-                  <div>
-                    <p className="text-sm font-semibold text-gray-900">Prazo Padrão Full</p>
-                    <p className="text-xs text-gray-500">
-                      Pedidos marcados como Full (tem_frete_full) terão este prazo, ignorando a cidade.
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="number"
-                      value={fullDeliveryDays}
-                      onChange={(e) => setFullDeliveryDays(parseInt(e.target.value) || 1)}
-                      className="w-20 border-gray-300 rounded-lg text-sm px-3 py-2 focus:ring-2 focus:ring-yellow-500 focus:border-yellow-500 outline-none transition-all"
-                    />
-                    <span className="text-sm text-gray-500">dias úteis</span>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
 
-                    <button
-                      onClick={save}
-                      disabled={saving || loading}
-                      className="ml-4 p-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors shadow-sm disabled:opacity-50"
-                      title="Salvar"
-                    >
-                      <Save className="h-4 w-4" />
-                    </button>
+                {/* Prazo Padrão Geral Config */}
+                <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                  <div className="border-b border-gray-100 bg-gray-50 px-6 py-4 flex items-center gap-2">
+                    <Clock className="h-5 w-5 text-gray-600" />
+                    <h2 className="font-bold text-gray-900">Prazo Padrão Geral</h2>
+                  </div>
+                  <div className="p-6">
+                    <p className="text-sm text-gray-600 mb-4">
+                      Aplicado para <b>cidades sem regra cadastrada</b> na tabela abaixo.
+                    </p>
+                    <div className="flex gap-4">
+                      <div className="flex-1">
+                        <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Entrega</label>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="number"
+                            value={defaultDeliveryDays}
+                            onChange={(e) => setDefaultDeliveryDays(parseInt(e.target.value) || 15)}
+                            className="w-full border-gray-300 rounded-lg text-sm px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                          />
+                          <span className="text-sm text-gray-500">dias</span>
+                        </div>
+                      </div>
+                      <div className="flex-1">
+                        <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Montagem</label>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="number"
+                            value={defaultAssemblyDays}
+                            onChange={(e) => setDefaultAssemblyDays(parseInt(e.target.value) || 15)}
+                            className="w-full border-gray-300 rounded-lg text-sm px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                          />
+                          <span className="text-sm text-gray-500">dias</span>
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 </div>
+
+                {/* Zona Rural Config */}
+                <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                  <div className="border-b border-gray-100 bg-gray-50 px-6 py-4 flex items-center gap-2">
+                    <Tractor className="h-5 w-5 text-green-600" />
+                    <h2 className="font-bold text-gray-900">Zona Rural - Palavras-Chave</h2>
+                  </div>
+                  <div className="p-6 space-y-4">
+                    <p className="text-sm text-gray-600">
+                      Se o endereço contiver qualquer um destes termos, o sistema aplicará o <b>Prazo Rural</b> da cidade.
+                    </p>
+
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={newKeyword}
+                        onChange={(e) => setNewKeyword(e.target.value)}
+                        onKeyDown={(e) => e.key === 'Enter' && handleAddKeyword()}
+                        placeholder="Ex: ZONA RURAL, SÍTIO..."
+                        className="flex-1 border-gray-300 rounded-lg text-sm px-3 py-2 focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none transition-all uppercase"
+                      />
+                      <button
+                        onClick={handleAddKeyword}
+                        className="bg-green-600 text-white px-3 py-2 rounded-lg font-medium hover:bg-green-700 transition-colors flex items-center gap-1 text-sm"
+                      >
+                        <Plus className="h-4 w-4" />
+                        Add
+                      </button>
+
+                    </div>
+
+                    <div className="flex flex-wrap gap-2 pt-2">
+                      {ruralKeywords.map(keyword => (
+                        <span key={keyword} className="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-green-100 text-green-700 text-sm font-medium border border-green-200">
+                          {keyword}
+                          <button onClick={() => handleRemoveKeyword(keyword)} className="hover:text-green-900 p-0.5 rounded-full hover:bg-green-200 transition-colors">
+                            <X className="h-3 w-3" />
+                          </button>
+                        </span>
+                      ))}
+                      {ruralKeywords.length === 0 && (
+                        <span className="text-sm text-gray-400 italic">
+                          Nenhuma palavra-chave definida (padrão urbano).
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+              </div>
+
+              <div className="flex justify-end">
+                <button
+                  onClick={save}
+                  disabled={saving || loading}
+                  className=" bg-blue-600 text-white px-6 py-2 rounded-lg font-medium hover:bg-blue-700 transition-colors shadow-sm disabled:opacity-50 flex items-center gap-2"
+                  title="Salvar Alterações"
+                >
+                  <Save className="h-4 w-4" />
+                  Salvar Tudo
+                </button>
               </div>
 
               <CityRulesTable />
@@ -423,4 +527,3 @@ export default function Settings() {
     </div>
   );
 }
-

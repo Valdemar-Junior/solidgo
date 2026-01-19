@@ -68,6 +68,11 @@ export interface Order {
   driver_name?: string;
   service_type?: 'troca' | 'assistencia' | 'venda';
 
+  // Datas calculadas pelo banco
+  data_venda?: string;        // Mapeamento direto do banco
+  previsao_entrega?: string;  // Data calculada de entrega
+  previsao_montagem?: string; // Data calculada de montagem
+
   // Campos de controle de bloqueio/devolução (preenchidos via n8n)
   erp_status?: string;           // Status do ERP: 'devolvido', 'cancelado'
   blocked_at?: string;           // Data/hora do bloqueio - se preenchido, pedido está bloqueado

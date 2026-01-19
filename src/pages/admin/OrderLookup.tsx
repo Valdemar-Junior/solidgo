@@ -512,9 +512,28 @@ export default function OrderLookup() {
                   })()}
                   {(() => {
                     const raw = selectedOrder.raw_json || {};
-                    const prev = raw.previsao_entrega || selectedOrder.delivery_date || (selectedOrder as any).previsao_entrega;
-                    if (!prev) return null;
-                    return <span className="px-2 py-1 rounded-full bg-blue-50 text-blue-700 border border-blue-200">Prev. {formatDate(prev)}</span>;
+                    const prevEntrega = selectedOrder.previsao_entrega || raw.previsao_entrega || selectedOrder.delivery_date;
+                    const prevMontagem = selectedOrder.previsao_montagem;
+
+                    return (
+                      <>
+                        {prevEntrega && (
+                          <span className="px-2 py-1 rounded-full bg-blue-50 text-blue-700 border border-blue-200" title="Previsão de Entrega">
+                            Prev. Entrega: {formatDate(prevEntrega)}
+                          </span>
+                        )}
+
+                        {prevMontagem ? (
+                          <span className="px-2 py-1 rounded-full bg-purple-50 text-purple-700 border border-purple-200" title="Previsão Final com Montagem">
+                            Prev. Montagem: {formatDate(prevMontagem)}
+                          </span>
+                        ) : (
+                          <span className="px-2 py-1 rounded-full bg-gray-100 text-gray-500 border border-gray-200" title="Este pedido não possui previsão de montagem">
+                            Sem Montagem
+                          </span>
+                        )}
+                      </>
+                    );
                   })()}
                 </div>
 
