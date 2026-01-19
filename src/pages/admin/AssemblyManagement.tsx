@@ -39,7 +39,10 @@ import {
   RefreshCw,
   Wrench,
   Loader2,
-  FileSpreadsheet
+  FileSpreadsheet,
+  ArrowUp,
+  ArrowDown,
+  ArrowUpDown
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { DeliverySheetGenerator } from '../../utils/pdf/deliverySheetGenerator';
@@ -47,6 +50,7 @@ import { AssemblyReportGenerator } from '../../utils/pdf/assemblyReportGenerator
 import { useAssemblyDataStore } from '../../stores/assemblyDataStore';
 import { useAuthStore } from '../../stores/authStore';
 import { saveUserPreference, loadUserPreference, mergeColumnsConfig, type ColumnConfig } from '../../utils/userPreferences';
+import { MultiSelect } from '../../components/ui/MultiSelect';
 
 registerLocale('pt-BR', ptBR);
 
@@ -164,6 +168,10 @@ function AssemblyManagementContent() {
   const isMountedRef = useRef(true);
   const [deliveryInfo, setDeliveryInfo] = useState<Record<string, string>>({});
 
+  // Sorting State
+  const [sortColumn, setSortColumn] = useState<string | null>(null);
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
+
   // Realtime Refs (to access latest function version inside effect)
   const fetchRoutesRef = useRef<any>(null);
   const loadDataRef = useRef<any>(null);
@@ -179,8 +187,8 @@ function AssemblyManagementContent() {
 
 
   // Filters
-  const [filterCity, setFilterCity] = useState<string>('');
-  const [filterNeighborhood, setFilterNeighborhood] = useState<string>('');
+  const [filterCity, setFilterCity] = useState<string[]>([]);
+  const [filterNeighborhood, setFilterNeighborhood] = useState<string[]>([]);
   const [filterDeadline, setFilterDeadline] = useState<'all' | 'within' | 'out'>('all');
   const [filterOrder, setFilterOrder] = useState<string>('');
   const [filterClient, setFilterClient] = useState<string>('');
@@ -345,8 +353,14 @@ function AssemblyManagementContent() {
       if (data) {
         const f = JSON.parse(data);
         if (f && typeof f === 'object') {
-          if ('city' in f) setFilterCity(f.city || '');
-          if ('neighborhood' in f) setFilterNeighborhood(f.neighborhood || '');
+          if ('city' in f) {
+            const val = f.city;
+            setFilterCity(Array.isArray(val) ? val : (val ? [val] : []));
+          }
+          if ('neighborhood' in f) {
+            const val = f.neighborhood;
+            setFilterNeighborhood(Array.isArray(val) ? val : (val ? [val] : []));
+          }
           if ('deadline' in f) setFilterDeadline(f.deadline || 'all');
           if ('order' in f) setFilterOrder(f.order || '');
           if ('client' in f) setFilterClient(f.client || '');
@@ -404,11 +418,21 @@ function AssemblyManagementContent() {
   const neighborhoodOptions = useMemo(() => {
     const neighborhoods = new Set<string>();
     assemblyPending.forEach(ap => {
+      const city = ap.order?.address_json?.city;
       const neighborhood = ap.order?.address_json?.neighborhood;
-      if (neighborhood) neighborhoods.add(neighborhood);
+
+      // If cities are selected, only show neighborhoods from those cities
+      if (filterCity.length > 0) {
+        if (city && filterCity.includes(city) && neighborhood) {
+          neighborhoods.add(neighborhood);
+        }
+      } else {
+        // Otherwise show all
+        if (neighborhood) neighborhoods.add(neighborhood);
+      }
     });
     return Array.from(neighborhoods).sort();
-  }, [assemblyPending]);
+  }, [assemblyPending, filterCity]);
 
   // --- HELPERS ---
   const formatDate = (dateStr: string | null | undefined) => {
@@ -1506,8 +1530,8 @@ function AssemblyManagementContent() {
         forecastDateStr = prevDate.toISOString().split('T')[0];
       }
 
-      const matchCity = filterCity ? city.includes(filterCity.toLowerCase()) : true;
-      const matchNeighborhood = filterNeighborhood ? neighborhood.includes(filterNeighborhood.toLowerCase()) : true;
+      const matchCity = filterCity.length === 0 ? true : filterCity.some(fc => city.includes(fc.toLowerCase()));
+      const matchNeighborhood = filterNeighborhood.length === 0 ? true : filterNeighborhood.some(fn => neighborhood.includes(fn.toLowerCase()));
 
       const prazo = getPrazoStatusForOrder(order);
       const matchPrazo = filterDeadline === 'all' ? true : filterDeadline === prazo;
@@ -1612,12 +1636,62 @@ function AssemblyManagementContent() {
     return rows;
   }, [filteredGroupedProducts, deliveryInfo, selectedOrders]);
 
-  const totalOrderRows = orderRows.length;
+  // Apply sorting
+  const sortedOrderRows = useMemo(() => {
+    if (!sortColumn) return orderRows;
+
+    // Helper to parse date string DD/MM/YYYY to timestamp for comparison
+    const parseDateStr = (str: string) => {
+      if (!str || str === '-') return 0;
+      try {
+        const [d, m, y] = str.split('/').map(Number);
+        return new Date(y, m - 1, d).getTime();
+      } catch { return 0; }
+    };
+
+    return [...orderRows].sort((a, b) => {
+      let valA: any = (a as any)[sortColumn];
+      let valB: any = (b as any)[sortColumn];
+
+      // Clean values
+      if (valA === '-') valA = '';
+      if (valB === '-') valB = '';
+
+      // Determine type based on column ID
+      const isDate = ['dataVenda', 'entrega', 'previsao'].includes(sortColumn);
+
+      if (isDate) {
+        valA = parseDateStr(valA);
+        valB = parseDateStr(valB);
+      } else {
+        // Text comparison
+        valA = String(valA || '').toLowerCase();
+        valB = String(valB || '').toLowerCase();
+      }
+
+      if (valA < valB) return sortDirection === 'asc' ? -1 : 1;
+      if (valA > valB) return sortDirection === 'asc' ? 1 : -1;
+      return 0;
+    });
+  }, [orderRows, sortColumn, sortDirection]);
+
+  const totalOrderRows = sortedOrderRows.length;
   const totalPages = Math.max(1, Math.ceil(totalOrderRows / ordersPageSize));
   const visibleRows = useMemo(() => {
     const start = (ordersPage - 1) * ordersPageSize;
-    return orderRows.slice(start, start + ordersPageSize);
-  }, [orderRows, ordersPage, ordersPageSize]);
+    return sortedOrderRows.slice(start, start + ordersPageSize);
+  }, [sortedOrderRows, ordersPage, ordersPageSize]);
+
+  const handleSort = (columnId: string) => {
+    if (sortColumn === columnId) {
+      setSortDirection(prev => prev === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortColumn(columnId);
+      // Default directions: Dates -> desc, Text -> asc
+      const isDate = ['dataVenda', 'entrega', 'previsao'].includes(columnId);
+      setSortDirection(isDate ? 'desc' : 'asc');
+    }
+  };
 
   return (
     <div className="min-h-screen bg-gray-50 pb-20">
@@ -1738,18 +1812,22 @@ function AssemblyManagementContent() {
 
                   <div className="space-y-1">
                     <label className="text-xs font-semibold text-gray-500 uppercase">Cidade</label>
-                    <select value={filterCity} onChange={(e) => setFilterCity(e.target.value)} className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all">
-                      <option value="">Todas</option>
-                      {cityOptions.map((c) => (<option key={c} value={c}>{c}</option>))}
-                    </select>
+                    <MultiSelect
+                      options={cityOptions}
+                      selected={filterCity}
+                      onChange={setFilterCity}
+                      placeholder="Todas"
+                    />
                   </div>
 
                   <div className="space-y-1">
                     <label className="text-xs font-semibold text-gray-500 uppercase">Bairro</label>
-                    <select value={filterNeighborhood} onChange={(e) => setFilterNeighborhood(e.target.value)} className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all">
-                      <option value="">Todos</option>
-                      {neighborhoodOptions.map((c) => (<option key={c} value={c}>{c}</option>))}
-                    </select>
+                    <MultiSelect
+                      options={neighborhoodOptions}
+                      selected={filterNeighborhood}
+                      onChange={setFilterNeighborhood}
+                      placeholder="Todos"
+                    />
                   </div>
 
                   {/* Row 2 */}
@@ -1860,8 +1938,8 @@ function AssemblyManagementContent() {
                 <div className="flex justify-end mt-4 pt-4 border-t border-gray-100">
                   <button
                     onClick={() => {
-                      setFilterCity('');
-                      setFilterNeighborhood('');
+                      setFilterCity([]);
+                      setFilterNeighborhood([]);
                       setFilterDeadline('all');
                       setFilterOrder('');
                       setFilterClient('');
@@ -1943,7 +2021,20 @@ function AssemblyManagementContent() {
                       <tr>
                         <th className="px-4 py-3 w-10 text-left"></th>
                         {columnsConf.filter(c => c.visible).map(c => (
-                          <th key={c.id} className="px-4 py-3 text-left font-semibold text-gray-600 uppercase text-xs tracking-wider">{c.label}</th>
+                          <th
+                            key={c.id}
+                            onClick={() => handleSort(c.id)}
+                            className="px-4 py-3 text-left font-semibold text-gray-600 uppercase text-xs tracking-wider cursor-pointer hover:bg-gray-100 transition-colors select-none"
+                          >
+                            <div className="flex items-center gap-1">
+                              {c.label}
+                              {sortColumn === c.id ? (
+                                sortDirection === 'asc' ? <ArrowUp className="h-3 w-3 text-blue-600" /> : <ArrowDown className="h-3 w-3 text-blue-600" />
+                              ) : (
+                                <ArrowUpDown className="h-3 w-3 text-gray-300 opacity-0 group-hover:opacity-100" />
+                              )}
+                            </div>
+                          </th>
                         ))}
                       </tr>
                     </thead>
