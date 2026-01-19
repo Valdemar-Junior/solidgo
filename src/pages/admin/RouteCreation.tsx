@@ -2413,7 +2413,13 @@ function RouteCreationContent() {
                             </div>
                           </td>
                           {columnsConf.filter(c => c.visible).map(c => (
-                            <td key={c.id} className="px-4 py-3 text-gray-700 whitespace-nowrap">
+                            <td
+                              key={c.id}
+                              className={`px-4 py-3 text-gray-700 ${['obsPublicas', 'obsInternas', 'endereco', 'outrosLocs'].includes(c.id)
+                                  ? 'min-w-[200px] max-w-[300px] whitespace-normal leading-relaxed text-xs'
+                                  : 'whitespace-nowrap'
+                                }`}
+                            >
                               {c.id === 'telefone' ? (
                                 <div className="flex items-center gap-2">
                                   {waLink && (
