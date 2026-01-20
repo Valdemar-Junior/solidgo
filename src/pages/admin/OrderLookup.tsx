@@ -458,11 +458,21 @@ export default function OrderLookup() {
                 <div className="flex items-center gap-2">
                   <p className="text-lg font-bold text-gray-900">{selectedOrder.order_id_erp}</p>
                   {/* Badge FULL */}
-                  {String((selectedOrder.raw_json as any)?.tem_frete_full || '').toUpperCase() === 'SIM' && (
-                    <span className="px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 border border-blue-200 text-xs font-bold">
-                      FULL
-                    </span>
-                  )}
+                  {(() => {
+                    const raw = selectedOrder.raw_json || {};
+                    const isFullFlag = String(raw.tem_frete_full || (selectedOrder as any).tem_frete_full || '').toUpperCase() === 'SIM';
+                    const obsInternas = String(raw.observacoes_internas || (selectedOrder as any).observacoes_internas || '').toLowerCase();
+                    const hasKeyword = obsInternas.includes('*frete full*');
+
+                    if (isFullFlag || hasKeyword) {
+                      return (
+                        <span className="px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 border border-blue-200 text-xs font-bold">
+                          FULL
+                        </span>
+                      );
+                    }
+                    return null;
+                  })()}
                   <CopyButton text={selectedOrder.order_id_erp} label="Número do pedido copiado!" />
                 </div>
                 <p className="text-sm text-gray-600 mt-1">{selectedOrder.customer_name}</p>
