@@ -236,6 +236,8 @@ function AssemblyManagementContent() {
     { id: 'cidade', label: 'Cidade', visible: true },
     { id: 'bairro', label: 'Bairro', visible: true },
     { id: 'endereco', label: 'Endereço', visible: true },
+    { id: 'department', label: 'Departamento', visible: true },
+    { id: 'subgroup', label: 'Subgrupo', visible: true },
   ]);
 
   const ordersSectionRef = useRef<HTMLDivElement>(null);
@@ -288,6 +290,8 @@ function AssemblyManagementContent() {
         { id: 'cidade', label: 'Cidade', visible: true },
         { id: 'bairro', label: 'Bairro', visible: true },
         { id: 'endereco', label: 'Endereço', visible: true },
+        { id: 'department', label: 'Departamento', visible: true },
+        { id: 'subgroup', label: 'Subgrupo', visible: true },
       ];
 
       try {
@@ -434,6 +438,40 @@ function AssemblyManagementContent() {
     });
     return Array.from(neighborhoods).sort();
   }, [assemblyPending, filterCity]);
+
+  // --- NEW: Group/Subgroup Options Logic ---
+  const [filterDepartment, setFilterDepartment] = useState<string[]>([]);
+  const [filterSubgroup, setFilterSubgroup] = useState<string[]>([]);
+
+  const departmentOptions = useMemo(() => {
+    const depts = new Set<string>();
+    assemblyPending.forEach(ap => {
+      const d = ap.order?.product_group || ap.order?.department; // Use product_group as department filter, fallback to legacy
+      if (d) depts.add(d);
+    });
+    return Array.from(depts).sort();
+  }, [assemblyPending]);
+
+  const subgroupOptions = useMemo(() => {
+    const subs = new Set<string>();
+    assemblyPending.forEach(ap => {
+      const dept = ap.order?.product_group || ap.order?.department;
+      const sub = ap.order?.product_subgroup;
+
+      if (!sub) return;
+
+      // Logic: If departments selected, show only subgroups belonging to those departments
+      if (filterDepartment.length > 0) {
+        if (dept && filterDepartment.includes(dept)) {
+          subs.add(sub);
+        }
+      } else {
+        subs.add(sub);
+      }
+    });
+    return Array.from(subs).sort();
+  }, [assemblyPending, filterDepartment]);
+
 
   // --- HELPERS ---
   const formatDate = (dateStr: string | null | undefined) => {
@@ -595,7 +633,7 @@ function AssemblyManagementContent() {
         .from('assembly_products')
         .select(`
           id, order_id, product_name, product_sku, status, assembly_route_id, created_at, updated_at, was_returned, observations, returned_at,
-          order:order_id!inner (id, order_id_erp, customer_name, phone, address_json, raw_json, data_venda, previsao_entrega, observacoes_publicas, observacoes_internas, status, service_type, tem_frete_full),
+          order:order_id!inner (id, order_id_erp, customer_name, phone, address_json, raw_json, data_venda, previsao_entrega, observacoes_publicas, observacoes_internas, status, service_type, tem_frete_full, department, product_group, product_subgroup),
           installer:installer_id (id, name)
         `)
         .is('assembly_route_id', null)
@@ -616,7 +654,7 @@ function AssemblyManagementContent() {
             .from('assembly_products')
             .select(`
               id, order_id, product_name, product_sku, status, assembly_route_id, created_at, updated_at, was_returned, completion_date, returned_at, observations,
-              order:order_id (id, order_id_erp, customer_name, phone, address_json, raw_json, items_json, data_venda, previsao_entrega),
+              order:order_id (id, order_id_erp, customer_name, phone, address_json, raw_json, items_json, data_venda, previsao_entrega, department, product_group, product_subgroup),
               installer:installer_id (id, name)
             `)
             .in('assembly_route_id', routeIds);
@@ -1367,6 +1405,8 @@ function AssemblyManagementContent() {
             service_type: launchType === 'venda' ? undefined : launchType,
             department: String(itemsJson[0]?.department || ''),
             brand: String(itemsJson[0]?.brand || ''),
+            product_group: String(o.produtos?.[0]?.grupo_produto || ''),
+            product_subgroup: String(o.produtos?.[0]?.subgrupo_produto || ''),
             import_source: 'avulsa',
           };
 
@@ -1578,16 +1618,26 @@ function AssemblyManagementContent() {
       const isFullFlag = isTrueValue(order?.tem_frete_full) || isTrueValue(raw?.tem_frete_full) || obsInternas.includes('*frete full*');
       const matchFull = filterFull ? isFullFlag : true;
 
-      if (matchCity && matchNeighborhood && matchPrazo && matchOrder && matchClient && matchSaleDate && matchDeliveryDate && matchForecastDate && matchReturned && matchFull && matchServiceType) {
+      // --- NEW: Group / Subgroup Filters ---
+      const dept = String(order?.product_group || order?.department || '').toLowerCase();
+      const sub = String(order?.product_subgroup || '').toLowerCase();
+
+      // Department Filter: check if order department is in the selected list (if list is not empty)
+      const matchDepartment = filterDepartment.length === 0 ? true : filterDepartment.some(fd => dept === fd.toLowerCase());
+
+      // Subgroup Filter: check if order subgroup is in the list (if list not empty)
+      const matchSubgroup = filterSubgroup.length === 0 ? true : filterSubgroup.some(fs => sub === fs.toLowerCase());
+
+      if (matchCity && matchNeighborhood && matchPrazo && matchOrder && matchClient && matchSaleDate && matchDeliveryDate && matchForecastDate && matchReturned && matchFull && matchServiceType && matchDepartment && matchSubgroup) {
         filtered[orderId] = products;
       }
     });
 
     return filtered;
-  }, [groupedProducts, filterCity, filterNeighborhood, filterDeadline, filterOrder, filterClient, filterSaleDateStart, filterSaleDateEnd, filterDeliveryDateStart, filterDeliveryDateEnd, filterForecastDateStart, filterForecastDateEnd, filterReturned, filterFull, filterServiceType, deliveryInfo]);
+  }, [groupedProducts, filterCity, filterNeighborhood, filterDeadline, filterOrder, filterClient, filterSaleDateStart, filterSaleDateEnd, filterDeliveryDateStart, filterDeliveryDateEnd, filterForecastDateStart, filterForecastDateEnd, filterReturned, filterFull, filterServiceType, deliveryInfo, filterDepartment, filterSubgroup]);
 
   const orderRows = useMemo(() => {
-    const rows: Array<{ key: string; orderId: string; dataVenda: string; entrega: string; previsao: string; pedido: string; cliente: string; telefone: string; produto: string; sku: string; obsPublicas: string; obsInternas: string; cidade: string; bairro: string; endereco: string; selected: boolean; wasReturned: boolean; isForaPrazo: boolean; temFreteFull: boolean; returnReason: string; returnObservation: string; }> = [];
+    const rows: Array<{ key: string; orderId: string; dataVenda: string; entrega: string; previsao: string; pedido: string; cliente: string; telefone: string; produto: string; sku: string; obsPublicas: string; obsInternas: string; cidade: string; bairro: string; endereco: string; selected: boolean; wasReturned: boolean; isForaPrazo: boolean; temFreteFull: boolean; returnReason: string; returnObservation: string; department: string; subgroup: string; }> = [];
 
     // Helper para verificar se pedido tem Frete Full
     const isTrueValue = (v: any) => {
@@ -1631,7 +1681,9 @@ function AssemblyManagementContent() {
             returnReason = matchSimple[1].trim();
           }
         }
-        rows.push({ key: `${orderId}-${ap.id}-${idx}`, orderId, dataVenda, entrega, previsao, pedido, cliente, telefone, produto: ap.product_name || '-', sku: ap.product_sku || '-', obsPublicas, obsInternas, cidade, bairro, endereco, selected, wasReturned, isForaPrazo, temFreteFull, returnReason, returnObservation });
+        const department = String(order?.product_group || order?.department || '-');
+        const subgroup = String(order?.product_subgroup || '-');
+        rows.push({ key: `${orderId}-${ap.id}-${idx}`, orderId, dataVenda, entrega, previsao, pedido, cliente, telefone, produto: ap.product_name || '-', sku: ap.product_sku || '-', obsPublicas, obsInternas, cidade, bairro, endereco, selected, wasReturned, isForaPrazo, temFreteFull, returnReason, returnObservation, department, subgroup });
       });
     });
     return rows;
@@ -1926,6 +1978,26 @@ function AssemblyManagementContent() {
                   </div>
 
                   <div className="space-y-1">
+                    <label className="text-xs font-semibold text-gray-500 uppercase">Departamento</label>
+                    <MultiSelect
+                      options={departmentOptions}
+                      selected={filterDepartment}
+                      onChange={setFilterDepartment}
+                      placeholder="Todos"
+                    />
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-xs font-semibold text-gray-500 uppercase">Subgrupo</label>
+                    <MultiSelect
+                      options={subgroupOptions}
+                      selected={filterSubgroup}
+                      onChange={setFilterSubgroup}
+                      placeholder="Todos"
+                    />
+                  </div>
+
+                  <div className="space-y-1">
                     <label className="text-xs font-semibold text-gray-500 uppercase">Tipo Serviço</label>
                     <select value={filterServiceType} onChange={(e) => setFilterServiceType(e.target.value)} className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all">
                       <option value="">Todos</option>
@@ -1953,6 +2025,8 @@ function AssemblyManagementContent() {
                       setFilterReturned(false);
                       setFilterFull(false);
                       setFilterServiceType('');
+                      setFilterDepartment([]);
+                      setFilterSubgroup([]);
                     }}
                     className="text-sm text-red-600 hover:text-red-800 font-medium flex items-center"
                   >
@@ -2055,7 +2129,7 @@ function AssemblyManagementContent() {
                                 <div className={`w-5 h-5 rounded border flex items-center justify-center transition-colors ${row.selected ? 'bg-blue-600 border-blue-600' : 'border-gray-300 bg-white'}`}>{row.selected && <CheckCircle2 className="h-3.5 w-3.5 text-white" />}</div>
                               </td>
                               {columnsConf.filter(c => c.visible).map(c => (
-                                <td key={c.id} className="px-4 py-3 text-gray-700 whitespace-nowrap">
+                                <td key={c.id} className={`px-4 py-3 text-gray-700 ${['obsPublicas', 'obsInternas', 'endereco', 'produto'].includes(c.id) ? 'min-w-[200px] max-w-[300px] whitespace-normal leading-relaxed text-xs' : 'whitespace-nowrap'}`}>
                                   {c.id === 'dataVenda' ? row.dataVenda :
                                     c.id === 'entrega' ? row.entrega :
                                       c.id === 'previsao' ? row.previsao :
@@ -2074,16 +2148,12 @@ function AssemblyManagementContent() {
                                               c.id === 'sinais' ? (
                                                 <div className="flex items-center gap-1 flex-wrap">
                                                   {row.wasReturned && (() => {
-                                                    // Check if the reason is a known quick-pick or if it's "Outro" (longer text)
                                                     const knownReasons = ['Cliente ausente', 'Endereço incorreto / não localizado', 'Cliente sem contato', 'Cliente recusou / cancelou', 'Horário excedido'];
                                                     const isKnownReason = knownReasons.some(r => row.returnReason.includes(r));
                                                     const displayReason = isKnownReason ? row.returnReason : (row.returnReason ? 'Outro' : '');
                                                     const fullText = row.returnReason + (row.returnObservation ? ` - ${row.returnObservation}` : '');
                                                     return (
-                                                      <span
-                                                        className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-orange-100 text-orange-800 cursor-default"
-                                                        title={fullText || 'Pedido retornado'}
-                                                      >
+                                                      <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-orange-100 text-orange-800 cursor-default" title={fullText || 'Pedido retornado'}>
                                                         🔄 Retornado{displayReason ? ` · ${displayReason}` : ''}
                                                       </span>
                                                     );
@@ -2110,7 +2180,9 @@ function AssemblyManagementContent() {
                                                       c.id === 'obsInternas' ? row.obsInternas :
                                                         c.id === 'cidade' ? row.cidade :
                                                           c.id === 'bairro' ? row.bairro :
-                                                            c.id === 'endereco' ? row.endereco : '-'}
+                                                            c.id === 'endereco' ? row.endereco :
+                                                              c.id === 'department' ? row.department :
+                                                                c.id === 'subgroup' ? row.subgroup : '-'}
                                 </td>
                               ))}
                             </tr>

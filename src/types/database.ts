@@ -59,6 +59,8 @@ export interface Order {
   filial_venda?: string;
   brand?: string;
   department?: string;
+  product_group?: string;
+  product_subgroup?: string;
 
   // Campos adicionais para montagem
   destinatario_cidade?: string;

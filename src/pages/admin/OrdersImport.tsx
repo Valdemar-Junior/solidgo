@@ -161,6 +161,8 @@ export default function OrdersImport() {
         return {
           department: String(repDept),
           brand: String(repBrand),
+          product_group: String(produtos.find((p: any) => p.grupo_produto)?.grupo_produto || ''),
+          product_subgroup: String(produtos.find((p: any) => p.subgrupo_produto)?.subgrupo_produto || ''),
           order_id_erp: String(o.numero_lancamento ?? o.lancamento_venda ?? o.codigo_cliente ?? Math.random().toString(36).slice(2)),
           customer_name: String(o.nome_cliente ?? ''),
           phone: String(o.cliente_celular ?? ''),
