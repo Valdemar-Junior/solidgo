@@ -31,6 +31,24 @@ export default function OrdersImport() {
   // Stats
   const [stats, setStats] = useState({ total: 0, pending: 0, today: 0 });
 
+  // Update Config
+  const [allowUpdatesConfig, setAllowUpdatesConfig] = useState(false);
+  const [updateExisting, setUpdateExisting] = useState(false);
+
+  useEffect(() => {
+    supabase.from('app_settings').select('value').eq('key', 'allow_order_updates_on_import').single()
+      .then(({ data, error }) => {
+        console.log('[OrdersImport] Config Fetch:', { data, error });
+        if (error) {
+          console.error('Error fetching config:', error);
+        }
+        const enabled = (data?.value as any)?.enabled;
+        console.log('[OrdersImport] Enabled value:', enabled);
+        setAllowUpdatesConfig(enabled === true);
+      })
+      .catch(err => console.error('[OrdersImport] Promise error:', err));
+  }, []);
+
   useEffect(() => {
     if (!showModal) return;
     const handleEsc = (e: KeyboardEvent) => {
@@ -211,6 +229,17 @@ export default function OrdersImport() {
               department: String(p.departamento ?? ''),
               brand: String(p.marca ?? ''),
               produto_e_montavel: String(p.produto_e_montavel ?? ''), // Persistindo dado do ERP
+
+              // Novos campos para Suporte a Kits e Detalhes
+              faz_parte_de_kit: String(p.faz_parte_de_kit ?? 'NÃO'),
+              codigo_kit_pai: p.codigo_kit_pai ? String(p.codigo_kit_pai) : null,
+              nome_kit_pai: p.nome_kit_pai ? String(p.nome_kit_pai) : null,
+              qtde_receita: p.qtde_receita ? Number(p.qtde_receita) : null,
+
+              // Campos detalhados de produto
+              descricao: String(p.descricao ?? p.nome_produto ?? ''),
+              cor: String(p.cor ?? ''),
+              referencia: String(p.referencia ?? '')
             }
           }),
           status: 'pending' as const,
@@ -248,10 +277,17 @@ export default function OrdersImport() {
         }
         return true;
       });
-      const duplicados = toDb.length - toDbUnique.length + (toDbUnique.length - paraInserir.length);
+
+      // Filter orders to update: Must exist AND updateExisting must be checked
+      const paraAtualizar = toDbUnique.filter((o: any) => {
+        return o.order_id_erp && existentesLancamentoSet.has(String(o.order_id_erp)) && updateExisting;
+      });
+
+      const duplicados = toDb.length - toDbUnique.length + (toDbUnique.length - paraInserir.length - paraAtualizar.length);
 
       // Inserir apenas pedidos completamente novos
       let inseridos = 0;
+      let atualizados = 0;
       let errosInsercao = 0;
 
       const savedOrderIds: string[] = [];
@@ -282,9 +318,39 @@ export default function OrdersImport() {
         }
       }
 
+      // FASE 2: ATUALIZAR PEDIDOS EXISTENTES (Se habilitado)
+      if (paraAtualizar.length > 0) {
+        console.log(`[Import] Iniciando atualização de ${paraAtualizar.length} pedidos existentes...`);
+
+        // Usamos Promise.all para paralelizar, mas com throttling se fosse muitos (aqui assumimos < 500)
+        const updatePromises = paraAtualizar.map(async (o: any) => {
+          try {
+            const original = existentes.find(e => String(e.order_id_erp) === String(o.order_id_erp));
+            if (!original) return;
+
+            // SAFE UPDATE: Apenas campos informativos de produto e classificação
+            const { error: updateError } = await supabase.from('orders').update({
+              items_json: o.items_json,        // Descrição, Cor, Ref
+              raw_json: o.raw_json,            // JSON Bruto
+              product_group: o.product_group,  // Novo Grupo
+              product_subgroup: o.product_subgroup, // Novo Subgrupo
+              observacoes_internas: o.observacoes_internas // Obs
+              // NÃO TOCA EM: status, tem_frete_full, address_json, dates
+            }).eq('id', original.id);
+
+            if (!updateError) atualizados++;
+            else console.warn(`Erro ao atualizar pedido ${o.order_id_erp}:`, updateError);
+          } catch (e) {
+            console.error(`Erro crítico ao atualizar pedido ${o.order_id_erp}:`, e);
+          }
+        });
+
+        await Promise.all(updatePromises);
+      }
+
       const pedidosImportados = inseridos;
 
-      toast.success(`Importação finalizada: ${pedidosImportados} novos pedidos salvos. (${duplicados} já existiam)`, {
+      toast.success(`Importação: ${pedidosImportados} novos. ${atualizados > 0 ? `${atualizados} atualizados. ` : ''}(${duplicados} ignorados)`, {
         duration: 5000,
         style: { background: '#10B981', color: 'white' }
       });
@@ -436,6 +502,25 @@ export default function OrdersImport() {
               )}
             </button>
 
+            {allowUpdatesConfig && (
+              <div className="mt-6 flex flex-col items-center animate-in fade-in slide-in-from-top-2">
+                <label className="flex items-center gap-2 cursor-pointer p-2 rounded-lg hover:bg-gray-50 transition-colors border border-transparent hover:border-gray-100">
+                  <input
+                    type="checkbox"
+                    checked={updateExisting}
+                    onChange={(e) => setUpdateExisting(e.target.checked)}
+                    className="h-4 w-4 text-orange-600 border-gray-300 rounded focus:ring-orange-500"
+                  />
+                  <div className="text-left">
+                    <span className="text-sm font-medium text-gray-700 block">Atualizar dados de pedidos já existentes</span>
+                    {updateExisting && (
+                      <span className="text-xs text-orange-600 block">⚠️ Atualiza descrição e grupos. Mantém status e histórico.</span>
+                    )}
+                  </div>
+                </label>
+              </div>
+            )}
+
             {lastImport && (
               <p className="text-xs text-gray-400 mt-4">
                 Última sincronização: {lastImport.toLocaleString('pt-BR')}
@@ -443,6 +528,7 @@ export default function OrdersImport() {
             )}
           </div>
         </div>
+
 
         {/* Orders Table */}
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
@@ -529,154 +615,156 @@ export default function OrdersImport() {
             </div>
           )}
         </div>
-      </div>
+      </div >
 
       {/* Modal de detalhes */}
-      {showModal && selectedOrder && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fade-in">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[85vh] overflow-hidden flex flex-col">
-            <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between bg-gray-50">
-              <h4 className="text-xl font-bold text-gray-900 flex items-center gap-2">
-                <Package className="h-5 w-5 text-blue-600" />
-                Detalhes do Pedido
-              </h4>
-              <button
-                className="p-2 hover:bg-gray-200 rounded-full transition-colors text-gray-500"
-                onClick={() => { showModalRef.current = false; localStorage.removeItem('oi_showModal'); localStorage.removeItem('oi_selectedOrderId'); setShowModal(false); }}
-              >
-                ✕
-              </button>
-            </div>
-
-            <div className="p-6 overflow-y-auto custom-scrollbar">
-              {/* Info Grid */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 text-sm mb-8">
-                <div className="space-y-4">
-                  <div>
-                    <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Cliente</label>
-                    <p className="text-base font-medium text-gray-900">{selectedOrder.customer_name}</p>
-                    <p className="text-gray-500">CPF: {selectedOrder.customer_cpf ?? '-'}</p>
-                  </div>
-                  <div>
-                    <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Contato</label>
-                    <div className="flex items-center gap-2">
-                      <span className="text-gray-900">{selectedOrder.phone}</span>
-                      {/* WhatsApp Link logic reused */}
-                      {(() => {
-                        const d = String(selectedOrder.phone || '').replace(/\D/g, '');
-                        const n = d ? (d.startsWith('55') ? d : '55' + d) : '';
-                        return n ? (
-                          <a href={`https://wa.me/${n}`} target="_blank" rel="noreferrer" className="text-green-600 hover:bg-green-50 p-1 rounded">
-                            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M20.52 3.48A11.84 11.84 0 0 0 12.04 0C5.48 0 .16 5.32.16 11.88c0 2.08.56 4.08 1.6 5.84L0 24l6.48-1.68a11.66 11.66 0 0 0 5.56 1.44h.04c6.56 0 11.88-5.32 11.88-11.88 0-3.2-1.24-6.2-3.52-8.4ZM12.08 21.2h-.04a9.7 9.7 0 0 1-4.96-1.36l-.36-.2-3.84 1L3.96 16l-.24-.4A9.86 9.86 0 0 1 2 11.88c0-5.52 4.52-10.04 10.08-10.04 2.68 0 5.2 1.04 7.08 2.92a9.9 9.9 0 0 1 2.96 7.12c0 5.56-4.52 10.32-10.04 10.32Zm5.76-7.44c-.32-.2-1.88-.92-2.16-1.04-.28-.12-.48-.2-.68.12-.2.32-.8 1.04-.98 1.24-.2.2-.36.24-.68.08-.32-.16-1.36-.5-2.6-1.6-.96-.84-1.6-1.88-1.8-2.2-.2-.32 0-.52.16-.68.16-.16.32-.4.48-.6.16-.2.2-.36.32-.6.12-.24.08-.44-.04-.64-.12-.2-.68-1.64-.92-2.2-.24-.56-.48-.48-.68-.48h-.56c-.2 0-.52.08-.8.4-.28.32-1.08 1.08-1.08 2.64s1.12 3.08 1.28 3.3c.16.2 2.24 3.42 5.4 4.72.76.32 1.36.52 1.82.66.76.24 1.44.2 1.98.12.6-.1 1.88-.76 2.14-1.5.26-.74.26-1.36.18-1.5-.08-.14-.28-.22-.6-.4Z" /></svg>
-                          </a>
-                        ) : null;
-                      })()}
-                    </div>
-                  </div>
-                </div>
-                <div className="space-y-4">
-                  <div>
-                    <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Endereço de Entrega</label>
-                    {(() => {
-                      const addr = selectedOrder.address_json || {};
-                      const raw = selectedOrder.raw_json || {};
-                      const zip = addr.zip || pickZip(raw) || '-';
-                      const street = addr.street || raw.destinatario_endereco || '';
-                      const number = addr.number || '';
-                      const city = addr.city || raw.destinatario_cidade || '';
-                      return (
-                        <>
-                          <p className="text-base font-medium text-gray-900">{street}, {number}</p>
-                          <p className="text-gray-600">{addr.neighborhood} - {city}</p>
-                          <p className="text-gray-500 text-xs mt-1">CEP: {zip}</p>
-                        </>
-                      );
-                    })()}
-                  </div>
-                  <div className="flex gap-4">
-                    <div>
-                      <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Data Venda</label>
-                      <p className="font-medium">{formatDateBR(selectedOrder.raw_json?.data_venda)}</p>
-                    </div>
-                    <div>
-                      <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Previsão</label>
-                      <p className="font-medium text-blue-600">{formatDateBR(selectedOrder.raw_json?.previsao_entrega)}</p>
-                    </div>
-                  </div>
-                </div>
+      {
+        showModal && selectedOrder && (
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fade-in">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[85vh] overflow-hidden flex flex-col">
+              <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between bg-gray-50">
+                <h4 className="text-xl font-bold text-gray-900 flex items-center gap-2">
+                  <Package className="h-5 w-5 text-blue-600" />
+                  Detalhes do Pedido
+                </h4>
+                <button
+                  className="p-2 hover:bg-gray-200 rounded-full transition-colors text-gray-500"
+                  onClick={() => { showModalRef.current = false; localStorage.removeItem('oi_showModal'); localStorage.removeItem('oi_selectedOrderId'); setShowModal(false); }}
+                >
+                  ✕
+                </button>
               </div>
 
-              {Array.isArray(selectedOrder.items_json) && selectedOrder.items_json.length > 0 && (
-                <div className="bg-gray-50 rounded-xl p-4 border border-gray-100">
-                  <h5 className="text-sm font-bold text-gray-900 mb-3 uppercase tracking-wider">Itens do Pedido</h5>
-                  <ul className="space-y-3">
-                    {selectedOrder.items_json.map((p: any, idx: number) => {
-                      const hasAssembly = String(p?.has_assembly || '').toLowerCase().includes('sim');
-                      // Verifica Frete Full: 1) campo direto, 2) observações internas com *frete full*
-                      const freteRaw = String(selectedOrder.tem_frete_full || selectedOrder.raw_json?.tem_frete_full || '').toLowerCase();
-                      const hasFreteFullCampo = ['sim', 'true', '1', 'y', 'yes'].some(v => freteRaw.includes(v));
-                      const obsInternas = String(selectedOrder.observacoes_internas || selectedOrder.raw_json?.observacoes_internas || '').toLowerCase();
-                      const hasFreteFullObs = obsInternas.includes('*frete full*');
-                      const isFreteFull = hasFreteFullCampo || hasFreteFullObs;
-                      return (
-                        <li key={idx} className="flex items-start justify-between bg-white p-3 rounded-lg border border-gray-100 shadow-sm">
-                          <div>
-                            <span className="font-medium text-gray-900 block">{p.name}</span>
-                            <span className="text-xs text-gray-500">SKU: {p.sku} • Qtd: {p.purchased_quantity ?? 1}</span>
-                          </div>
-                          <div className="flex gap-2">
-                            {hasAssembly && (
-                              <span className="inline-flex items-center px-2 py-1 rounded bg-orange-100 text-orange-700 text-xs font-medium" title="Requer Montagem">
-                                <Hammer className="h-3 w-3 mr-1" /> Montagem
-                              </span>
-                            )}
-                            {isFreteFull && (
-                              <span className="inline-flex items-center px-2 py-1 rounded bg-emerald-100 text-emerald-700 text-xs font-medium" title="Frete Full">
-                                <Truck className="h-3 w-3 mr-1" /> Full
-                              </span>
-                            )}
-                          </div>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                </div>
-              )}
-
-              {/* Observations */}
-              {(() => {
-                const pub = selectedOrder.observacoes_publicas || selectedOrder.raw_json?.observacoes_publicas || '';
-                const priv = selectedOrder.observacoes_internas || selectedOrder.raw_json?.observacoes_internas || '';
-                return (pub || priv) ? (
-                  <div className="mt-6 space-y-3">
-                    {pub && (
-                      <div className="p-3 bg-yellow-50 border border-yellow-100 rounded-lg text-sm text-yellow-800">
-                        <span className="font-bold block mb-1">Observações Públicas:</span>
-                        {pub}
+              <div className="p-6 overflow-y-auto custom-scrollbar">
+                {/* Info Grid */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 text-sm mb-8">
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Cliente</label>
+                      <p className="text-base font-medium text-gray-900">{selectedOrder.customer_name}</p>
+                      <p className="text-gray-500">CPF: {selectedOrder.customer_cpf ?? '-'}</p>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Contato</label>
+                      <div className="flex items-center gap-2">
+                        <span className="text-gray-900">{selectedOrder.phone}</span>
+                        {/* WhatsApp Link logic reused */}
+                        {(() => {
+                          const d = String(selectedOrder.phone || '').replace(/\D/g, '');
+                          const n = d ? (d.startsWith('55') ? d : '55' + d) : '';
+                          return n ? (
+                            <a href={`https://wa.me/${n}`} target="_blank" rel="noreferrer" className="text-green-600 hover:bg-green-50 p-1 rounded">
+                              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M20.52 3.48A11.84 11.84 0 0 0 12.04 0C5.48 0 .16 5.32.16 11.88c0 2.08.56 4.08 1.6 5.84L0 24l6.48-1.68a11.66 11.66 0 0 0 5.56 1.44h.04c6.56 0 11.88-5.32 11.88-11.88 0-3.2-1.24-6.2-3.52-8.4ZM12.08 21.2h-.04a9.7 9.7 0 0 1-4.96-1.36l-.36-.2-3.84 1L3.96 16l-.24-.4A9.86 9.86 0 0 1 2 11.88c0-5.52 4.52-10.04 10.08-10.04 2.68 0 5.2 1.04 7.08 2.92a9.9 9.9 0 0 1 2.96 7.12c0 5.56-4.52 10.32-10.04 10.32Zm5.76-7.44c-.32-.2-1.88-.92-2.16-1.04-.28-.12-.48-.2-.68.12-.2.32-.8 1.04-.98 1.24-.2.2-.36.24-.68.08-.32-.16-1.36-.5-2.6-1.6-.96-.84-1.6-1.88-1.8-2.2-.2-.32 0-.52.16-.68.16-.16.32-.4.48-.6.16-.2.2-.36.32-.6.12-.24.08-.44-.04-.64-.12-.2-.68-1.64-.92-2.2-.24-.56-.48-.48-.68-.48h-.56c-.2 0-.52.08-.8.4-.28.32-1.08 1.08-1.08 2.64s1.12 3.08 1.28 3.3c.16.2 2.24 3.42 5.4 4.72.76.32 1.36.52 1.82.66.76.24 1.44.2 1.98.12.6-.1 1.88-.76 2.14-1.5.26-.74.26-1.36.18-1.5-.08-.14-.28-.22-.6-.4Z" /></svg>
+                            </a>
+                          ) : null;
+                        })()}
                       </div>
-                    )}
-                    {priv && (
-                      <div className="p-3 bg-blue-50 border border-blue-100 rounded-lg text-sm text-blue-800">
-                        <span className="font-bold block mb-1">Observações Internas:</span>
-                        {priv}
-                      </div>
-                    )}
+                    </div>
                   </div>
-                ) : null;
-              })()}
-            </div>
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Endereço de Entrega</label>
+                      {(() => {
+                        const addr = selectedOrder.address_json || {};
+                        const raw = selectedOrder.raw_json || {};
+                        const zip = addr.zip || pickZip(raw) || '-';
+                        const street = addr.street || raw.destinatario_endereco || '';
+                        const number = addr.number || '';
+                        const city = addr.city || raw.destinatario_cidade || '';
+                        return (
+                          <>
+                            <p className="text-base font-medium text-gray-900">{street}, {number}</p>
+                            <p className="text-gray-600">{addr.neighborhood} - {city}</p>
+                            <p className="text-gray-500 text-xs mt-1">CEP: {zip}</p>
+                          </>
+                        );
+                      })()}
+                    </div>
+                    <div className="flex gap-4">
+                      <div>
+                        <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Data Venda</label>
+                        <p className="font-medium">{formatDateBR(selectedOrder.raw_json?.data_venda)}</p>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Previsão</label>
+                        <p className="font-medium text-blue-600">{formatDateBR(selectedOrder.raw_json?.previsao_entrega)}</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
 
-            <div className="p-4 bg-gray-50 border-t border-gray-200 flex justify-end">
-              <button
-                className="px-4 py-2 bg-white border border-gray-300 text-gray-700 font-medium rounded-lg hover:bg-gray-50 transition-colors"
-                onClick={() => { showModalRef.current = false; localStorage.removeItem('oi_showModal'); localStorage.removeItem('oi_selectedOrderId'); setShowModal(false); }}
-              >
-                Fechar
-              </button>
+                {Array.isArray(selectedOrder.items_json) && selectedOrder.items_json.length > 0 && (
+                  <div className="bg-gray-50 rounded-xl p-4 border border-gray-100">
+                    <h5 className="text-sm font-bold text-gray-900 mb-3 uppercase tracking-wider">Itens do Pedido</h5>
+                    <ul className="space-y-3">
+                      {selectedOrder.items_json.map((p: any, idx: number) => {
+                        const hasAssembly = String(p?.has_assembly || '').toLowerCase().includes('sim');
+                        // Verifica Frete Full: 1) campo direto, 2) observações internas com *frete full*
+                        const freteRaw = String(selectedOrder.tem_frete_full || selectedOrder.raw_json?.tem_frete_full || '').toLowerCase();
+                        const hasFreteFullCampo = ['sim', 'true', '1', 'y', 'yes'].some(v => freteRaw.includes(v));
+                        const obsInternas = String(selectedOrder.observacoes_internas || selectedOrder.raw_json?.observacoes_internas || '').toLowerCase();
+                        const hasFreteFullObs = obsInternas.includes('*frete full*');
+                        const isFreteFull = hasFreteFullCampo || hasFreteFullObs;
+                        return (
+                          <li key={idx} className="flex items-start justify-between bg-white p-3 rounded-lg border border-gray-100 shadow-sm">
+                            <div>
+                              <span className="font-medium text-gray-900 block">{p.name}</span>
+                              <span className="text-xs text-gray-500">SKU: {p.sku} • Qtd: {p.purchased_quantity ?? 1}</span>
+                            </div>
+                            <div className="flex gap-2">
+                              {hasAssembly && (
+                                <span className="inline-flex items-center px-2 py-1 rounded bg-orange-100 text-orange-700 text-xs font-medium" title="Requer Montagem">
+                                  <Hammer className="h-3 w-3 mr-1" /> Montagem
+                                </span>
+                              )}
+                              {isFreteFull && (
+                                <span className="inline-flex items-center px-2 py-1 rounded bg-emerald-100 text-emerald-700 text-xs font-medium" title="Frete Full">
+                                  <Truck className="h-3 w-3 mr-1" /> Full
+                                </span>
+                              )}
+                            </div>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </div>
+                )}
+
+                {/* Observations */}
+                {(() => {
+                  const pub = selectedOrder.observacoes_publicas || selectedOrder.raw_json?.observacoes_publicas || '';
+                  const priv = selectedOrder.observacoes_internas || selectedOrder.raw_json?.observacoes_internas || '';
+                  return (pub || priv) ? (
+                    <div className="mt-6 space-y-3">
+                      {pub && (
+                        <div className="p-3 bg-yellow-50 border border-yellow-100 rounded-lg text-sm text-yellow-800">
+                          <span className="font-bold block mb-1">Observações Públicas:</span>
+                          {pub}
+                        </div>
+                      )}
+                      {priv && (
+                        <div className="p-3 bg-blue-50 border border-blue-100 rounded-lg text-sm text-blue-800">
+                          <span className="font-bold block mb-1">Observações Internas:</span>
+                          {priv}
+                        </div>
+                      )}
+                    </div>
+                  ) : null;
+                })()}
+              </div>
+
+              <div className="p-4 bg-gray-50 border-t border-gray-200 flex justify-end">
+                <button
+                  className="px-4 py-2 bg-white border border-gray-300 text-gray-700 font-medium rounded-lg hover:bg-gray-50 transition-colors"
+                  onClick={() => { showModalRef.current = false; localStorage.removeItem('oi_showModal'); localStorage.removeItem('oi_selectedOrderId'); setShowModal(false); }}
+                >
+                  Fechar
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
-    </div>
+        )
+      }
+    </div >
   );
 }

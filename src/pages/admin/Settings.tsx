@@ -42,6 +42,7 @@ export default function Settings() {
 
   const [consultaLancamento, setConsultaLancamento] = useState('');
   const [requireConference, setRequireConference] = useState(true);
+  const [allowOrderUpdates, setAllowOrderUpdates] = useState(false);
 
   // State for Logistics
   const [ruralKeywords, setRuralKeywords] = useState<string[]>([]);
@@ -61,13 +62,14 @@ export default function Settings() {
   const load = async () => {
     try {
       setLoading(true);
-      const [p, n, m, g, l, confFlag, ruralKeys, generalDeadlines] = await Promise.all([
+      const [p, n, m, g, l, confFlag, updateFlag, ruralKeys, generalDeadlines] = await Promise.all([
         getUrl('envia_pedidos'),
         getUrl('gera_nf'),
         getUrl('envia_mensagem'),
         getUrl('envia_grupo'),
         getUrl('consulta_lancamento'),
         supabase.from('app_settings').select('value').eq('key', 'require_route_conference').single(),
+        supabase.from('app_settings').select('value').eq('key', 'allow_order_updates_on_import').single(),
         supabase.from('app_settings').select('value').eq('key', 'rural_keywords').single(),
         supabase.from('app_settings').select('value').eq('key', 'general_deadlines').single(),
       ]);
@@ -79,6 +81,9 @@ export default function Settings() {
 
       const enabled = (confFlag.data as any)?.value?.enabled;
       setRequireConference(enabled === false ? false : true);
+
+      const updatesEnabled = (updateFlag.data as any)?.value?.enabled;
+      setAllowOrderUpdates(updatesEnabled === true); // Default to false if missing
 
       const keywords = (ruralKeys.data as any)?.value?.keywords;
       setRuralKeywords(Array.isArray(keywords) ? keywords : []);
@@ -130,6 +135,10 @@ export default function Settings() {
       const { error: flagErr } = await supabase.from('app_settings').upsert([{
         key: 'require_route_conference',
         value: { enabled: requireConference },
+        updated_at: new Date().toISOString()
+      }, {
+        key: 'allow_order_updates_on_import',
+        value: { enabled: allowOrderUpdates },
         updated_at: new Date().toISOString()
       }], { onConflict: 'key' });
       if (flagErr) throw flagErr;
@@ -239,6 +248,28 @@ export default function Settings() {
                     type="checkbox"
                     checked={requireConference}
                     onChange={(e) => setRequireConference(e.target.checked)}
+                    className="h-5 w-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                  />
+                </label>
+
+                <hr className="border-gray-100 my-4" />
+
+                <p className="text-sm text-gray-600">
+                  Configurações de Importação de Pedidos
+                </p>
+                <label className="flex items-center justify-between bg-gray-50 border border-gray-100 rounded-lg px-4 py-3">
+                  <div>
+                    <p className="text-sm font-semibold text-gray-900">Permitir atualização de pedidos na importação</p>
+                    <p className="text-xs text-gray-500">
+                      Quando ligado, exibe uma opção na tela de importação para atualizar dados (descrição, grupos) de pedidos já existentes.
+                      <br />
+                      <span className="text-orange-600 font-medium">Atenção:</span> Não altera status, entregas ou devoluções. Apenas dados cadastrais do produto.
+                    </p>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={allowOrderUpdates}
+                    onChange={(e) => setAllowOrderUpdates(e.target.checked)}
                     className="h-5 w-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
                   />
                 </label>
