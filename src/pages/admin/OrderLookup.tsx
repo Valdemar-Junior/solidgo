@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ArrowLeft, Loader2, MapPin, Phone, Search, Truck, Hammer, FileText, AlertTriangle, LogOut, Eye, ChevronDown, ChevronUp, Copy, Check } from 'lucide-react';
+import { ArrowLeft, Loader2, MapPin, Phone, Search, Truck, Hammer, FileText, AlertTriangle, LogOut, Eye, ChevronDown, ChevronUp, Copy, Check, Briefcase } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../../supabase/client';
 import { useAuthStore } from '../../stores/authStore';
@@ -502,6 +502,21 @@ export default function OrderLookup() {
                     </a>
                   )}
                 </div>
+                {/* Vendedor */}
+                {(() => {
+                  const raw = selectedOrder.raw_json || {};
+                  const vendedor = raw.nome_vendedor || (selectedOrder as any).nome_vendedor;
+                  if (vendedor) {
+                    return (
+                      <div className="mt-2 text-sm text-gray-600 flex items-center gap-2">
+                        <Briefcase className="h-4 w-4 text-gray-400" />
+                        <span className="text-xs font-medium text-gray-500">Vendedor:</span>
+                        <span className="font-medium uppercase">{vendedor}</span>
+                      </div>
+                    );
+                  }
+                  return null;
+                })()}
                 <div className="mt-2 text-sm text-gray-600 flex items-start gap-2">
                   <MapPin className="h-4 w-4 text-gray-400 mt-0.5" />
                   <span>{selectedOrder.address_json?.street}, {selectedOrder.address_json?.neighborhood} - {selectedOrder.address_json?.city}</span>

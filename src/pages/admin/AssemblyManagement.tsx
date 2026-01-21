@@ -51,6 +51,7 @@ import { useAssemblyDataStore } from '../../stores/assemblyDataStore';
 import { useAuthStore } from '../../stores/authStore';
 import { saveUserPreference, loadUserPreference, mergeColumnsConfig, type ColumnConfig } from '../../utils/userPreferences';
 import { MultiSelect } from '../../components/ui/MultiSelect';
+import { calculateAssemblyStats } from '../../utils/assemblyKitLogic';
 
 registerLocale('pt-BR', ptBR);
 
@@ -2221,10 +2222,18 @@ function AssemblyManagementContent() {
                     const productsInRoute = assemblyInRoutes.filter(ap => ap.assembly_route_id === route.id);
 
                     // Contar PRODUTOS (não pedidos) por status
+                    // NEW: Use kit logic for consolidated stats
+                    const stats = calculateAssemblyStats(productsInRoute);
+                    const totalProducts = stats.totalItems;
+                    const completed = stats.completedItems;
+                    const pending = stats.pendingItems;
+                    const returned = stats.returnedItems;
+                    /* Old Logic
                     const totalProducts = productsInRoute.length;
                     const completed = productsInRoute.filter(p => p.status === 'completed').length;
                     const pending = productsInRoute.filter(p => p.status === 'pending' || p.status === 'assigned' || p.status === 'in_progress').length;
                     const returned = productsInRoute.filter(p => p.status === 'cancelled').length;
+                    */
                     console.log(`Route ${(route as any).route_code}: Total=${totalProducts}, Pending=${pending}, Returned=${returned}`);
 
                     const statusColors = {
