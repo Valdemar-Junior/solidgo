@@ -599,7 +599,8 @@ function AssemblyManagementContent() {
       const { data, error } = await supabase
         .from('assembly_routes')
         .select('*')
-        .eq('status', 'pending')
+        .select('*')
+        .in('status', ['pending', 'in_progress'])
         .order('created_at', { ascending: false });
 
       if (error) throw error;
@@ -1071,7 +1072,7 @@ function AssemblyManagementContent() {
   // Remove all products of an order from the current route (return to pending)
   const removeOrderFromRoute = async (orderId: string) => {
     if (!selectedRoute) return;
-    if ((selectedRoute as any).status !== 'pending') {
+    if ((selectedRoute as any).status === 'completed') {
       toast.error('Não é possível remover pedidos de rotas finalizadas');
       return;
     }
@@ -2310,12 +2311,12 @@ function AssemblyManagementContent() {
 
                     const statusColors = {
                       pending: 'bg-yellow-50 text-yellow-700 border-yellow-200',
-                      in_progress: 'bg-yellow-50 text-yellow-700 border-yellow-200',
+                      in_progress: 'bg-blue-50 text-blue-700 border-blue-200',
                       completed: 'bg-green-50 text-green-700 border-green-200'
                     };
                     const statusLabel = {
                       pending: 'Pendente',
-                      in_progress: 'Pendente',
+                      in_progress: 'Em Rota',
                       completed: 'Concluído'
                     };
 
@@ -2667,7 +2668,7 @@ function AssemblyManagementContent() {
                         )}
                       </h2>
                       <p className="text-sm text-gray-500">
-                        {selectedRoute.status === 'pending' ? 'Pendente' : selectedRoute.status === 'in_progress' ? 'Pendente' : 'Concluído'}
+                        {selectedRoute.status === 'pending' ? 'Pendente' : selectedRoute.status === 'in_progress' ? 'Em Rota' : 'Concluído'}
                         • {formatDate(selectedRoute.created_at)}
                         {(selectedRoute as any).assembler_id && (() => {
                           const m = montadores.find(m => m.id === (selectedRoute as any).assembler_id);
@@ -2803,6 +2804,27 @@ function AssemblyManagementContent() {
                     >
                       <FileText className="h-4 w-4 mr-2" /> PDF
                     </button>
+                    {(selectedRoute as any).status === 'pending' && (
+                      <button
+                        onClick={async () => {
+                          if (!selectedRoute) return;
+                          try {
+                            const { error } = await supabase.from('assembly_routes').update({ status: 'in_progress' }).eq('id', selectedRoute.id);
+                            if (error) throw error;
+                            const updated = { ...selectedRoute, status: 'in_progress' } as any;
+                            setSelectedRoute(updated);
+                            toast.success('Rota iniciada com sucesso!');
+                            loadData(true);
+                          } catch (e) {
+                            console.error(e);
+                            toast.error('Erro ao iniciar rota');
+                          }
+                        }}
+                        className="inline-flex items-center px-3 py-2 border border-blue-200 shadow-sm text-sm font-medium rounded-lg text-blue-700 bg-blue-50 hover:bg-blue-100"
+                      >
+                        <Clock className="h-4 w-4 mr-2" /> Iniciar Rota
+                      </button>
+                    )}
                     <button
                       onClick={async () => {
                         if (!selectedRoute) return;
@@ -2970,13 +2992,59 @@ function AssemblyManagementContent() {
                             vehicleInfo = v ? `${v.model} (${v.plate})` : '';
                           }
 
+
+                          // Helper to clean strings for PDF generation (removes Tabs and other control chars)
+                          const sanitize = (str: any) => {
+                            if (!str) return '';
+                            return String(str).replace(/[\t\u0000-\u001F]+/g, ' ').trim();
+                          };
+
+                          // Deep sanitize the route object for the report
+                          const sanitizedRoute = {
+                            ...route,
+                            name: sanitize(route.name),
+                            observations: sanitize(route.observations),
+                            assembler_name: sanitize((route as any).assembler_name), // if present
+                            vehicle_model: sanitize((route as any).vehicle_model),   // if present
+                            vehicle_plate: sanitize((route as any).vehicle_plate)    // if present
+                          };
+
+                          // Deep sanitize products
+                          const sanitizedProducts = products.map((p: any) => {
+                            const order = p.order || {};
+                            const addr = order.address_json || {};
+                            // Clone and sanitize deep properties as needed by the report generator
+                            return {
+                              ...p,
+                              product_name: sanitize(p.product_name),
+                              product_sku: sanitize(p.product_sku),
+                              customer_name: sanitize(p.customer_name),
+                              observations: sanitize(p.observations),
+                              technical_notes: sanitize(p.technical_notes),
+                              // Ensure nested order data is also clean if used
+                              order: {
+                                ...order,
+                                customer_name: sanitize(order.customer_name),
+                                order_id_erp: sanitize(order.order_id_erp),
+                                phone: sanitize(order.phone),
+                                address_json: {
+                                  ...addr,
+                                  street: sanitize(addr.street),
+                                  neighborhood: sanitize(addr.neighborhood),
+                                  city: sanitize(addr.city),
+                                  complement: sanitize(addr.complement)
+                                }
+                              }
+                            };
+                          });
+
                           // Use existing products data which already has 'order' details populated from loadData
                           const pdfBytes = await AssemblyReportGenerator.generateAssemblyReport({
-                            route: route,
-                            products: products,
-                            installerName,
-                            supervisorName: '', // Conferente left blank for signature or could be logged in user
-                            vehicleInfo,
+                            route: sanitizedRoute,
+                            products: sanitizedProducts,
+                            installerName: sanitize(installerName),
+                            supervisorName: '',
+                            vehicleInfo: sanitize(vehicleInfo),
                             generatedAt: new Date().toISOString()
                           });
 

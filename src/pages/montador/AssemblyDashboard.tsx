@@ -28,7 +28,7 @@ export default function AssemblyDashboard() {
           vehicle:vehicles!vehicle_id(*)
         `)
         .eq('assembler_id', user.id)
-        .in('status', ['pending', 'in_progress']) // Mostrar rotas pendentes e em progresso
+        .in('status', ['in_progress', 'completed']) // Mostrar apenas rotas iniciadas ou concluídas
         .order('created_at', { ascending: false });
 
       if (error) throw error;
