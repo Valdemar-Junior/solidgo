@@ -1652,7 +1652,7 @@ function AssemblyManagementContent() {
       const addr = order?.address_json || {};
       const dataVenda = formatDate(order?.data_venda || order?.created_at);
       const entrega = formatDate(deliveryInfo[orderId] || null);
-      const previsao = formatDate(order?.previsao_entrega || raw?.previsao_entrega || raw?.data_prevista_entrega);
+      const previsao = formatDate(order?.previsao_montagem || order?.previsao_entrega || raw?.previsao_entrega || raw?.data_prevista_entrega);
       const pedido = order?.order_id_erp || orderId;
       const cliente = order?.customer_name || '-';
       const telefone = String(order?.phone || raw?.cliente_celular || '-');

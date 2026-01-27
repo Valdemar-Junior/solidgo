@@ -188,7 +188,7 @@ export default function OrdersImport() {
           filial_venda: String(o.filial_venda ?? ''),
           vendedor_nome: String(o.nome_vendedor ?? o.vendedor ?? o.vendedor_nome ?? ''),
           data_venda: o.data_venda ? new Date(o.data_venda).toISOString() : null,
-          previsao_entrega: o.previsao_entrega ? new Date(o.previsao_entrega).toISOString() : null,
+          // previsao_entrega: o.previsao_entrega ? new Date(o.previsao_entrega).toISOString() : null, // Ignored: Handled by DB trigger 'calculate_order_deadlines'
           observacoes_publicas: String(o.observacoes_publicas ?? ''),
           observacoes_internas: String(o.observacoes_internas ?? ''),
           tem_frete_full: String(o.tem_frete_full ?? ''),
