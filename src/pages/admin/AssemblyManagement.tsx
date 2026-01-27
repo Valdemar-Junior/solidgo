@@ -1092,7 +1092,7 @@ function AssemblyManagementContent() {
       const productIds = productsToRemove.map(p => p.id);
       const { error } = await supabase
         .from('assembly_products')
-        .update({ assembly_route_id: null, updated_at: new Date().toISOString() })
+        .update({ assembly_route_id: null, status: 'pending', updated_at: new Date().toISOString() })
         .in('id', productIds);
 
       if (error) throw error;
@@ -3215,7 +3215,7 @@ function AssemblyManagementContent() {
                                     >
                                       <FileSpreadsheet className="h-4 w-4" />
                                     </button>
-                                    {(selectedRoute as any)?.status === 'pending' && (
+                                    {((selectedRoute as any)?.status === 'pending' || (selectedRoute as any)?.status === 'in_progress') && (
                                       <button
                                         onClick={() => {
                                           if (confirm(`Deseja remover o pedido ${order.order_id_erp || orderId} da rota?`)) {
