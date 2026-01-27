@@ -74,7 +74,7 @@ export const useAssemblyDataStore = create<AssemblyDataState>((set, get) => ({
                     .from('assembly_products')
                     .select(`
             id, order_id, product_name, product_sku, status, assembly_route_id, created_at, updated_at,
-            order:order_id (id, order_id_erp, customer_name, phone, address_json, raw_json, data_venda, previsao_entrega, observacoes_publicas, observacoes_internas),
+            order:order_id (id, order_id_erp, customer_name, phone, address_json, raw_json, data_venda, previsao_entrega, previsao_montagem, observacoes_publicas, observacoes_internas),
             installer:installer_id (id, name)
           `)
                     .eq('status', 'pending')
@@ -96,6 +96,18 @@ export const useAssemblyDataStore = create<AssemblyDataState>((set, get) => ({
 
             const assemblyRoutes = (routesRes.data || []) as AssemblyRoute[];
             const assemblyPending = (productsPendingRes.data || []) as AssemblyProductWithDetails[];
+
+            // DEBUG LOG: Check if previsao_montagem is coming
+            if (assemblyPending.length > 0) {
+                const firstOrder = (assemblyPending[0] as any).order;
+                console.log('[Store Debug] First Pending Order:', {
+                    id: firstOrder?.id,
+                    erp: firstOrder?.order_id_erp,
+                    prev_entrega: firstOrder?.previsao_entrega,
+                    prev_montagem: firstOrder?.previsao_montagem
+                });
+            }
+
             const montadores = (montadoresRes.data || []) as User[];
             const vehicles = (vehiclesRes.data || []) as Vehicle[];
 
@@ -108,7 +120,7 @@ export const useAssemblyDataStore = create<AssemblyDataState>((set, get) => ({
                         .from('assembly_products')
                         .select(`
               id, order_id, product_name, product_sku, status, assembly_route_id, created_at, updated_at,
-              order:order_id (id, order_id_erp, customer_name, phone, address_json, raw_json, data_venda, previsao_entrega),
+              order:order_id (id, order_id_erp, customer_name, phone, address_json, raw_json, data_venda, previsao_entrega, previsao_montagem),
               installer:installer_id (id, name)
             `)
                         .in('assembly_route_id', routeIds);

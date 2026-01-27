@@ -634,7 +634,7 @@ function AssemblyManagementContent() {
         .from('assembly_products')
         .select(`
           id, order_id, product_name, product_sku, status, assembly_route_id, created_at, updated_at, was_returned, observations, returned_at,
-          order:order_id!inner (id, order_id_erp, customer_name, phone, address_json, raw_json, data_venda, previsao_entrega, observacoes_publicas, observacoes_internas, status, service_type, tem_frete_full, department, product_group, product_subgroup),
+          order:order_id!inner (id, order_id_erp, customer_name, phone, address_json, raw_json, data_venda, previsao_entrega, previsao_montagem, observacoes_publicas, observacoes_internas, status, service_type, tem_frete_full, department, product_group, product_subgroup),
           installer:installer_id (id, name)
         `)
         .is('assembly_route_id', null)
@@ -655,7 +655,7 @@ function AssemblyManagementContent() {
             .from('assembly_products')
             .select(`
               id, order_id, product_name, product_sku, status, assembly_route_id, created_at, updated_at, was_returned, completion_date, returned_at, observations,
-              order:order_id (id, order_id_erp, customer_name, phone, address_json, raw_json, items_json, data_venda, previsao_entrega, department, product_group, product_subgroup),
+              order:order_id (id, order_id_erp, customer_name, phone, address_json, raw_json, items_json, data_venda, previsao_entrega, previsao_montagem, department, product_group, product_subgroup),
               installer:installer_id (id, name)
             `)
             .in('assembly_route_id', routeIds);
@@ -1652,7 +1652,9 @@ function AssemblyManagementContent() {
       const addr = order?.address_json || {};
       const dataVenda = formatDate(order?.data_venda || order?.created_at);
       const entrega = formatDate(deliveryInfo[orderId] || null);
+
       const previsao = formatDate(order?.previsao_montagem || order?.previsao_entrega || raw?.previsao_entrega || raw?.data_prevista_entrega);
+
       const pedido = order?.order_id_erp || orderId;
       const cliente = order?.customer_name || '-';
       const telefone = String(order?.phone || raw?.cliente_celular || '-');
