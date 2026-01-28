@@ -27,6 +27,7 @@ import TesteImportacao from './pages/teste-importacao';
 import DiagnosticoOrders from './pages/diagnostico-orders';
 import VerificarColunasOrders from './pages/verificar-colunas';
 import AuditDashboard from './pages/admin/AuditDashboard';
+import Diary from './pages/admin/Diary';
 
 import ProtectedRoute from './components/ProtectedRoute';
 import { Toaster } from 'sonner';
@@ -141,6 +142,14 @@ function App() {
             element={
               <ProtectedRoute allowedRoles={['admin']}>
                 <AuditDashboard />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/diary"
+            element={
+              <ProtectedRoute allowedRoles={['admin']}>
+                <Diary />
               </ProtectedRoute>
             }
           />

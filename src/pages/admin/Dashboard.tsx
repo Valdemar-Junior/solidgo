@@ -17,7 +17,8 @@ import {
   CheckCircle2,
   Bell,
   Search,
-  AlertOctagon
+  AlertOctagon,
+  BookOpen
 } from 'lucide-react';
 
 export default function AdminDashboard() {
@@ -147,6 +148,14 @@ export default function AdminDashboard() {
       href: '/admin/audit',
       color: 'bg-red-600',
       gradient: 'from-red-500 to-red-600',
+    },
+    {
+      title: 'Diário de Bordo',
+      description: 'Registrar ocorrências e notas',
+      icon: BookOpen,
+      href: '/admin/diary',
+      color: 'bg-emerald-600',
+      gradient: 'from-emerald-500 to-emerald-600',
     },
   ];
 
