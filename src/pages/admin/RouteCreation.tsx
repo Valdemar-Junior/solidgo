@@ -699,6 +699,8 @@ function RouteCreationContent() {
           };
         }) : [];
 
+        const xmlDanfe = o.xml_danfe_remessa || {};
+
         // Append type suffix to ensure uniqueness and identification
         // Para vendas, NÃO adiciona sufixo (é o pedido original)
         let erpId = String(o.numero_lancamento ?? o.lancamento_venda ?? o.codigo_cliente ?? launchNumber);
@@ -738,6 +740,7 @@ function RouteCreationContent() {
           department: String(itemsJson[0]?.department || ''),
           brand: String(itemsJson[0]?.brand || ''),
           import_source: 'avulsa',
+          xml_documento: xmlDanfe.conteudo_xml || null,
         };
       });
 
