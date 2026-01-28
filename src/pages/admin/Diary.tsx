@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../../supabase/client';
+import { useNavigate } from 'react-router-dom';
 import {
     Calendar,
     Plus,
@@ -14,7 +15,8 @@ import {
     Clock,
     ChevronLeft,
     ChevronRight,
-    Pencil
+    Pencil,
+    ArrowLeft
 } from 'lucide-react';
 import { format, addDays, subDays, isToday, parseISO } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
@@ -32,6 +34,7 @@ type DiaryEntry = {
 };
 
 export default function Diary() {
+    const navigate = useNavigate();
     const [selectedDate, setSelectedDate] = useState<Date>(new Date());
     const [entries, setEntries] = useState<DiaryEntry[]>([]);
     const [loading, setLoading] = useState(false);
@@ -161,6 +164,13 @@ export default function Diary() {
                 {/* Header & Date Navigation */}
                 <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white p-4 rounded-2xl shadow-sm border border-gray-100">
                     <div className="flex items-center gap-4">
+                        <button
+                            onClick={() => navigate(-1)}
+                            className="p-2 -ml-2 hover:bg-gray-100 rounded-lg text-gray-600 transition-colors"
+                            title="Voltar"
+                        >
+                            <ArrowLeft className="h-6 w-6" />
+                        </button>
                         <div className="bg-gradient-to-br from-emerald-500 to-teal-600 p-3 rounded-xl shadow-sm">
                             <Calendar className="h-6 w-6 text-white" />
                         </div>
