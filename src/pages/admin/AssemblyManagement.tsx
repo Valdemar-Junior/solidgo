@@ -208,11 +208,23 @@ function AssemblyManagementContent() {
   const [filterFull, setFilterFull] = useState<boolean>(false);
   const [filterServiceType, setFilterServiceType] = useState<string>('');
 
+  // --- NEW FILTERS (Replicated from Delivery) ---
+  const [filterFilialVenda, setFilterFilialVenda] = useState<string>('');
+  const [filterLocalEstocagem, setFilterLocalEstocagem] = useState<string>('');
+  const [strictLocal, setStrictLocal] = useState<boolean>(false);
+  const [filterSeller, setFilterSeller] = useState<string>('');
+  const [filterOperation, setFilterOperation] = useState<string>('');
+  const [filterBrand, setFilterBrand] = useState<string>('');
+  const [filterFreightFull, setFilterFreightFull] = useState<string>('');
+  const [filterHasAssembly, setFilterHasAssembly] = useState<boolean>(false);
+  const [strictDepartment, setStrictDepartment] = useState<boolean>(false);
+
   const [showFilters, setShowFilters] = useState(true);
 
   // PAGINATION & ROUTE FILTERS STATE
   const [dateFilter, setDateFilter] = useState<'today' | 'yesterday' | 'last7' | 'all'>('today');
   const [statusFilter, setStatusFilter] = useState<string[]>([]);
+  const [routeSearchQuery, setRouteSearchQuery] = useState<string>(''); // New Search State
   const [page, setPage] = useState(0);
   const [hasMoreRoutes, setHasMoreRoutes] = useState(true);
   const LIMIT = 50;
@@ -446,7 +458,7 @@ function AssemblyManagementContent() {
   const departmentOptions = useMemo(() => {
     const depts = new Set<string>();
     assemblyPending.forEach(ap => {
-      const d = ap.order?.product_group || ap.order?.department; // Use product_group as department filter, fallback to legacy
+      const d = ap.order?.product_group || ap.order?.department;
       if (d) depts.add(d);
     });
     return Array.from(depts).sort();
@@ -459,8 +471,6 @@ function AssemblyManagementContent() {
       const sub = ap.order?.product_subgroup;
 
       if (!sub) return;
-
-      // Logic: If departments selected, show only subgroups belonging to those departments
       if (filterDepartment.length > 0) {
         if (dept && filterDepartment.includes(dept)) {
           subs.add(sub);
@@ -471,6 +481,58 @@ function AssemblyManagementContent() {
     });
     return Array.from(subs).sort();
   }, [assemblyPending, filterDepartment]);
+
+  // --- NEW OPTIONS MEMOS ---
+  const filialOptions = useMemo(() => {
+    const s = new Set<string>();
+    assemblyPending.forEach(ap => {
+      const f = ap.order?.raw_json?.filial_venda || ap.order?.filial_venda;
+      if (f) s.add(f);
+    });
+    return Array.from(s).sort();
+  }, [assemblyPending]);
+
+  const localOptions = useMemo(() => {
+    const s = new Set<string>();
+    assemblyPending.forEach(ap => {
+      // Assuming location might be on the item (assembly_product acts as item here somewhat)
+      // The assembly_product table doesn't have 'location' explicitly in the selected fields commonly, 
+      // but let's check if we can derive it or if we need to add it to the select.
+      // Ideally we should check 'location' in items_json of the order if we want strict accuracy,
+      // but assembly_product might not have it directly. 
+      // For now, let's look at order field if exists or skip.
+      // Warning: 'location' is usually on the item level. 
+      // If we don't have it, we skip.
+    });
+    return []; // Placeholder until we confirm location source
+  }, [assemblyPending]);
+
+  const sellerOptions = useMemo(() => {
+    const s = new Set<string>();
+    assemblyPending.forEach(ap => {
+      const seller = ap.order?.raw_json?.vendedor || ap.order?.raw_json?.nome_vendedor || '';
+      if (seller) s.add(seller);
+    });
+    return Array.from(s).sort();
+  }, [assemblyPending]);
+
+  const operationOptions = useMemo(() => {
+    const s = new Set<string>();
+    assemblyPending.forEach(ap => {
+      const op = ap.order?.raw_json?.operacoes;
+      if (op) s.add(op);
+    });
+    return Array.from(s).sort();
+  }, [assemblyPending]);
+
+  const brandOptions = useMemo(() => {
+    const s = new Set<string>();
+    assemblyPending.forEach(ap => {
+      // Brand is usually on item.
+      // We'll skip for now or assume it's not critical if data missing.
+    });
+    return [];
+  }, [assemblyPending]);
 
 
   // --- HELPERS ---
@@ -523,40 +585,57 @@ function AssemblyManagementContent() {
   };
 
   // --- ROUTE FETCHING ---
-  const fetchAssemblyRoutes = async (resetPage: boolean = false) => {
+  const fetchAssemblyRoutes = async (resetPage: boolean = false, search: string = '') => {
     try {
       const currentPage = resetPage ? 0 : page;
       const from = currentPage * LIMIT;
       const to = from + LIMIT - 1;
 
-      console.log(`Fetching assembly routes page ${currentPage} (${from}-${to}) with filter ${dateFilter}`);
+      console.log(`Fetching assembly routes page ${currentPage} (${from}-${to}) with filter ${dateFilter} search="${search}"`);
 
       let query = supabase
         .from('assembly_routes')
         .select('*', { count: 'exact' })
         .order('created_at', { ascending: false });
 
-      // Apply Date Filters
-      const now = new Date();
-      const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
-
-      if (dateFilter === 'today') {
-        query = query.gte('created_at', todayStart);
-      } else if (dateFilter === 'yesterday') {
-        const yesterday = new Date(now);
-        yesterday.setDate(yesterday.getDate() - 1);
-        const yesterdayStart = new Date(yesterday.getFullYear(), yesterday.getMonth(), yesterday.getDate()).toISOString();
-        query = query.gte('created_at', yesterdayStart).lt('created_at', todayStart);
-      } else if (dateFilter === 'last7') {
-        const last7 = new Date(now);
-        last7.setDate(last7.getDate() - 7);
-        const last7Start = new Date(last7.getFullYear(), last7.getMonth(), last7.getDate()).toISOString();
-        query = query.gte('created_at', last7Start);
+      // Apply Search (Server Side)
+      if (search) {
+        // Filter by name OR route_code
+        query = query.or(`name.ilike.%${search}%,route_code.ilike.%${search}%`);
       }
-      // 'all' applies no date filter
 
-      // Apply Status Filters
-      if (statusFilter.length > 0) {
+      // Apply Date Filters (Only if NO search or if we want to combine)
+      // Usually user expects search to override date filters if they are searching for a specific old route.
+      // But standard UI keeps filters active. Let's keep them active UNLESS it confuses users.
+      // Delivery Management behavior: Search filters WITHIN the current view? 
+      // User complaint: "se essa rota não tiver dentros das 50 não carreega". 
+      // If we apply search, we should probably RELAX date filters if the user wants to find *any* route.
+      // HOWEVER, if the user has "Today" selected and searches "Route X" (from last month), they might expect it to show up.
+      // Fix: If search is present, we IGNORE date filters to allow global search.
+      if (!search) {
+        const now = new Date();
+        const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+
+        if (dateFilter === 'today') {
+          query = query.gte('created_at', todayStart);
+        } else if (dateFilter === 'yesterday') {
+          const yesterday = new Date(now);
+          yesterday.setDate(yesterday.getDate() - 1);
+          const yesterdayStart = new Date(yesterday.getFullYear(), yesterday.getMonth(), yesterday.getDate()).toISOString();
+          query = query.gte('created_at', yesterdayStart).lt('created_at', todayStart);
+        } else if (dateFilter === 'last7') {
+          const last7 = new Date(now);
+          last7.setDate(last7.getDate() - 7);
+          const last7Start = new Date(last7.getFullYear(), last7.getMonth(), last7.getDate()).toISOString();
+          query = query.gte('created_at', last7Start);
+        }
+      }
+
+      // Apply Status Filters (Keep these even with search? Probably yes, or no?)
+      // Use case: Search for "Route X" but it's completed, and I have "Pending" selected. Result: Empty.
+      // This is often confusing. Better to clear other filters or ignore them when searching.
+      // Let's IGNORE status filter if searching too, for maximum "Findability".
+      if (!search && statusFilter.length > 0) {
         query = query.in('status', statusFilter);
       }
 
@@ -625,7 +704,7 @@ function AssemblyManagementContent() {
       // NOTE: If currentRoutes was passed as parameter, use that. Otherwise fetch if !silent.
       let routesForQuery: AssemblyRoute[] = currentRoutes as AssemblyRoute[];
       if (!silent && routesForQuery.length === 0) {
-        const res = await fetchAssemblyRoutes(true);
+        const res = await fetchAssemblyRoutes(true, routeSearchQuery);
         routesForQuery = res;
       }
 
@@ -729,7 +808,24 @@ function AssemblyManagementContent() {
 
   // --- EFFECTS ---
 
+  // Debounce for Search
   useEffect(() => {
+    const timer = setTimeout(() => {
+      // If we have a query, fetch with the query (resetting page)
+      // If query is empty, it falls back to standard filters.
+      fetchAssemblyRoutes(true, routeSearchQuery);
+    }, 600);
+    return () => clearTimeout(timer);
+  }, [routeSearchQuery]);
+
+  useEffect(() => {
+    // Only load initial data if we haven't already (or let the debounce handle it?)
+    // Debounce handles the route fetching.
+    // loadData handles products.
+    // We should call loadData but avoid double fetching routes if possible.
+    // Actually, loadData triggers fetchAssemblyRoutes if active routes are empty.
+    // But debounce will also trigger it.
+    // Let's rely on standard loadData, but maybe pass empty to search initially?
     loadData(true);
 
     // Update refs for Realtime
@@ -1618,18 +1714,48 @@ function AssemblyManagementContent() {
       const obsInternas = String(order?.observacoes_internas || raw?.observacoes_internas || '').toLowerCase();
       const isFullFlag = isTrueValue(order?.tem_frete_full) || isTrueValue(raw?.tem_frete_full) || obsInternas.includes('*frete full*');
       const matchFull = filterFull ? isFullFlag : true;
+      // Also check checkbox filterFreightFull (if used as select or checkbox) - assuming checkbox logic in state
+      // Actually filterFull is the checkbox state from UI above.
 
       // --- NEW: Group / Subgroup Filters ---
       const dept = String(order?.product_group || order?.department || '').toLowerCase();
       const sub = String(order?.product_subgroup || '').toLowerCase();
 
-      // Department Filter: check if order department is in the selected list (if list is not empty)
+      // Department Filter: check if order department is in the selected list
       const matchDepartment = filterDepartment.length === 0 ? true : filterDepartment.some(fd => dept === fd.toLowerCase());
 
-      // Subgroup Filter: check if order subgroup is in the list (if list not empty)
+      // Subgroup Filter
       const matchSubgroup = filterSubgroup.length === 0 ? true : filterSubgroup.some(fs => sub === fs.toLowerCase());
 
-      if (matchCity && matchNeighborhood && matchPrazo && matchOrder && matchClient && matchSaleDate && matchDeliveryDate && matchForecastDate && matchReturned && matchFull && matchServiceType && matchDepartment && matchSubgroup) {
+
+      // --- NEW FILTERS IMPLEMENTATION ---
+      const filial = String(order?.filial_venda || raw?.filial_venda || '').toLowerCase();
+      const seller = String(order?.vendedor_nome || raw?.nome_vendedor || raw?.vendedor || '').toLowerCase();
+      const operation = String(raw?.operacoes || '').toLowerCase();
+      // Brand usually on items. We check if ANY item in the order matches?
+      // Or just check first item since we flattened? Logic in similar tools usually checks if AT LEAST ONE matches or order level.
+      // Assembly Management works on Order Grouping.
+      // We'll check if the order (or its products) match.
+      // Simplified: check field on order record if available or first product.
+      const brand = String(order?.brand || raw?.marca || products[0]?.product_brand || '').toLowerCase();
+
+      const matchFilial = filterFilialVenda ? filial === filterFilialVenda.toLowerCase() : true;
+      const matchSeller = filterSeller ? seller === filterSeller.toLowerCase() : true;
+      const matchOperation = filterOperation ? operation === filterOperation.toLowerCase() : true;
+      // const matchBrand = filterBrand ? brand.includes(filterBrand.toLowerCase()) : true; // Disabled brand for now as input missing
+
+      // Montagem Filter
+      // Check if ANY item in the order has assembly='Sim'
+      // Or check specific field. The implementation plan says "Tem Montagem".
+      // We check if order.items_json has any helper or if products list implies it.
+      // Since this is Assembly Management, MOST items should have assembly.
+      // But maybe some don't?
+      const matchHasAssembly = filterHasAssembly ? (products.some(p => isTrueValue((p as any).produto_e_montavel) || isTrueValue((p as any).has_assembly))) : true;
+
+      // Strict Department (if enabled) - usually means only show orders where ALL items match department? 
+      // Ignored for now as strictDepartment state isn't toggleable in UI yet.
+
+      if (matchCity && matchNeighborhood && matchPrazo && matchOrder && matchClient && matchSaleDate && matchDeliveryDate && matchForecastDate && matchReturned && matchFull && matchServiceType && matchDepartment && matchSubgroup && matchFilial && matchSeller && matchOperation && matchHasAssembly) {
         filtered[orderId] = products;
       }
     });
@@ -1962,22 +2088,30 @@ function AssemblyManagementContent() {
                     </select>
                   </div>
 
-
-
+                  {/* Row 3 - New Filters */}
                   <div className="space-y-1">
-                    <label className="text-xs font-semibold text-gray-500 uppercase">Retorno</label>
-                    <div className="flex items-center gap-2 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg">
-                      <input id="freturned" type="checkbox" className="h-4 w-4" checked={filterReturned} onChange={(e) => setFilterReturned(e.target.checked)} />
-                      <label htmlFor="freturned" className="text-sm text-gray-700">Apenas pedidos retornados</label>
-                    </div>
+                    <label className="text-xs font-semibold text-gray-500 uppercase">Filial</label>
+                    <select value={filterFilialVenda} onChange={(e) => setFilterFilialVenda(e.target.value)} className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all">
+                      <option value="">Todas</option>
+                      {filialOptions.map((c) => (<option key={c} value={c}>{c}</option>))}
+                    </select>
+                  </div>
+
+                  {/* Vendedor, Operacao, FreteFull, Montagem, Retorno */}
+                  <div className="space-y-1">
+                    <label className="text-xs font-semibold text-gray-500 uppercase">Vendedor</label>
+                    <select value={filterSeller} onChange={(e) => setFilterSeller(e.target.value)} className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all">
+                      <option value="">Todos</option>
+                      {sellerOptions.map((c) => (<option key={c} value={c}>{c}</option>))}
+                    </select>
                   </div>
 
                   <div className="space-y-1">
-                    <label className="text-xs font-semibold text-gray-500 uppercase">Frete Full</label>
-                    <div className="flex items-center gap-2 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg">
-                      <input id="ffull" type="checkbox" className="h-4 w-4" checked={filterFull} onChange={(e) => setFilterFull(e.target.checked)} />
-                      <label htmlFor="ffull" className="text-sm text-gray-700">Apenas pedidos Full</label>
-                    </div>
+                    <label className="text-xs font-semibold text-gray-500 uppercase">Operação</label>
+                    <select value={filterOperation} onChange={(e) => setFilterOperation(e.target.value)} className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all">
+                      <option value="">Todas</option>
+                      {operationOptions.map((c) => (<option key={c} value={c}>{c}</option>))}
+                    </select>
                   </div>
 
                   <div className="space-y-1">
@@ -2009,6 +2143,31 @@ function AssemblyManagementContent() {
                       <option value="assistencia">Assistência</option>
                     </select>
                   </div>
+
+                  <div className="space-y-1">
+                    <label className="text-xs font-semibold text-gray-500 uppercase">Retorno</label>
+                    <div className="flex items-center gap-2 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg">
+                      <input id="freturned" type="checkbox" className="h-4 w-4" checked={filterReturned} onChange={(e) => setFilterReturned(e.target.checked)} />
+                      <label htmlFor="freturned" className="text-sm text-gray-700">Apenas pedidos retornados</label>
+                    </div>
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-xs font-semibold text-gray-500 uppercase">Frete Full</label>
+                    <div className="flex items-center gap-2 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg">
+                      <input id="ffull" type="checkbox" className="h-4 w-4" checked={filterFull} onChange={(e) => setFilterFull(e.target.checked)} />
+                      <label htmlFor="ffull" className="text-sm text-gray-700">Apenas pedidos Full</label>
+                    </div>
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-xs font-semibold text-gray-500 uppercase">Tem Montagem</label>
+                    <div className="flex items-center gap-2 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg">
+                      <input id="fmont" type="checkbox" className="h-4 w-4" checked={filterHasAssembly} onChange={(e) => setFilterHasAssembly(e.target.checked)} />
+                      <label htmlFor="fmont" className="text-sm text-gray-700">Apenas produtos com Montagem</label>
+                    </div>
+                  </div>
+
                 </div>
 
                 <div className="flex justify-end mt-4 pt-4 border-t border-gray-100">
@@ -2030,6 +2189,14 @@ function AssemblyManagementContent() {
                       setFilterServiceType('');
                       setFilterDepartment([]);
                       setFilterSubgroup([]);
+                      setFilterFilialVenda('');
+                      setFilterLocalEstocagem('');
+                      setFilterSeller('');
+                      setFilterOperation('');
+                      setFilterBrand('');
+                      setFilterFreightFull('');
+                      setFilterHasAssembly(false);
+                      setStrictLocal(false);
                     }}
                     className="text-sm text-red-600 hover:text-red-800 font-medium flex items-center"
                   >
@@ -2278,6 +2445,21 @@ function AssemblyManagementContent() {
                           {status.label}
                         </button>
                       ))}
+                    </div>
+                  </div>
+
+                  {/* Search Filter */}
+                  <div className="flex items-center gap-2">
+                    <label className="hidden sm:block text-xs font-semibold text-gray-500 uppercase">Buscar:</label>
+                    <div className="relative">
+                      <Search className="absolute left-3 top-2 h-4 w-4 text-gray-400" />
+                      <input
+                        type="text"
+                        value={routeSearchQuery}
+                        onChange={(e) => setRouteSearchQuery(e.target.value)}
+                        placeholder="Rota, ID, Montador..."
+                        className="pl-9 pr-3 py-1.5 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all w-full sm:w-64"
+                      />
                     </div>
                   </div>
                 </div>
@@ -3477,7 +3659,7 @@ function AssemblyManagementContent() {
         )
       }
 
-    </div >
+    </div>
   );
 }
 

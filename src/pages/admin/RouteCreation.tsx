@@ -1342,7 +1342,7 @@ function RouteCreationContent() {
 
       let query = supabase
         .from('routes')
-        .select('*, vehicle:vehicles!vehicle_id(id,model,plate), route_orders:route_orders(*, order:orders!order_id(*)), conferences:route_conferences!route_id(id,route_id,status,result_ok,finished_at,created_at,resolved_at,resolved_by,resolution,summary)', { count: 'exact' })
+        .select('*, vehicle:vehicles!vehicle_id(id,model,plate), route_orders:route_orders(id,status), driver:drivers!driver_id(id,user:users!user_id(name)), conferences:route_conferences!route_id(id,route_id,status,result_ok,finished_at,created_at,resolved_at,resolved_by,resolution,summary)', { count: 'exact' })
         .order('created_at', { ascending: false });
 
       // Apply Date Filters
@@ -1369,6 +1369,23 @@ function RouteCreationContent() {
         query = query.in('status', statusFilter);
       }
 
+      // Apply Search Filter (Server-Side)
+      if (routeSearchQuery.trim()) {
+        const q = routeSearchQuery.trim();
+        // Check if query is a valid UUID
+        const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(q);
+
+        if (isUuid) {
+          query = query.eq('id', q);
+        } else {
+          // Search by Name or Route Code
+          // Note: searching localized driver name is hard server-side without an RPC or complex join filter. 
+          // We will search Name and Route Code server-side.
+          // Syntax for OR with ILIKE:
+          query = query.or(`name.ilike.%${q}%,route_code.ilike.%${q}%`);
+        }
+      }
+
       // Pagination
       query = query.range(from, to);
 
@@ -1392,67 +1409,23 @@ function RouteCreationContent() {
       // Current architecture fetches enrichment data *in bulk* based on the routes returned.
       // I will copy the enrichment block logic into here.
 
-      // ENRICHMENT LOGIC START
+      // ENRICHMENT LOGIC (Simplified: Map driver name and conference from nested object)
       if (processedRoutes.length > 0) {
-        const routeIds = processedRoutes.map(r => r.id).filter(Boolean);
-
-        // Enrich with route_orders
-        if (routeIds.length > 0) {
-          const { data: roBulk } = await supabase
-            .from('route_orders')
-            .select('*, order:orders!order_id(*)')
-            .in('route_id', routeIds)
-            .order('sequence');
-
-          const byRoute: Record<string, any[]> = {};
-          for (const ro of (roBulk || [])) {
-            const k = String(ro.route_id);
-            if (!byRoute[k]) byRoute[k] = [];
-            byRoute[k].push(ro);
+        for (const r of processedRoutes as any[]) {
+          // Conference sorting (if multiple returned, pick latest)
+          if (Array.isArray(r.conferences) && r.conferences.length > 0) {
+            const sorted = [...r.conferences].sort((a: any, b: any) =>
+              new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+            );
+            r.conference = sorted[0];
           }
-          for (const r of processedRoutes as any[]) {
-            const k = String(r.id);
-            r.route_orders = byRoute[k] || r.route_orders || [];
-            // Conference sorting
-            if (Array.isArray(r.conferences) && r.conferences.length > 0) {
-              const sorted = [...r.conferences].sort((a: any, b: any) =>
-                new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-              );
-              r.conference = sorted[0];
-            }
+
+          // Driver name flattening
+          if (r.driver && r.driver.user) {
+            r.driver_name = r.driver.user.name;
           }
         }
-
-        // Enrich drivers (Fetch minimal needed)
-        const driverIds = Array.from(new Set(processedRoutes.map((r: any) => r.driver_id).filter(Boolean)));
-        if (driverIds.length > 0) {
-          const { data: drvBulk } = await supabase.from('drivers').select('id, user_id, active').in('id', driverIds);
-          if (drvBulk && drvBulk.length > 0) {
-            const userIds = Array.from(new Set(drvBulk.map((d: any) => String(d.user_id)).filter(Boolean)));
-            if (userIds.length > 0) {
-              const { data: usersData } = await supabase.from('users').select('id,name').in('id', userIds);
-              const mapU = new Map<string, any>((usersData || []).map((u: any) => [String(u.id), u]));
-              const enrichedDrivers = drvBulk.map((d: any) => ({ ...d, user: mapU.get(String(d.user_id)) || null }));
-              const mapDrv = new Map<string, any>(enrichedDrivers.map((d: any) => [String(d.id), d]));
-
-              for (const r of processedRoutes as any[]) {
-                const d = mapDrv.get(String(r.driver_id));
-                if (d) {
-                  r.driver = d;
-                  r.driver_name = d?.user?.name || d?.name || '';
-                }
-              }
-            }
-          }
-        }
-
-        // Enrich vehicles
-        // For simple rendering we might rely on the joined vehicle data from the main query (vehicle:vehicles!vehicle_id)
-        // The query already has: vehicle:vehicles!vehicle_id(id,model,plate)
-        // So we just need to map it if needed, or the UI uses it directly.
-        // Existing code: maps to r.vehicle.
       }
-      // ENRICHMENT END
 
       if (resetPage) {
         setRoutesList(processedRoutes);
@@ -1476,6 +1449,14 @@ function RouteCreationContent() {
   useEffect(() => {
     fetchRoutes(true);
   }, [dateFilter, statusFilter]);
+
+  // Debounce search
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      fetchRoutes(true);
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [routeSearchQuery]);
 
   // --- DATA LOADING ---
   // This function loads data directly from Supabase with optimized parallel queries (METADATA ONLY)
@@ -2929,13 +2910,47 @@ function RouteCreationContent() {
 
                       <div className="p-4 border-t border-gray-100 bg-gray-50/50 rounded-b-xl flex gap-3">
                         <button
-                          onClick={() => {
-                            selectedRouteIdRef.current = String(route.id);
-                            localStorage.setItem('rc_selectedRouteId', String(route.id));
-                            setSelectedRoute(route);
-                            showRouteModalRef.current = true;
-                            localStorage.setItem('rc_showRouteModal', '1');
-                            setShowRouteModal(true);
+                          onClick={async () => {
+                            const toastId = toast.loading('Carregando detalhes da rota...');
+                            try {
+                              // Fetch Full Route Details On-Demand
+                              const { data, error } = await supabase
+                                .from('routes')
+                                .select(`*, driver:drivers!driver_id(*, user:users!user_id(*)), vehicle:vehicles!vehicle_id(*), route_orders(*, order:orders!order_id(*))`)
+                                .eq('id', route.id)
+                                .single();
+
+                              if (error) throw error;
+
+                              // Sort route orders by sequence manually since nested ordering can be tricky
+                              if (data && data.route_orders) {
+                                (data.route_orders as any[]).sort((a, b) => (a.sequence || 0) - (b.sequence || 0));
+
+                                // Enrich conference if needed (though main query didn't fetch it here, let's keep it simple or fetch if missing)
+                                // Actually the list route object has 'conferences' property populated from the list query.
+                                // We should merge or preserve it, OR fetch it again. 
+                                // The best way is to fetch it again or merge. 
+                                // For simplicity/speed, let's just fetch it in the query above if we can, or just omit if not critical for modal?
+                                // Modal likely uses conference status. 
+                                // Let's adding conferences to the query above.
+                              }
+
+                              // Re-fetch conference specifically to be safe
+                              const { data: confData } = await supabase.from('route_conferences').select('*').eq('route_id', route.id).order('created_at', { ascending: false }).limit(1).maybeSingle();
+
+                              const finalRoute = { ...data, conference: confData || null };
+
+                              selectedRouteIdRef.current = String(route.id);
+                              localStorage.setItem('rc_selectedRouteId', String(route.id));
+                              setSelectedRoute(finalRoute as any);
+                              showRouteModalRef.current = true;
+                              localStorage.setItem('rc_showRouteModal', '1');
+                              setShowRouteModal(true);
+                              toast.dismiss(toastId);
+                            } catch (err) {
+                              console.error(err);
+                              toast.error('Erro ao carregar detalhes da rota', { id: toastId });
+                            }
                           }}
                           className="flex-1 inline-flex items-center justify-center px-4 py-2 bg-white border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors shadow-sm"
                         >
