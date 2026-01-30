@@ -219,7 +219,7 @@ export class DeliverySheetGenerator {
         const perLine = 14;
         notesHeightPre = notesHeaderH + (linesCount * perLine) + 8; // header + lines + gap
       }
-      const staticTopHeights = 16 + 14 + 14; // Item/Vendedor, Romaneio/Telefone, Cliente/Pedido
+      const staticTopHeights = 16 + 14 + 14 + 14; // Item/Vendedor, Romaneio/Telefone, Cliente/Pedido, Data Venda/Previsão (ambos têm a linha agora)
       const observacaoInternaLabel = 10; // "Observação Interna:" label spacing
       const afterTableSpacing = 24; // gap after table before date
       const totalBlockHeight = staticTopHeights
@@ -265,6 +265,54 @@ export class DeliverySheetGenerator {
       this.drawText(page, pedLabel, rightColX, y, { font: helveticaBoldFont, size: 10, color: { r: 0, g: 0, b: 0 } });
       this.drawText(page, String(order.order_id_erp || ''), rightColX + pedLabelW, y, { font: helveticaFont, size: 10, color: { r: 0, g: 0, b: 0 } });
       y -= 14;
+      // Data de Venda e Previsão na mesma linha
+      if (isAssemblySheet) {
+        // Data de Venda
+        const dataVenda = (order as any).data_venda
+          || (order as any).raw_json?.data_venda
+          || (order as any).raw_json?.data_emissao
+          || '';
+        const dataVendaFormatted = DeliverySheetGenerator.formatDateBR(dataVenda);
+        const dataVendaLabel = 'Data Venda: ';
+        const dataVendaLabelW = helveticaBoldFont.widthOfTextAtSize(dataVendaLabel, 10);
+        this.drawText(page, dataVendaLabel, margin, y, { font: helveticaBoldFont, size: 10, color: { r: 0, g: 0, b: 0 } });
+        this.drawText(page, dataVendaFormatted || '-', margin + dataVendaLabelW, y, { font: helveticaFont, size: 10, color: { r: 0, g: 0, b: 0 } });
+
+        // Previsão de Montagem (na mesma linha, à direita)
+        const prevMontagem = (order as any).previsao_montagem
+          || (order as any).previsao_entrega
+          || (order as any).raw_json?.previsao_montagem
+          || (order as any).raw_json?.previsao_entrega
+          || '';
+        const prevMontagemFormatted = DeliverySheetGenerator.formatDateBR(prevMontagem);
+        const prevLabel = 'Prev. Montagem: ';
+        const prevLabelW = helveticaBoldFont.widthOfTextAtSize(prevLabel, 10);
+        this.drawText(page, prevLabel, rightColX, y, { font: helveticaBoldFont, size: 10, color: { r: 0, g: 0, b: 0 } });
+        this.drawText(page, prevMontagemFormatted || '-', rightColX + prevLabelW, y, { font: helveticaFont, size: 10, color: { r: 0, g: 0, b: 0 } });
+        y -= 14;
+      } else {
+        // Romaneio de Entrega: Data de Venda e Previsão de Entrega
+        const dataVenda = (order as any).data_venda
+          || (order as any).raw_json?.data_venda
+          || (order as any).raw_json?.data_emissao
+          || '';
+        const dataVendaFormatted = DeliverySheetGenerator.formatDateBR(dataVenda);
+        const dataVendaLabel = 'Data Venda: ';
+        const dataVendaLabelW = helveticaBoldFont.widthOfTextAtSize(dataVendaLabel, 10);
+        this.drawText(page, dataVendaLabel, margin, y, { font: helveticaBoldFont, size: 10, color: { r: 0, g: 0, b: 0 } });
+        this.drawText(page, dataVendaFormatted || '-', margin + dataVendaLabelW, y, { font: helveticaFont, size: 10, color: { r: 0, g: 0, b: 0 } });
+
+        // Previsão de Entrega (na mesma linha, à direita)
+        const prevEntrega = (order as any).previsao_entrega
+          || (order as any).raw_json?.previsao_entrega
+          || '';
+        const prevEntregaFormatted = DeliverySheetGenerator.formatDateBR(prevEntrega);
+        const prevLabel = 'Prev. Entrega: ';
+        const prevLabelW = helveticaBoldFont.widthOfTextAtSize(prevLabel, 10);
+        this.drawText(page, prevLabel, rightColX, y, { font: helveticaBoldFont, size: 10, color: { r: 0, g: 0, b: 0 } });
+        this.drawText(page, prevEntregaFormatted || '-', rightColX + prevLabelW, y, { font: helveticaFont, size: 10, color: { r: 0, g: 0, b: 0 } });
+        y -= 14;
+      }
       // Endereço com label em negrito
       const labelEnd = 'Endereço: ';
       const lew = helveticaBoldFont.widthOfTextAtSize(labelEnd, 10);

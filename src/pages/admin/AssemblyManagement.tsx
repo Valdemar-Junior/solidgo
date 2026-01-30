@@ -186,6 +186,10 @@ function AssemblyManagementContent() {
   const [launchPreviewData, setLaunchPreviewData] = useState<any[] | null>(null); // New: Store fetched data for preview
   const [selectedPreviewIndices, setSelectedPreviewIndices] = useState<Set<string>>(new Set()); // New: Track selected products
 
+  // --- PDF SORT OPTIONS MODAL ---
+  const [showPdfSortModal, setShowPdfSortModal] = useState(false);
+  const [pdfSortOption, setPdfSortOption] = useState<'data_venda' | 'cidade' | 'previsao_montagem' | 'cliente'>('data_venda');
+
 
   // Filters
   const [filterCity, setFilterCity] = useState<string[]>([]);
@@ -2966,24 +2970,7 @@ function AssemblyManagementContent() {
                       </>
                     )}
                     <button
-                      onClick={async () => {
-                        try {
-                          if (!selectedRoute) return;
-                          const route = selectedRoute as any;
-                          const products = assemblyInRoutes.filter(ap => ap.assembly_route_id === route.id);
-                          const orders = products.map(p => p.order).filter(Boolean) as any[];
-                          const routeOrders = products.map((p, idx) => ({ id: String(p.id), route_id: String(route.id), order_id: String(p.order_id), sequence: idx + 1, status: 'pending', created_at: route.created_at, updated_at: route.updated_at })) as any[];
-                          const routeData: any = { id: route.id, name: route.name, driver_id: '', vehicle_id: '', conferente: '', observations: route.observations, status: route.status as any, created_at: route.created_at, updated_at: route.updated_at, route_code: (route as any).route_code };
-                          const m = montadores.find(m => m.id === (route as any).assembler_id);
-                          const v = vehicles.find(v => v.id === (route as any).vehicle_id);
-                          const data = { route: routeData, routeOrders, driver: { id: '', user_id: '', cpf: '', active: true, name: '—', user: { id: '', email: '', name: '—', role: 'driver', created_at: new Date().toISOString() } } as any, vehicle: undefined, orders: orders as any, generatedAt: new Date().toISOString(), assemblyInstallerName: m?.name || m?.email || '—', assemblyVehicleModel: v?.model || '', assemblyVehiclePlate: v?.plate || '' };
-                          const pdfBytes = await DeliverySheetGenerator.generateDeliverySheet(data, 'Romaneio de Montagem');
-                          DeliverySheetGenerator.openPDFInNewTab(pdfBytes);
-                        } catch (e) {
-                          console.error(e);
-                          toast.error('Erro ao gerar PDF do romaneio');
-                        }
-                      }}
+                      onClick={() => setShowPdfSortModal(true)}
                       className="inline-flex items-center px-3 py-2 border border-blue-200 shadow-sm text-sm font-medium rounded-lg text-blue-700 bg-blue-50 hover:bg-blue-100"
                     >
                       <FileText className="h-4 w-4 mr-2" /> PDF
@@ -3658,6 +3645,177 @@ function AssemblyManagementContent() {
           </div>
         )
       }
+
+      {/* Modal de Ordenação do PDF */}
+      {showPdfSortModal && selectedRoute && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 overflow-hidden">
+            <div className="bg-gradient-to-r from-blue-600 to-blue-700 px-6 py-4">
+              <h3 className="text-lg font-bold text-white">Gerar Romaneio de Montagem</h3>
+              <p className="text-blue-100 text-sm">Escolha a ordenação dos pedidos</p>
+            </div>
+            <div className="p-6 space-y-4">
+              <div className="space-y-3">
+                <label className="flex items-center p-3 border rounded-lg cursor-pointer hover:bg-gray-50 transition-colors">
+                  <input
+                    type="radio"
+                    name="pdfSort"
+                    value="data_venda"
+                    checked={pdfSortOption === 'data_venda'}
+                    onChange={() => setPdfSortOption('data_venda')}
+                    className="w-4 h-4 text-blue-600 border-gray-300 focus:ring-blue-500"
+                  />
+                  <div className="ml-3">
+                    <span className="font-medium text-gray-900">Por Data de Venda</span>
+                    <p className="text-sm text-gray-500">Da mais antiga para a mais recente</p>
+                  </div>
+                </label>
+                <label className="flex items-center p-3 border rounded-lg cursor-pointer hover:bg-gray-50 transition-colors">
+                  <input
+                    type="radio"
+                    name="pdfSort"
+                    value="cidade"
+                    checked={pdfSortOption === 'cidade'}
+                    onChange={() => setPdfSortOption('cidade')}
+                    className="w-4 h-4 text-blue-600 border-gray-300 focus:ring-blue-500"
+                  />
+                  <div className="ml-3">
+                    <span className="font-medium text-gray-900">Por Cidade</span>
+                    <p className="text-sm text-gray-500">Ordem alfabética (A-Z)</p>
+                  </div>
+                </label>
+                <label className="flex items-center p-3 border rounded-lg cursor-pointer hover:bg-gray-50 transition-colors">
+                  <input
+                    type="radio"
+                    name="pdfSort"
+                    value="previsao_montagem"
+                    checked={pdfSortOption === 'previsao_montagem'}
+                    onChange={() => setPdfSortOption('previsao_montagem')}
+                    className="w-4 h-4 text-blue-600 border-gray-300 focus:ring-blue-500"
+                  />
+                  <div className="ml-3">
+                    <span className="font-medium text-gray-900">Por Previsão de Montagem</span>
+                    <p className="text-sm text-gray-500">Da mais antiga para a mais recente</p>
+                  </div>
+                </label>
+                <label className="flex items-center p-3 border rounded-lg cursor-pointer hover:bg-gray-50 transition-colors">
+                  <input
+                    type="radio"
+                    name="pdfSort"
+                    value="cliente"
+                    checked={pdfSortOption === 'cliente'}
+                    onChange={() => setPdfSortOption('cliente')}
+                    className="w-4 h-4 text-blue-600 border-gray-300 focus:ring-blue-500"
+                  />
+                  <div className="ml-3">
+                    <span className="font-medium text-gray-900">Por Cliente</span>
+                    <p className="text-sm text-gray-500">Ordem alfabética (A-Z)</p>
+                  </div>
+                </label>
+              </div>
+            </div>
+            <div className="px-6 py-4 bg-gray-50 flex justify-end gap-3">
+              <button
+                onClick={() => setShowPdfSortModal(false)}
+                className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={async () => {
+                  try {
+                    if (!selectedRoute) return;
+                    const route = selectedRoute as any;
+                    const products = assemblyInRoutes.filter(ap => ap.assembly_route_id === route.id);
+                    let orders = products.map(p => p.order).filter(Boolean) as any[];
+
+                    // Ordenar pedidos conforme opção selecionada
+                    const parseDate = (d: any) => {
+                      if (!d) return new Date(0);
+                      try { return new Date(d); } catch { return new Date(0); }
+                    };
+
+                    if (pdfSortOption === 'data_venda') {
+                      orders.sort((a, b) => {
+                        const dateA = parseDate(a.data_venda || a.raw_json?.data_venda);
+                        const dateB = parseDate(b.data_venda || b.raw_json?.data_venda);
+                        return dateA.getTime() - dateB.getTime();
+                      });
+                    } else if (pdfSortOption === 'cidade') {
+                      orders.sort((a, b) => {
+                        const cityA = (a.address_json?.city || a.raw_json?.cidade || '').toLowerCase();
+                        const cityB = (b.address_json?.city || b.raw_json?.cidade || '').toLowerCase();
+                        return cityA.localeCompare(cityB);
+                      });
+                    } else if (pdfSortOption === 'previsao_montagem') {
+                      orders.sort((a, b) => {
+                        const dateA = parseDate(a.previsao_montagem || a.previsao_entrega || a.raw_json?.previsao_montagem || a.raw_json?.previsao_entrega);
+                        const dateB = parseDate(b.previsao_montagem || b.previsao_entrega || b.raw_json?.previsao_montagem || b.raw_json?.previsao_entrega);
+                        return dateA.getTime() - dateB.getTime();
+                      });
+                    } else if (pdfSortOption === 'cliente') {
+                      orders.sort((a, b) => {
+                        const clientA = (a.customer_name || a.raw_json?.nome_cliente || '').toLowerCase();
+                        const clientB = (b.customer_name || b.raw_json?.nome_cliente || '').toLowerCase();
+                        return clientA.localeCompare(clientB);
+                      });
+                    }
+
+                    // Criar routeOrders na ordem dos orders ordenados
+                    const routeOrders = orders.map((order, idx) => {
+                      const product = products.find(p => p.order_id === order.id);
+                      return {
+                        id: String(product?.id || ''),
+                        route_id: String(route.id),
+                        order_id: String(order.id),
+                        sequence: idx + 1,
+                        status: 'pending',
+                        created_at: route.created_at,
+                        updated_at: route.updated_at
+                      };
+                    }) as any[];
+
+                    const routeData: any = {
+                      id: route.id,
+                      name: route.name,
+                      driver_id: '',
+                      vehicle_id: '',
+                      conferente: '',
+                      observations: route.observations,
+                      status: route.status as any,
+                      created_at: route.created_at,
+                      updated_at: route.updated_at,
+                      route_code: (route as any).route_code
+                    };
+                    const m = montadores.find(m => m.id === (route as any).assembler_id);
+                    const v = vehicles.find(v => v.id === (route as any).vehicle_id);
+                    const data = {
+                      route: routeData,
+                      routeOrders,
+                      driver: { id: '', user_id: '', cpf: '', active: true, name: '—', user: { id: '', email: '', name: '—', role: 'driver', created_at: new Date().toISOString() } } as any,
+                      vehicle: undefined,
+                      orders: orders as any,
+                      generatedAt: new Date().toISOString(),
+                      assemblyInstallerName: m?.name || m?.email || '—',
+                      assemblyVehicleModel: v?.model || '',
+                      assemblyVehiclePlate: v?.plate || ''
+                    };
+                    const pdfBytes = await DeliverySheetGenerator.generateDeliverySheet(data, 'Romaneio de Montagem');
+                    DeliverySheetGenerator.openPDFInNewTab(pdfBytes);
+                    setShowPdfSortModal(false);
+                  } catch (e) {
+                    console.error(e);
+                    toast.error('Erro ao gerar PDF do romaneio');
+                  }
+                }}
+                className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700"
+              >
+                Gerar PDF
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   );

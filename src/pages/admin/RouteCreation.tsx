@@ -176,6 +176,10 @@ function RouteCreationContent() {
   const isLoadingRef = useRef(false);
   const isMountedRef = useRef(true);
 
+  // --- PDF SORT OPTIONS MODAL ---
+  const [showPdfSortModal, setShowPdfSortModal] = useState(false);
+  const [pdfSortOption, setPdfSortOption] = useState<'data_venda' | 'cidade' | 'previsao_entrega' | 'cliente'>('data_venda');
+
   // Filters
   const [filterCity, setFilterCity] = useState<string>('');
   const [filterNeighborhood, setFilterNeighborhood] = useState<string>('');
@@ -4325,105 +4329,7 @@ function RouteCreationContent() {
 
                     {/* PDF Romaneio Button */}
                     <button
-                      onClick={async () => {
-                        try {
-                          const route = selectedRoute as any;
-                          const { data: roData, error: roErr } = await supabase.from('route_orders').select('*, order:orders(*)').eq('route_id', route.id).order('sequence');
-                          if (roErr) throw roErr;
-                          const routeOrders = (roData || []).map((ro: any) => ({
-                            id: ro.id, route_id: ro.route_id, order_id: ro.order_id, sequence: ro.sequence, status: ro.status, created_at: ro.created_at, updated_at: ro.updated_at,
-                          }));
-                          const orders = (roData || []).map((ro: any) => {
-                            const o = ro.order || {};
-                            const address = o.address_json || {};
-                            const itemsRaw = Array.isArray(o.items_json) ? o.items_json : [];
-                            const prodLoc = o.raw_json?.produtos_locais || [];
-                            const norm = (s: any) => String(s ?? '').toLowerCase().trim();
-                            const items = itemsRaw.map((it: any, idx: number) => {
-                              if (it && !it.location) {
-                                let loc = '';
-                                if (Array.isArray(prodLoc) && prodLoc.length > 0) {
-                                  const byCode = prodLoc.find((p: any) => norm(p?.codigo_produto) === norm(it?.sku));
-                                  const byName = prodLoc.find((p: any) => norm(p?.nome_produto) === norm(it?.name));
-                                  if (byCode?.local_estocagem) loc = String(byCode.local_estocagem);
-                                  else if (byName?.local_estocagem) loc = String(byName.local_estocagem);
-                                  else if (prodLoc[idx]?.local_estocagem) loc = String(prodLoc[idx].local_estocagem);
-                                  else if (prodLoc[0]?.local_estocagem) loc = String(prodLoc[0].local_estocagem);
-                                }
-                                return { ...it, location: loc };
-                              }
-                              return it;
-                            });
-                            return {
-                              id: o.id || ro.order_id,
-                              order_id_erp: String(o.order_id_erp || ro.order_id || ''),
-                              customer_name: String(o.customer_name || (o.raw_json?.nome_cliente ?? '')),
-                              phone: String(o.phone || (o.raw_json?.cliente_celular ?? '')),
-                              address_json: {
-                                street: String(address.street || o.raw_json?.destinatario_endereco || ''),
-                                neighborhood: String(address.neighborhood || o.raw_json?.destinatario_bairro || ''),
-                                city: String(address.city || o.raw_json?.destinatario_cidade || ''),
-                                state: String(address.state || ''),
-                                zip: String(address.zip || o.raw_json?.destinatario_cep || ''),
-                                complement: address.complement || o.raw_json?.destinatario_complemento || '',
-                              },
-                              items_json: items,
-                              raw_json: o.raw_json || null,
-                              total: Number(o.total || 0),
-                              status: o.status || 'imported',
-                              observations: o.observations || '',
-                              created_at: o.created_at || new Date().toISOString(),
-                              updated_at: o.updated_at || new Date().toISOString(),
-                            } as any;
-                          });
-                          let driverObj = route.driver;
-                          if (!driverObj) {
-                            const { data: dData } = await supabase.from('drivers').select('*, user:users!user_id(*)').eq('id', route.driver_id).single();
-                            driverObj = dData || null;
-                          }
-                          let vehicleObj = route.vehicle;
-                          if (!vehicleObj && route.vehicle_id) {
-                            const { data: vData } = await supabase.from('vehicles').select('*').eq('id', route.vehicle_id).single();
-                            vehicleObj = vData || null;
-                          }
-                          // Resolve team and helper names
-                          let teamName = '';
-                          let helperName = '';
-
-                          if (route.team_id) {
-                            const t = teams.find((x: any) => String(x.id) === String(route.team_id));
-                            if (t) teamName = t.name;
-                            else {
-                              const { data: tData } = await supabase.from('teams_user').select('name').eq('id', route.team_id).single();
-                              if (tData) teamName = tData.name;
-                            }
-                          }
-
-                          if (route.helper_id) {
-                            const h = helpers.find((x: any) => String(x.id) === String(route.helper_id));
-                            if (h) helperName = h.name;
-                            else {
-                              const { data: hData } = await supabase.from('users').select('name').eq('id', route.helper_id).single();
-                              if (hData) helperName = hData.name;
-                            }
-                          }
-
-                          const data = {
-                            route: { id: route.id, name: route.name, route_code: (route as any).route_code, driver_id: route.driver_id, vehicle_id: route.vehicle_id, conferente: route.conferente, observations: route.observations, status: route.status, created_at: route.created_at, updated_at: route.updated_at, },
-                            routeOrders,
-                            driver: driverObj || { id: '', user_id: '', cpf: '', active: true, user: { id: '', email: '', name: '', role: 'driver', created_at: '' } },
-                            vehicle: vehicleObj || undefined,
-                            orders,
-                            generatedAt: new Date().toISOString(),
-                            teamName,
-                            helperName,
-                          };
-                          const pdfBytes = await DeliverySheetGenerator.generateDeliverySheet(data);
-                          DeliverySheetGenerator.openPDFInNewTab(pdfBytes);
-                        } catch (e: any) {
-                          toast.error('Erro ao gerar romaneio em PDF');
-                        }
-                      }}
+                      onClick={() => setShowPdfSortModal(true)}
                       className="flex items-center justify-center px-4 py-2 bg-blue-50 text-blue-700 hover:bg-blue-100 rounded-lg font-medium text-sm transition-colors border border-blue-200"
                     >
                       <FileText className="h-4 w-4 mr-2" /> Romaneio
@@ -5065,6 +4971,237 @@ function RouteCreationContent() {
           </div>
         )
       }
+
+      {/* Modal de Ordenação do PDF */}
+      {showPdfSortModal && selectedRoute && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 overflow-hidden">
+            <div className="bg-gradient-to-r from-blue-600 to-blue-700 px-6 py-4">
+              <h3 className="text-lg font-bold text-white">Gerar Romaneio de Entrega</h3>
+              <p className="text-blue-100 text-sm">Escolha a ordenação dos pedidos</p>
+            </div>
+            <div className="p-6 space-y-4">
+              <div className="space-y-3">
+                <label className="flex items-center p-3 border rounded-lg cursor-pointer hover:bg-gray-50 transition-colors">
+                  <input
+                    type="radio"
+                    name="pdfSort"
+                    value="data_venda"
+                    checked={pdfSortOption === 'data_venda'}
+                    onChange={() => setPdfSortOption('data_venda')}
+                    className="w-4 h-4 text-blue-600 border-gray-300 focus:ring-blue-500"
+                  />
+                  <div className="ml-3">
+                    <span className="font-medium text-gray-900">Por Data de Venda</span>
+                    <p className="text-sm text-gray-500">Da mais antiga para a mais recente</p>
+                  </div>
+                </label>
+                <label className="flex items-center p-3 border rounded-lg cursor-pointer hover:bg-gray-50 transition-colors">
+                  <input
+                    type="radio"
+                    name="pdfSort"
+                    value="cidade"
+                    checked={pdfSortOption === 'cidade'}
+                    onChange={() => setPdfSortOption('cidade')}
+                    className="w-4 h-4 text-blue-600 border-gray-300 focus:ring-blue-500"
+                  />
+                  <div className="ml-3">
+                    <span className="font-medium text-gray-900">Por Cidade</span>
+                    <p className="text-sm text-gray-500">Ordem alfabética (A-Z)</p>
+                  </div>
+                </label>
+                <label className="flex items-center p-3 border rounded-lg cursor-pointer hover:bg-gray-50 transition-colors">
+                  <input
+                    type="radio"
+                    name="pdfSort"
+                    value="previsao_entrega"
+                    checked={pdfSortOption === 'previsao_entrega'}
+                    onChange={() => setPdfSortOption('previsao_entrega')}
+                    className="w-4 h-4 text-blue-600 border-gray-300 focus:ring-blue-500"
+                  />
+                  <div className="ml-3">
+                    <span className="font-medium text-gray-900">Por Previsão de Entrega</span>
+                    <p className="text-sm text-gray-500">Da mais antiga para a mais recente</p>
+                  </div>
+                </label>
+                <label className="flex items-center p-3 border rounded-lg cursor-pointer hover:bg-gray-50 transition-colors">
+                  <input
+                    type="radio"
+                    name="pdfSort"
+                    value="cliente"
+                    checked={pdfSortOption === 'cliente'}
+                    onChange={() => setPdfSortOption('cliente')}
+                    className="w-4 h-4 text-blue-600 border-gray-300 focus:ring-blue-500"
+                  />
+                  <div className="ml-3">
+                    <span className="font-medium text-gray-900">Por Cliente</span>
+                    <p className="text-sm text-gray-500">Ordem alfabética (A-Z)</p>
+                  </div>
+                </label>
+              </div>
+            </div>
+            <div className="px-6 py-4 bg-gray-50 flex justify-end gap-3">
+              <button
+                onClick={() => setShowPdfSortModal(false)}
+                className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={async () => {
+                  try {
+                    const route = selectedRoute as any;
+                    const { data: roData, error: roErr } = await supabase.from('route_orders').select('*, order:orders(*)').eq('route_id', route.id).order('sequence');
+                    if (roErr) throw roErr;
+
+                    let orders = (roData || []).map((ro: any) => {
+                      const o = ro.order || {};
+                      const address = o.address_json || {};
+                      const itemsRaw = Array.isArray(o.items_json) ? o.items_json : [];
+                      const prodLoc = o.raw_json?.produtos_locais || [];
+                      const norm = (s: any) => String(s ?? '').toLowerCase().trim();
+                      const items = itemsRaw.map((it: any, idx: number) => {
+                        if (it && !it.location) {
+                          let loc = '';
+                          if (Array.isArray(prodLoc) && prodLoc.length > 0) {
+                            const byCode = prodLoc.find((p: any) => norm(p?.codigo_produto) === norm(it?.sku));
+                            const byName = prodLoc.find((p: any) => norm(p?.nome_produto) === norm(it?.name));
+                            if (byCode?.local_estocagem) loc = String(byCode.local_estocagem);
+                            else if (byName?.local_estocagem) loc = String(byName.local_estocagem);
+                            else if (prodLoc[idx]?.local_estocagem) loc = String(prodLoc[idx].local_estocagem);
+                            else if (prodLoc[0]?.local_estocagem) loc = String(prodLoc[0].local_estocagem);
+                          }
+                          return { ...it, location: loc };
+                        }
+                        return it;
+                      });
+                      return {
+                        id: o.id || ro.order_id,
+                        order_id_erp: String(o.order_id_erp || ro.order_id || ''),
+                        customer_name: String(o.customer_name || (o.raw_json?.nome_cliente ?? '')),
+                        phone: String(o.phone || (o.raw_json?.cliente_celular ?? '')),
+                        address_json: {
+                          street: String(address.street || o.raw_json?.destinatario_endereco || ''),
+                          neighborhood: String(address.neighborhood || o.raw_json?.destinatario_bairro || ''),
+                          city: String(address.city || o.raw_json?.destinatario_cidade || ''),
+                          state: String(address.state || ''),
+                          zip: String(address.zip || o.raw_json?.destinatario_cep || ''),
+                          complement: address.complement || o.raw_json?.destinatario_complemento || '',
+                        },
+                        items_json: items,
+                        raw_json: o.raw_json || null,
+                        data_venda: o.data_venda || o.raw_json?.data_venda,
+                        previsao_entrega: o.previsao_entrega || o.raw_json?.previsao_entrega,
+                        total: Number(o.total || 0),
+                        status: o.status || 'imported',
+                        observations: o.observations || '',
+                        created_at: o.created_at || new Date().toISOString(),
+                        updated_at: o.updated_at || new Date().toISOString(),
+                      } as any;
+                    });
+
+                    // Ordenar pedidos conforme opção selecionada
+                    const parseDate = (d: any) => {
+                      if (!d) return new Date(0);
+                      try { return new Date(d); } catch { return new Date(0); }
+                    };
+
+                    if (pdfSortOption === 'data_venda') {
+                      orders.sort((a, b) => {
+                        const dateA = parseDate(a.data_venda || a.raw_json?.data_venda);
+                        const dateB = parseDate(b.data_venda || b.raw_json?.data_venda);
+                        return dateA.getTime() - dateB.getTime();
+                      });
+                    } else if (pdfSortOption === 'cidade') {
+                      orders.sort((a, b) => {
+                        const cityA = (a.address_json?.city || a.raw_json?.cidade || '').toLowerCase();
+                        const cityB = (b.address_json?.city || b.raw_json?.cidade || '').toLowerCase();
+                        return cityA.localeCompare(cityB);
+                      });
+                    } else if (pdfSortOption === 'previsao_entrega') {
+                      orders.sort((a, b) => {
+                        const dateA = parseDate(a.previsao_entrega || a.raw_json?.previsao_entrega);
+                        const dateB = parseDate(b.previsao_entrega || b.raw_json?.previsao_entrega);
+                        return dateA.getTime() - dateB.getTime();
+                      });
+                    } else if (pdfSortOption === 'cliente') {
+                      orders.sort((a, b) => {
+                        const clientA = (a.customer_name || a.raw_json?.nome_cliente || '').toLowerCase();
+                        const clientB = (b.customer_name || b.raw_json?.nome_cliente || '').toLowerCase();
+                        return clientA.localeCompare(clientB);
+                      });
+                    }
+
+                    // Criar routeOrders na ordem dos orders ordenados
+                    const routeOrders = orders.map((order, idx) => {
+                      const ro = (roData || []).find((r: any) => r.order_id === order.id || r.order?.id === order.id);
+                      return {
+                        id: ro?.id || '',
+                        route_id: ro?.route_id || route.id,
+                        order_id: order.id,
+                        sequence: idx + 1,
+                        status: ro?.status || 'pending',
+                        created_at: ro?.created_at || route.created_at,
+                        updated_at: ro?.updated_at || route.updated_at,
+                      };
+                    });
+
+                    let driverObj = route.driver;
+                    if (!driverObj) {
+                      const { data: dData } = await supabase.from('drivers').select('*, user:users!user_id(*)').eq('id', route.driver_id).single();
+                      driverObj = dData || null;
+                    }
+                    let vehicleObj = route.vehicle;
+                    if (!vehicleObj && route.vehicle_id) {
+                      const { data: vData } = await supabase.from('vehicles').select('*').eq('id', route.vehicle_id).single();
+                      vehicleObj = vData || null;
+                    }
+
+                    let teamName = '';
+                    let helperName = '';
+                    if (route.team_id) {
+                      const t = teams.find((x: any) => String(x.id) === String(route.team_id));
+                      if (t) teamName = t.name;
+                      else {
+                        const { data: tData } = await supabase.from('teams_user').select('name').eq('id', route.team_id).single();
+                        if (tData) teamName = tData.name;
+                      }
+                    }
+                    if (route.helper_id) {
+                      const h = helpers.find((x: any) => String(x.id) === String(route.helper_id));
+                      if (h) helperName = h.name;
+                      else {
+                        const { data: hData } = await supabase.from('users').select('name').eq('id', route.helper_id).single();
+                        if (hData) helperName = hData.name;
+                      }
+                    }
+
+                    const data = {
+                      route: { id: route.id, name: route.name, route_code: (route as any).route_code, driver_id: route.driver_id, vehicle_id: route.vehicle_id, conferente: route.conferente, observations: route.observations, status: route.status, created_at: route.created_at, updated_at: route.updated_at },
+                      routeOrders,
+                      driver: driverObj || { id: '', user_id: '', cpf: '', active: true, user: { id: '', email: '', name: '', role: 'driver', created_at: '' } },
+                      vehicle: vehicleObj || undefined,
+                      orders,
+                      generatedAt: new Date().toISOString(),
+                      teamName,
+                      helperName,
+                    };
+                    const pdfBytes = await DeliverySheetGenerator.generateDeliverySheet(data);
+                    DeliverySheetGenerator.openPDFInNewTab(pdfBytes);
+                    setShowPdfSortModal(false);
+                  } catch (e: any) {
+                    console.error(e);
+                    toast.error('Erro ao gerar romaneio em PDF');
+                  }
+                }}
+                className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700"
+              >
+                Gerar PDF
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
     </div >
   );
