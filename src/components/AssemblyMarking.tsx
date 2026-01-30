@@ -13,6 +13,8 @@ const FALLBACK_RETURN_REASONS: ReturnReason[] = [
   { id: '3', reason: 'Cliente sem contato', type: 'both' },
   { id: '4', reason: 'Cliente recusou / cancelou', type: 'both' },
   { id: '5', reason: 'Horário excedido', type: 'both' },
+  { id: '6', reason: 'Próxima rota', type: 'both' },
+  { id: '7', reason: 'Cliente vai avisar', type: 'both' },
   { id: '99', reason: 'Outro', type: 'both' }
 ];
 
