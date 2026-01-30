@@ -337,27 +337,12 @@ function AssemblyManagementContent() {
     loadColumnsFromSupabase();
   }, [authUser?.id]);
 
-  // Restore persisted selections and scroll position (original logic)
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem('am_selectedOrders');
-      if (saved) {
-        const arr = JSON.parse(saved);
-        if (Array.isArray(arr)) setSelectedOrders(new Set(arr.map(String)));
-      }
-      const rid = localStorage.getItem('am_selectedRouteId');
-      const showCreatePref = localStorage.getItem('am_showCreateModal');
-      const showRoutePref = localStorage.getItem('am_showRouteModal');
-      if (showCreatePref === '1') setShowCreateModal(true);
-      if (showRoutePref === '1' && rid) {
-        const found = (assemblyRoutes || []).find(r => String(r.id) === String(rid));
-        setSelectedRoute(found || null);
-        setShowRouteModal(true);
-      }
-      const sLeft = Number(localStorage.getItem('am_productsScrollLeft') || '0');
-      if (productsScrollRef.current && sLeft > 0) productsScrollRef.current.scrollLeft = sLeft;
-    } catch { }
-  }, []);
+  // NOTE: States like selectedOrders, selectedRoute, showCreateModal, showRouteModal
+  // are intentionally NOT restored from localStorage on component mount.
+  // User requested: when entering the screen, nothing should be pre-selected or pre-opened.
+
+  // We still persist selectedOrders for in-session use (e.g., if user switches tabs within the app)
+  // but DO NOT restore on fresh page load. The useEffect below only saves, not restores.
 
   useEffect(() => {
     try { localStorage.setItem('am_selectedOrders', JSON.stringify(Array.from(selectedOrders))); } catch { }
