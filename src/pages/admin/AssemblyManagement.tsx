@@ -1512,56 +1512,22 @@ function AssemblyManagementContent() {
         }
 
         // --- FILTER PRODUCTS BASED ON SELECTION ---
-        const addressJson = {
-          street: getVal(o.destinatario_endereco),
-          neighborhood: getVal(o.destinatario_bairro),
-          city: getVal(o.destinatario_cidade),
-          state: '',
-          zip: pickZip(o),
-          complement: getVal(o.destinatario_complemento)
-        };
+        // Apenas para log/feedback visual, já que o trigger do banco criará os assembly_products
+        // baseados no update do items_json que fizemos acima.
 
-        // Filter ONLY selected products for assembly_products table
-        const assemblyProducts: any[] = [];
+        // Calcular quantos produtos teoricamente seriam criados para feedback
+        const selectedProducts = produtos.filter((p: any) => selectedPreviewIndices.has(p._selectionKey));
+        let countForThisOrder = 0;
 
-        produtos.filter((p: any) => {
-          // Must be selected
-          return selectedPreviewIndices.has(p._selectionKey);
-        }).forEach((p: any) => {
-          // Determine quantity for this product
-          // Try 'quantidade_comprada', 'quantidade', or 'quantidade_volumes'
+        selectedProducts.forEach((p: any) => {
           const qty = Math.max(1, Number(p.quantidade_comprada ?? p.quantidade ?? p.quantidade_volumes ?? 1));
-
-          // Generate MULTIPLE rows based on quantity (as table has no qty column)
-          for (let i = 0; i < qty; i++) {
-            assemblyProducts.push({
-              order_id: orderId,
-              product_name: getVal(p.nome_produto) || 'Produto sem nome',
-              product_sku: getVal(p.codigo_produto) || null,
-              customer_name: getVal(o.nome_cliente),
-              customer_phone: getVal(o.cliente_celular),
-              installation_address: addressJson,
-              status: 'pending',
-              created_at: now,
-              updated_at: now,
-              import_source: 'avulsa',
-            });
-          }
+          countForThisOrder += qty;
         });
 
-        if (assemblyProducts.length > 0) {
-          const { error: assemblyError } = await supabase
-            .from('assembly_products')
-            .insert(assemblyProducts);
-
-          if (assemblyError) {
-            console.error('Erro ao inserir produtos de montagem:', assemblyError);
-            errors++;
-          } else {
-            insertedProductsCount += assemblyProducts.length;
-            importedOrderIds.push(orderId);
-            console.log(`[AssemblyManagement] Inseridos ${assemblyProducts.length} produtos de montagem (selecionados) para pedido ${erpId}`);
-          }
+        if (countForThisOrder > 0) {
+          insertedProductsCount += countForThisOrder;
+          importedOrderIds.push(orderId);
+          console.log(`[AssemblyManagement] Pedido ${erpId} atualizado/criado. Trigger do banco criará ${countForThisOrder} produtos de montagem.`);
         } else {
           toast.info(`Nenhum produto selecionado para o pedido ${erpId}`);
         }
