@@ -58,7 +58,7 @@ export default function Reports() {
         <div className="min-h-screen bg-gray-50/50 pb-10">
             {/* Header */}
             <header className="bg-white border-b border-gray-200 sticky top-0 z-10">
-                <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                <div className="w-full px-4 sm:px-6 lg:px-8">
                     <div className="flex justify-between items-center h-20">
                         <div className="flex items-center gap-4">
                             <div className="bg-gradient-to-br from-orange-500 to-orange-600 p-2 rounded-lg">
@@ -80,7 +80,7 @@ export default function Reports() {
                 </div>
             </header>
 
-            <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
+            <main className="w-full px-4 sm:px-6 lg:px-8 py-8 space-y-8">
 
                 {/* KPI Row */}
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-4">

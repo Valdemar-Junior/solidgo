@@ -177,7 +177,7 @@ export default function AdminDashboard() {
     <div className="min-h-screen bg-gray-50/50">
       {/* Modern Header */}
       <header className="bg-white border-b border-gray-200 sticky top-0 z-10">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="w-full px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center h-20">
             <div className="flex items-center gap-4">
               <div className="bg-gradient-to-br from-blue-500 to-blue-600 p-2 rounded-lg">
@@ -223,7 +223,7 @@ export default function AdminDashboard() {
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
+      <main className="w-full px-4 sm:px-6 lg:px-8 py-8 space-y-8">
 
         {/* KPI Stats Grid */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
@@ -300,7 +300,7 @@ export default function AdminDashboard() {
       </main>
 
       {/* Footer discreto */}
-      <footer className="max-w-7xl mx-auto px-4 py-6 text-center text-sm text-gray-400">
+      <footer className="w-full px-4 py-6 text-center text-sm text-gray-400">
         <p>&copy; {new Date().getFullYear()} SOLIDGO Logística. v2.5.0</p>
       </footer>
     </div>

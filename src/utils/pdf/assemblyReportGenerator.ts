@@ -215,6 +215,8 @@ export class AssemblyReportGenerator {
             customerName: string;
             address: string;
             phone?: string;
+            date: string;
+            dateRaw: Date | null;
             items: ConsolidatedAssemblyItem[];
         }
 
@@ -228,12 +230,26 @@ export class AssemblyReportGenerator {
                 if (!map.has(oid)) {
                     const addr = firstOrig.order?.address_json;
                     const addrStr = `${addr?.street || ''}${addr?.neighborhood ? `, ${addr.neighborhood}` : ''}${addr?.city ? `, ${addr.city}` : ''}`;
+                    // Capturar data do pedido (data_venda ou previsao_entrega)
+                    const rawDate = firstOrig.order?.data_venda || firstOrig.order?.previsao_entrega || (firstOrig.order?.raw_json as any)?.data_venda || null;
+                    let dateRaw: Date | null = null;
+                    let dateFormatted = '-';
+                    if (rawDate) {
+                        try {
+                            dateRaw = new Date(rawDate);
+                            if (!isNaN(dateRaw.getTime())) {
+                                dateFormatted = dateRaw.toLocaleDateString('pt-BR');
+                            }
+                        } catch { }
+                    }
                     map.set(oid, {
                         orderId: oid,
                         orderRef: firstOrig.order?.order_id_erp || oid.slice(0, 6),
                         customerName: firstOrig.order?.customer_name || 'Cliente Desconhecido',
                         address: addrStr,
                         phone: firstOrig.order?.phone || '',
+                        date: dateFormatted,
+                        dateRaw: dateRaw,
                         items: []
                     });
                 }
@@ -242,7 +258,7 @@ export class AssemblyReportGenerator {
             return Array.from(map.values());
         };
 
-        // --- TABLE GENERATION (Grouped) ---
+        // --- TABLE GENERATION (Grouped by Date) ---
         const drawGroupedTable = (title: string, groups: GroupedOrder[], badgeColor: any) => {
             // Section Title
             page.drawRectangle({ x: margin, y, width: width - margin * 2, height: 24, color: rgb(1, 1, 1) });
@@ -257,118 +273,167 @@ export class AssemblyReportGenerator {
                 return;
             }
 
+            // Agrupar pedidos por data
+            const dateGroups = new Map<string, GroupedOrder[]>();
             for (const group of groups) {
-                // Check page break
-                if (y < margin + 60) { // Enough for header + 1 item
+                const dateKey = group.date || 'Sem data';
+                if (!dateGroups.has(dateKey)) {
+                    dateGroups.set(dateKey, []);
+                }
+                dateGroups.get(dateKey)!.push(group);
+            }
+
+            // Ordenar as datas (converter para array e ordenar)
+            const sortedDates = Array.from(dateGroups.keys()).sort((a, b) => {
+                if (a === 'Sem data') return 1;
+                if (b === 'Sem data') return -1;
+                // Converter dd/mm/yyyy para comparação
+                const parseDate = (d: string) => {
+                    const [day, month, year] = d.split('/').map(Number);
+                    return new Date(year, month - 1, day).getTime();
+                };
+                return parseDate(a) - parseDate(b);
+            });
+
+            for (const dateKey of sortedDates) {
+                const ordersForDate = dateGroups.get(dateKey)!;
+
+                // Check page break for date header
+                if (y < margin + 80) {
                     page = pdfDoc.addPage([595.28, 841.89]);
                     y = height - margin;
                 }
 
-                // Order Header (Gray Box)
+                // Date Header (Blue accent)
                 page.drawRectangle({
-                    x: margin, y: y - 20, width: width - margin * 2, height: 20, color: rgb(0.96, 0.97, 0.98)
+                    x: margin, y: y - 22, width: width - margin * 2, height: 22, color: rgb(0.93, 0.95, 0.98)
+                });
+                page.drawRectangle({
+                    x: margin, y: y - 22, width: 4, height: 22, color: rgb(0.3, 0.5, 0.9)
+                });
+                page.drawText(dateKey, {
+                    x: margin + 12, y: y - 15, size: 10, font: fontBold, color: rgb(0.2, 0.3, 0.5)
+                });
+                page.drawText(`(${ordersForDate.length} pedido${ordersForDate.length > 1 ? 's' : ''})`, {
+                    x: margin + 100, y: y - 15, size: 9, font, color: rgb(0.5, 0.5, 0.6)
                 });
 
-                const headerText = `Pedido: ${group.orderRef} • ${group.customerName} • ${group.address}`;
-                // Truncate header text if needed
-                page.drawText(headerText, {
-                    x: margin + 10, y: y - 13, size: 9, font: fontBold, color: rgb(0.3, 0.3, 0.4)
-                });
+                y -= 28;
 
-                y -= 20;
-
-                // Column Headers
-                const cols = [
-                    { label: 'PRODUTO / SKU', widthPct: 50 },
-                    { label: 'QTD', widthPct: 10 },
-                    { label: 'STATUS', widthPct: 15 },
-                    { label: 'OBS', widthPct: 15 },
-                    { label: 'OK', widthPct: 10 }
-                ];
-
-                const availW = width - margin * 2;
-                const colWs = cols.map(c => availW * (c.widthPct / 100));
-
-                // Draw col headers
-                let cx = margin + 10;
-                cols.forEach((c, i) => {
-                    page.drawText(c.label, { x: cx, y: y - 10, size: 7, font: fontBold, color: rgb(0.6, 0.6, 0.6) });
-                    cx += colWs[i];
-                });
-
-                y -= 15;
-
-                // Items
-                for (const item of group.items) {
-                    if (y < margin + 20) {
+                for (const group of ordersForDate) {
+                    // Check page break
+                    if (y < margin + 60) {
                         page = pdfDoc.addPage([595.28, 841.89]);
                         y = height - margin;
-                        // Redraw order ref just to be nice? No, complexity.
                     }
 
-                    page.drawLine({ start: { x: margin, y }, end: { x: width - margin, y }, thickness: 0.5, color: rgb(0.9, 0.9, 0.9) });
-                    y -= 12;
-
-                    let rowX = margin + 10;
-
-                    // Col 1: Product
-                    const prodName = `${item.name} (${item.sku || '-'})`;
-                    let cleanProdName = prodName;
-                    if (font.widthOfTextAtSize(cleanProdName, 9) > colWs[0] - 10) {
-                        // simple truncate
-                        while (cleanProdName.length > 0 && font.widthOfTextAtSize(cleanProdName + '...', 9) > colWs[0] - 10) cleanProdName = cleanProdName.slice(0, -1);
-                        cleanProdName += '...';
-                    }
-                    if (item.type === 'kit') {
-                        // Bold for kits maybe? or Color
-                        page.drawText(cleanProdName, { x: rowX, y, size: 9, font: fontBold, color: rgb(0.1, 0.1, 0.4) });
-                    } else {
-                        page.drawText(cleanProdName, { x: rowX, y, size: 9, font, color: rgb(0.2, 0.2, 0.2) });
-                    }
-                    rowX += colWs[0];
-
-                    // Col 2: Quantity (New)
-                    page.drawText(String(item.quantity), { x: rowX + 5, y, size: 9, font, color: rgb(0.2, 0.2, 0.2) });
-                    rowX += colWs[1];
-
-                    // Col 3: Status
-                    let statusMap: any = { 'pending': 'Pendente', 'completed': 'Montado', 'assigned': 'Atribuído', 'in_progress': 'Em Andamento', 'cancelled': 'Cancelado', 'returned': 'Devolvido' };
-                    let stText = statusMap[item.status] || item.status;
-
-                    // Completion time ? Consolidate from items? if type kit, maybe last completion?
-                    // Skipping time for simplicity in consolidated view or check if all completed
-
-                    page.drawText(stText, { x: rowX, y, size: 8, font, color: rgb(0.4, 0.4, 0.4) });
-                    rowX += colWs[2];
-
-                    // Col 4: Obs
-                    let obs = item.observations || (item.originalItems[0]?.technical_notes) || '-';
-                    if (font.widthOfTextAtSize(obs, 8) > colWs[3] - 10) {
-                        obs = obs.substring(0, 15) + '...';
-                    }
-                    page.drawText(obs, { x: rowX, y, size: 8, font, color: rgb(0.4, 0.4, 0.4) });
-                    rowX += colWs[3];
-
-                    // Col 5: Checkbox
+                    // Order Header (Gray Box) - sem a data pois já está no cabeçalho
                     page.drawRectangle({
-                        x: rowX + (colWs[4] - 12) / 2,
-                        y: y - 2,
-                        width: 12, height: 12,
-                        borderColor: rgb(0.7, 0.7, 0.7), borderWidth: 1, color: rgb(1, 1, 1)
+                        x: margin + 8, y: y - 20, width: width - margin * 2 - 8, height: 20, color: rgb(0.97, 0.97, 0.98)
                     });
 
-                    y -= 8;
+                    const headerText = `Pedido: ${group.orderRef} • ${group.customerName} • ${group.address}`;
+                    page.drawText(headerText, {
+                        x: margin + 16, y: y - 13, size: 9, font: fontBold, color: rgb(0.3, 0.3, 0.4)
+                    });
+
+                    y -= 20;
+
+                    // Column Headers
+                    const cols = [
+                        { label: 'PRODUTO / SKU', widthPct: 50 },
+                        { label: 'QTD', widthPct: 10 },
+                        { label: 'STATUS', widthPct: 15 },
+                        { label: 'OBS', widthPct: 15 },
+                        { label: 'OK', widthPct: 10 }
+                    ];
+
+                    const availW = width - margin * 2;
+                    const colWs = cols.map(c => availW * (c.widthPct / 100));
+
+                    // Draw col headers
+                    let cx = margin + 16;
+                    cols.forEach((c, i) => {
+                        page.drawText(c.label, { x: cx, y: y - 10, size: 7, font: fontBold, color: rgb(0.6, 0.6, 0.6) });
+                        cx += colWs[i];
+                    });
+
+                    y -= 15;
+
+                    // Items
+                    for (const item of group.items) {
+                        if (y < margin + 20) {
+                            page = pdfDoc.addPage([595.28, 841.89]);
+                            y = height - margin;
+                        }
+
+                        page.drawLine({ start: { x: margin + 8, y }, end: { x: width - margin, y }, thickness: 0.5, color: rgb(0.9, 0.9, 0.9) });
+                        y -= 12;
+
+                        let rowX = margin + 16;
+
+                        // Col 1: Product
+                        const prodName = `${item.name} (${item.sku || '-'})`;
+                        let cleanProdName = prodName;
+                        if (font.widthOfTextAtSize(cleanProdName, 9) > colWs[0] - 10) {
+                            while (cleanProdName.length > 0 && font.widthOfTextAtSize(cleanProdName + '...', 9) > colWs[0] - 10) cleanProdName = cleanProdName.slice(0, -1);
+                            cleanProdName += '...';
+                        }
+                        if (item.type === 'kit') {
+                            page.drawText(cleanProdName, { x: rowX, y, size: 9, font: fontBold, color: rgb(0.1, 0.1, 0.4) });
+                        } else {
+                            page.drawText(cleanProdName, { x: rowX, y, size: 9, font, color: rgb(0.2, 0.2, 0.2) });
+                        }
+                        rowX += colWs[0];
+
+                        // Col 2: Quantity
+                        page.drawText(String(item.quantity), { x: rowX + 5, y, size: 9, font, color: rgb(0.2, 0.2, 0.2) });
+                        rowX += colWs[1];
+
+                        // Col 3: Status
+                        let statusMap: any = { 'pending': 'Pendente', 'completed': 'Montado', 'assigned': 'Atribuído', 'in_progress': 'Em Andamento', 'cancelled': 'Cancelado', 'returned': 'Devolvido' };
+                        let stText = statusMap[item.status] || item.status;
+                        page.drawText(stText, { x: rowX, y, size: 8, font, color: rgb(0.4, 0.4, 0.4) });
+                        rowX += colWs[2];
+
+                        // Col 4: Obs
+                        let obs = item.observations || (item.originalItems[0]?.technical_notes) || '-';
+                        if (font.widthOfTextAtSize(obs, 8) > colWs[3] - 10) {
+                            obs = obs.substring(0, 15) + '...';
+                        }
+                        page.drawText(obs, { x: rowX, y, size: 8, font, color: rgb(0.4, 0.4, 0.4) });
+                        rowX += colWs[3];
+
+                        // Col 5: Checkbox
+                        page.drawRectangle({
+                            x: rowX + (colWs[4] - 12) / 2,
+                            y: y - 2,
+                            width: 12, height: 12,
+                            borderColor: rgb(0.7, 0.7, 0.7), borderWidth: 1, color: rgb(1, 1, 1)
+                        });
+
+                        y -= 8;
+                    }
+
+                    y -= 10; // Gap between orders within same date
                 }
 
-                y -= 15; // Gap between orders
+                y -= 15; // Gap between date groups
             }
         };
 
         const completedItems = consolidated.filter(p => p.status === 'completed');
         const pendingItems = consolidated.filter(p => p.status !== 'completed');
 
-        const groupedCompleted = groupProducts(completedItems);
-        const groupedPending = groupProducts(pendingItems);
+        // Ordenar grupos por data (mais antigo primeiro)
+        const sortByDate = (a: GroupedOrder, b: GroupedOrder) => {
+            if (!a.dateRaw && !b.dateRaw) return 0;
+            if (!a.dateRaw) return 1;
+            if (!b.dateRaw) return -1;
+            return a.dateRaw.getTime() - b.dateRaw.getTime();
+        };
+        const groupedCompleted = groupProducts(completedItems).sort(sortByDate);
+        const groupedPending = groupProducts(pendingItems).sort(sortByDate);
 
         if (groupedCompleted.length > 0) {
             drawGroupedTable('Itens Montados', groupedCompleted, rgb(0.2, 0.8, 0.4));
