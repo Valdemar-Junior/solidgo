@@ -751,7 +751,13 @@ function AssemblyManagementContent() {
 
       setAssemblyProducts((productsPending || []) as any);
       setAssemblyPending((productsPending || []) as any);
-      setAssemblyInRoutes((productsInRoutes || []) as any);
+      // Merge products: keep previously loaded products for routes not in current query
+      // This preserves products loaded via "Detalhes" button for routes outside date filter
+      setAssemblyInRoutes(prev => {
+        const newRouteIds = new Set((productsInRoutes || []).map((p: any) => String(p.assembly_route_id)));
+        const keepPrev = prev.filter(p => !newRouteIds.has(String(p.assembly_route_id)));
+        return [...keepPrev, ...(productsInRoutes || [])] as any;
+      });
       setMontadores(montadoresData || []);
       setVehicles(vehiclesData || []);
 
@@ -799,10 +805,15 @@ function AssemblyManagementContent() {
 
   // Debounce for Search
   useEffect(() => {
-    const timer = setTimeout(() => {
+    const timer = setTimeout(async () => {
       // If we have a query, fetch with the query (resetting page)
       // If query is empty, it falls back to standard filters.
-      fetchAssemblyRoutes(true, routeSearchQuery);
+      const fetchedRoutes = await fetchAssemblyRoutes(true, routeSearchQuery);
+      // IMPORTANT: Also load products for the fetched routes
+      // This ensures routes found via search have their products loaded
+      if (fetchedRoutes && fetchedRoutes.length > 0) {
+        await loadData(true, fetchedRoutes);
+      }
     }, 600);
     return () => clearTimeout(timer);
   }, [routeSearchQuery]);
@@ -2527,8 +2538,66 @@ function AssemblyManagementContent() {
 
                         <div className="p-4 border-t border-gray-100 bg-gray-50/50 rounded-b-xl flex gap-3">
                           <button
-                            onClick={() => {
+                            onClick={async () => {
                               try { localStorage.setItem('am_selectedRouteId', String(route.id)); localStorage.setItem('am_showRouteModal', '1'); } catch { }
+
+                              // Check if products for this route are already loaded
+                              const existingProducts = assemblyInRoutes.filter(ap => String(ap.assembly_route_id) === String(route.id));
+
+                              if (existingProducts.length === 0) {
+                                // Products not loaded - fetch from database (same logic as auto-open)
+                                try {
+                                  const { data: routeWithProducts, error } = await supabase
+                                    .from('assembly_routes')
+                                    .select(`
+                                      *,
+                                      assembler:assembler_id (id, name),
+                                      vehicle:vehicle_id (id, model, plate),
+                                      assembly_products (
+                                        id, order_id, product_name, product_sku, status, assembly_route_id, 
+                                        created_at, updated_at, was_returned, completion_date, returned_at, observations,
+                                        order:order_id (
+                                          id, order_id_erp, customer_name, customer_cpf, phone, address_json, items_json, 
+                                          raw_json, data_venda, previsao_entrega, previsao_montagem, department, product_group, product_subgroup
+                                        )
+                                      )
+                                    `)
+                                    .eq('id', route.id)
+                                    .single();
+
+                                  if (!error && routeWithProducts) {
+                                    const formattedProducts = (routeWithProducts.assembly_products || []).map((ap: any) => ({
+                                      ...ap,
+                                      order_id_erp: ap.order?.order_id_erp,
+                                      customer_name: ap.order?.customer_name,
+                                      customer_address: ap.order?.address_json ?
+                                        `${ap.order.address_json.street || ''}, ${ap.order.address_json.neighborhood || ''} - ${ap.order.address_json.city || ''}` : ''
+                                    }));
+
+                                    // Add products to global state
+                                    setAssemblyInRoutes(prev => {
+                                      const others = prev.filter(p => String(p.assembly_route_id) !== String(route.id));
+                                      return [...others, ...formattedProducts];
+                                    });
+
+                                    // Set route with products
+                                    const formattedRoute = {
+                                      ...routeWithProducts,
+                                      assembler_name: routeWithProducts.assembler?.name,
+                                      vehicle_model: routeWithProducts.vehicle?.model,
+                                      vehicle_plate: routeWithProducts.vehicle?.plate,
+                                      assembly_products: formattedProducts
+                                    };
+                                    setSelectedRoute(formattedRoute as any);
+                                    setShowRouteModal(true);
+                                    return;
+                                  }
+                                } catch (err) {
+                                  console.error('Error fetching route products:', err);
+                                }
+                              }
+
+                              // Fallback: use existing route data
                               setSelectedRoute(route);
                               setShowRouteModal(true);
                             }}
@@ -3362,7 +3431,12 @@ function AssemblyManagementContent() {
 
                   {/* Delete Empty Route Button - only shows when route has no orders and is pending */}
                   {(() => {
-                    const productsInRoute = assemblyInRoutes.filter(ap => ap.assembly_route_id === selectedRoute.id);
+                    // Fix: Use same data source as the orders table above for consistency
+                    // This ensures we check assembly_products from the route (if available from search/auto-open)
+                    // before falling back to assemblyInRoutes (which may not be populated for old routes)
+                    const productsInRoute = ((selectedRoute as any).assembly_products && (selectedRoute as any).assembly_products.length > 0)
+                      ? (selectedRoute as any).assembly_products
+                      : assemblyInRoutes.filter(ap => String(ap.assembly_route_id) === String(selectedRoute.id));
                     const isPending = (selectedRoute as any)?.status === 'pending';
                     if (productsInRoute.length === 0 && isPending) {
                       return (
