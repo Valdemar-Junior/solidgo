@@ -2535,7 +2535,7 @@ function RouteCreationContent() {
                     const raw: any = o.raw_json || {};
                     const obsIntLower = String(o.observacoes_internas || raw.observacoes_internas || '').toLowerCase();
                     const obsLower = String(o.observacoes || raw.observacoes || '').toLowerCase();
-                    const temFreteFull = (o.tem_frete_full === 'SIM') || obsIntLower.includes('FULL') || obsLower.includes('FULL');
+                    const temFreteFull = hasFreteFull(o);
                     const hasAssembly = (it?.has_assembly === true || String(it?.has_assembly) === 'true' || String(it?.has_assembly) === '1') || obsIntLower.includes('*montagem*');
 
                     // Flags Logic
