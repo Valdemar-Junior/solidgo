@@ -185,6 +185,7 @@ function AssemblyManagementContent() {
   const [launchLoading, setLaunchLoading] = useState(false);
   const [launchPreviewData, setLaunchPreviewData] = useState<any[] | null>(null); // New: Store fetched data for preview
   const [selectedPreviewIndices, setSelectedPreviewIndices] = useState<Set<string>>(new Set()); // New: Track selected products
+  const [launchObservation, setLaunchObservation] = useState(''); // Observação interna editável na importação avulsa
 
   // --- PDF SORT OPTIONS MODAL ---
   const [showPdfSortModal, setShowPdfSortModal] = useState(false);
@@ -1335,6 +1336,9 @@ function AssemblyManagementContent() {
         item.produtos.forEach((p: any) => allKeys.add(p._selectionKey));
       });
       setSelectedPreviewIndices(allKeys);
+      // Inicializar observação interna com valor do ERP (se existir)
+      const firstItem = previewItems[0];
+      setLaunchObservation(String(firstItem?.observacoes_internas || ''));
       setLaunchLoading(false);
 
     } catch (e: any) {
@@ -1423,10 +1427,13 @@ function AssemblyManagementContent() {
                 return item;
               });
 
-              // Fazer UPDATE na tabela orders
+              // Fazer UPDATE na tabela orders (incluindo observação interna editada)
               await supabase
                 .from('orders')
-                .update({ items_json: updatedItemsJson })
+                .update({
+                  items_json: updatedItemsJson,
+                  observacoes_internas: launchObservation || orderData.observacoes_internas || ''
+                })
                 .eq('id', existingOrder.id);
             }
           } catch (updateErr) {
@@ -1484,7 +1491,7 @@ function AssemblyManagementContent() {
             data_venda: o.data_venda ? new Date(o.data_venda).toISOString() : now,
             previsao_entrega: o.previsao_entrega ? new Date(o.previsao_entrega).toISOString() : null,
             observacoes_publicas: getVal(o.observacoes_publicas),
-            observacoes_internas: getVal(o.observacoes_internas),
+            observacoes_internas: launchObservation || getVal(o.observacoes_internas),
             tem_frete_full: getVal(o.tem_frete_full),
             address_json: {
               street: getVal(o.destinatario_endereco),
@@ -1562,6 +1569,7 @@ function AssemblyManagementContent() {
         setShowLaunchModal(false);
         setLaunchNumber('');
         setLaunchPreviewData(null); // Clear preview
+        setLaunchObservation(''); // Clear observation
         await loadData(false);
 
         setSelectedOrders(prev => {
@@ -3505,7 +3513,7 @@ function AssemblyManagementContent() {
                   Lançamento Avulso
                 </h2>
                 <button
-                  onClick={() => { setShowLaunchModal(false); setLaunchPreviewData(null); }}
+                  onClick={() => { setShowLaunchModal(false); setLaunchPreviewData(null); setLaunchObservation(''); }}
                   className="text-gray-400 hover:text-gray-600 transition-colors p-1"
                 >
                   <X className="h-6 w-6" />
@@ -3628,6 +3636,18 @@ function AssemblyManagementContent() {
                           })}
                         </React.Fragment>
                       ))}
+                    </div>
+
+                    {/* Campo de Observação Interna */}
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Observação Interna (opcional)</label>
+                      <textarea
+                        value={launchObservation}
+                        onChange={(e) => setLaunchObservation(e.target.value)}
+                        className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none transition-all text-sm resize-none"
+                        placeholder="Digite uma observação interna para este pedido..."
+                        rows={3}
+                      />
                     </div>
 
                     <div className="bg-blue-50 p-4 rounded-xl text-sm text-blue-700 flex items-start gap-3">
