@@ -359,6 +359,39 @@ export default function OrdersImport() {
       setLastImport(new Date());
       setLoading(false); // Libera a UI
 
+      // FASE 3: GERAR DANFE EM BACKGROUND (Fire and Forget)
+      // Dispara webhook para gerar DANFEs sem bloquear o usuário
+      if (paraInserir.length > 0) {
+        try {
+          // Buscar URL do webhook de geração de NF
+          let nfWebhook = 'https://n8n.lojaodosmoveis.shop/webhook/gera_nf';
+          try {
+            const { data: s } = await supabase.from('webhook_settings').select('url').eq('key', 'gera_nf').eq('active', true).single();
+            if (s?.url) nfWebhook = s.url;
+          } catch { }
+
+          // Preparar documentos para envio (apenas os que têm XML)
+          const docs = paraInserir.filter((o: any) => o.xml_documento).map((o: any) => ({
+            numero: o.order_id_erp,
+            xml: o.xml_documento
+          }));
+
+          if (docs.length > 0) {
+            // Fire and forget - não espera resposta
+            fetch(nfWebhook, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ documentos: docs, count: docs.length, background: true })
+            }).catch(() => console.log('[Import] Background DANFE request sent'));
+
+            console.log(`[Import] Enviando ${docs.length} pedidos para geração de DANFE em background`);
+          }
+        } catch (e) {
+          // Silencioso - não bloqueia importação se falhar
+          console.warn('[Import] Erro ao disparar geração de DANFE em background:', e);
+        }
+      }
+
       // FASE 2: GEOCODIFICAR (Removido - GPS via App Motorista)
       // O código de busca background foi removido conforme solicitação para otimizar o fluxo.
 
