@@ -20,9 +20,28 @@ export default function DriverRouteDetails() {
   const [isOnline, setIsOnline] = useState(navigator.onLine);
 
   useEffect(() => {
+    let subscription: any = null;
+
     if (routeId) {
       loadRouteDetails();
-      setupRealtimeSubscription();
+
+      // Setup Realtime subscription
+      subscription = supabase
+        .channel(`route_orders:${routeId}`)
+        .on(
+          'postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table: 'route_orders',
+            filter: `route_id=eq.${routeId}`,
+          },
+          (payload) => {
+            console.log('Route order updated:', payload);
+            loadRouteDetails();
+          }
+        )
+        .subscribe();
     }
 
     // Monitor network status
@@ -38,6 +57,10 @@ export default function DriverRouteDetails() {
     return () => {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
+      // Cleanup Realtime subscription
+      if (subscription) {
+        supabase.removeChannel(subscription);
+      }
     };
   }, [routeId]);
 
@@ -83,32 +106,7 @@ export default function DriverRouteDetails() {
     }
   };
 
-  const setupRealtimeSubscription = () => {
-    if (!routeId) return;
 
-    // Subscribe to route_orders changes for this route
-    const subscription = supabase
-      .channel(`route_orders:${routeId}`)
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'route_orders',
-          filter: `route_id=eq.${routeId}`,
-        },
-        (payload) => {
-          console.log('Route order updated:', payload);
-          // Reload route orders to reflect changes
-          loadRouteDetails();
-        }
-      )
-      .subscribe();
-
-    return () => {
-      subscription.unsubscribe();
-    };
-  };
 
   const handleForceSync = async () => {
     await backgroundSync.forceSync();
@@ -122,7 +120,7 @@ export default function DriverRouteDetails() {
   };
 
   // GPS opening removido (endereços imprecisos)
-  const openMapsForRoute = () => {};
+  const openMapsForRoute = () => { };
 
   if (loading) {
     return (
@@ -155,8 +153,8 @@ export default function DriverRouteDetails() {
           <div className="py-6">
             <div className="flex items-center justify-between">
               <div className="flex items-center">
-                <button 
-                  onClick={() => navigate(-1)} 
+                <button
+                  onClick={() => navigate(-1)}
                   className="p-2 mr-3 hover:bg-gray-100 rounded-full text-gray-600 transition-colors"
                   title="Voltar"
                 >
@@ -201,7 +199,7 @@ export default function DriverRouteDetails() {
             {/* Progress Bar */}
             <div className="mt-4">
               <div className="bg-gray-200 rounded-full h-2">
-                <div 
+                <div
                   className="bg-blue-600 h-2 rounded-full transition-all duration-300"
                   style={{ width: `${getProgress()}%` }}
                 ></div>
@@ -225,7 +223,7 @@ export default function DriverRouteDetails() {
             Resumo da Rota
           </h2>
           <div className="flex justify-end mb-4"></div>
-          
+
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div className="text-center">
               <div className="text-2xl font-bold text-blue-600">{routeOrders.length}</div>

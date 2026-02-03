@@ -26,7 +26,7 @@ export const useAuthStore = create<AuthState>()(
       login: async (identifier: string, password: string) => {
         console.log('Starting login process for:', identifier);
         set({ isLoading: true, error: null });
-        
+
         try {
           console.log('Attempting Supabase auth signInWithPassword...');
           // Resolve email: se existir perfil com nome igual ao identificador, usar o email do perfil
@@ -119,16 +119,16 @@ export const useAuthStore = create<AuthState>()(
       logout: async () => {
         set({ isLoading: true });
         try {
-          try { localStorage.setItem('auth_lock','1'); } catch {}
+          try { localStorage.setItem('auth_lock', '1'); } catch { }
           await supabase.auth.signOut({ scope: 'local' });
         } catch (error: any) {
           console.warn('Logout warning:', error?.message || error);
         } finally {
           set({ user: null, isAuthenticated: false, isLoading: false, error: null });
-          try { localStorage.removeItem('auth-storage'); } catch {}
-          try { localStorage.removeItem('delivery-app-auth-token'); } catch {}
-          try { localStorage.removeItem('sb-' + 'auth-token'); } catch {}
-          try { localStorage.removeItem('auth_lock'); } catch {}
+          try { localStorage.removeItem('auth-storage'); } catch { }
+          try { localStorage.removeItem('delivery-app-auth-token'); } catch { }
+          try { localStorage.removeItem('sb-' + 'auth-token'); } catch { }
+          try { localStorage.removeItem('auth_lock'); } catch { }
         }
       },
 
@@ -144,17 +144,17 @@ export const useAuthStore = create<AuthState>()(
           set({ isAuthenticated: true, isLoading: false, error: null });
           return;
         }
-        
+
         try {
           const { data: { session }, error: sessionError } = await supabase.auth.getSession();
           console.log('Session check result:', session, sessionError);
-          
+
           if (!session?.user && cachedUser && isOffline) {
             console.log('Sem session da API mas offline com cache: mantendo login');
             set({ isAuthenticated: true, isLoading: false, error: null });
             return;
           }
-          
+
           if (session?.user) {
             console.log('User session found, fetching profile...');
             const { data: profile, error: profileError } = await supabase
@@ -253,12 +253,16 @@ export const useAuthStore = create<AuthState>()(
   )
 );
 
+import { toast } from 'sonner';
+
 supabase.auth.onAuthStateChange(async (event) => {
   const suppress = typeof window !== 'undefined' && localStorage.getItem('auth_lock') === '1';
   if (suppress && (event === 'SIGNED_IN' || event === 'SIGNED_OUT' || event === 'TOKEN_REFRESHED')) {
     return;
   }
   if (event === 'SIGNED_OUT') {
+    // Mostrar mensagem de sessão expirada
+    toast.warning('Sessão expirada. Faça login novamente.', { duration: 5000 });
     useAuthStore.getState().checkAuth();
   } else if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') {
     useAuthStore.getState().checkAuth();
