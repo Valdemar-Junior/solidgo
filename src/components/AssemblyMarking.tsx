@@ -7,6 +7,12 @@ import { Package, CheckCircle, XCircle, Clock, MapPin, Search } from 'lucide-rea
 import { buildFullAddress } from '../utils/maps';
 import { toast } from 'sonner';
 
+// ===== FOTOS DE MONTAGEM (Fase 3 - Integração) =====
+import { PhotoCaptureModal, CapturedPhoto } from './photos';
+import { PhotoStorage } from '../utils/offline/photoStorage';
+import { PhotoService } from '../services/photoService';
+import { blobToBase64, compressImage, base64ToBlob } from '../utils/imageCompression';
+
 const FALLBACK_RETURN_REASONS: ReturnReason[] = [
   { id: '1', reason: 'Cliente ausente', type: 'both' },
   { id: '2', reason: 'Endereço incorreto / não localizado', type: 'both' },
@@ -35,6 +41,11 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
   const [routeStatus, setRouteStatus] = useState<string>('pending');
   const [searchQuery, setSearchQuery] = useState('');
 
+  // ===== ESTADOS PARA FOTOS DE MONTAGEM =====
+  const [showPhotoModal, setShowPhotoModal] = useState(false);
+  const [pendingPhotoItems, setPendingPhotoItems] = useState<any[]>([]);
+  const [requirePhotos, setRequirePhotos] = useState(false);
+
   // Realtime Ref
   const loadItemsRef = useRef<any>(null); // To access latest load function
   useEffect(() => { loadItemsRef.current = loadRouteItems; }); // Always keep ref updated
@@ -47,6 +58,24 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
       setIsOnline(online);
     };
     NetworkStatus.addListener(listener);
+
+    // ===== CARREGAR CONFIG DE FOTOS =====
+    const loadPhotoConfig = async () => {
+      try {
+        const { data } = await supabase
+          .from('app_settings')
+          .select('value')
+          .eq('key', 'require_assembly_photos')
+          .single();
+        if (data?.value?.enabled) {
+          setRequirePhotos(true);
+          console.log('[AssemblyMarking] Fotos obrigatórias: ATIVADO');
+        }
+      } catch (err) {
+        console.log('[AssemblyMarking] Config de fotos não encontrada, usando padrão (desativado)');
+      }
+    };
+    loadPhotoConfig();
 
     // Realtime Subscription
     const channel = supabase
@@ -243,6 +272,68 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
       }
     } catch (error: any) {
       console.error('Error loading return reasons:', error);
+    }
+  };
+
+  // ===== HANDLER PARA MARCAR COMO MONTADO (COM OU SEM FOTOS) =====
+  const handleMarkAsCompleted = (itemsToMark: any[]) => {
+    if (requirePhotos) {
+      // Abre modal de fotos antes de marcar como montado
+      setPendingPhotoItems(itemsToMark);
+      setShowPhotoModal(true);
+    } else {
+      // Comportamento original: marca direto
+      markAsCompleted(itemsToMark);
+    }
+  };
+
+  // ===== CALLBACK QUANDO FOTOS SÃO CONFIRMADAS =====
+  const handlePhotosConfirmed = async (photos: CapturedPhoto[]) => {
+    try {
+      const userId = (await supabase.auth.getUser()).data.user?.id || '';
+
+      // Processar cada item pendente
+      for (const item of pendingPhotoItems) {
+        // Salvar fotos localmente (serão sincronizadas depois)
+        for (const photo of photos) {
+          await PhotoStorage.saveLocal(
+            item.id,                    // assembly_product_id
+            photo.base64,
+            photo.fileName,
+            photo.fileSize,
+            photo.mimeType,
+            userId
+          );
+        }
+
+        // Se online, tentar fazer upload imediato
+        if (isOnline) {
+          try {
+            for (const photo of photos) {
+              const blob = base64ToBlob(photo.base64);
+              await PhotoService.uploadComplete(blob, item.id, photo.fileName, userId);
+            }
+            // Limpar fotos locais já sincronizadas
+            await PhotoStorage.cleanSynced();
+          } catch (uploadErr) {
+            console.error('[AssemblyMarking] Erro no upload, fotos salvas localmente:', uploadErr);
+            toast.info('Fotos salvas localmente. Serão sincronizadas quando possível.');
+          }
+        } else {
+          toast.info('Modo offline. Fotos serão sincronizadas quando houver conexão.');
+        }
+      }
+
+      // Agora marcar os itens como montados
+      await markAsCompleted(pendingPhotoItems);
+
+      // Fechar modal e limpar estado
+      setShowPhotoModal(false);
+      setPendingPhotoItems([]);
+
+    } catch (error: any) {
+      console.error('[AssemblyMarking] Erro ao processar fotos:', error);
+      toast.error('Erro ao processar fotos');
     }
   };
 
@@ -863,7 +954,7 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
                               {isPending && (
                                 <div className="flex gap-2">
                                   <button
-                                    onClick={() => markAsCompleted([item])}
+                                    onClick={() => handleMarkAsCompleted([item])}
                                     disabled={processingIds.has(item.id)}
                                     className="flex-1 flex items-center justify-center py-2 bg-green-600 text-white rounded hover:bg-green-700 disabled:opacity-50 text-xs font-bold shadow-sm"
                                   >
@@ -979,6 +1070,20 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
           Nenhum item nesta rota.
         </div>
       )}
+
+      {/* ===== MODAL DE CAPTURA DE FOTOS ===== */}
+      <PhotoCaptureModal
+        isOpen={showPhotoModal}
+        onClose={() => {
+          setShowPhotoModal(false);
+          setPendingPhotoItems([]);
+        }}
+        onConfirm={handlePhotosConfirmed}
+        minPhotos={1}
+        maxPhotos={3}
+        productName={pendingPhotoItems.length > 0 ? pendingPhotoItems[0].product_name : undefined}
+        isOffline={!isOnline}
+      />
     </div>
   );
 }
