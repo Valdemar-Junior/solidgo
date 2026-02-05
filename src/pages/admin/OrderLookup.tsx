@@ -5,6 +5,7 @@ import { supabase } from '../../supabase/client';
 import { useAuthStore } from '../../stores/authStore';
 import type { Order } from '../../types/database';
 import { toast } from 'sonner';
+import { AssemblyPhotosViewer } from '../../components/photos';
 
 interface RouteOrderInfo {
   id: string;
@@ -741,10 +742,20 @@ export default function OrderLookup() {
                                 }
                               } catch { }
                             }}
-                            className="w-full mt-1 text-xs px-2 py-1.5 rounded border border-purple-200 text-purple-700 hover:bg-purple-50 transition-colors flex items-center justify-center gap-1"
+                            className="w-full mt-2 text-xs px-2 py-1.5 rounded border border-purple-200 text-purple-700 hover:bg-purple-50 transition-colors flex items-center justify-center gap-1"
                           >
                             Detalhes da rota
                           </button>
+                        )}
+
+                        {/* Botão Ver Fotos - TODOS podem ver (admin e consultor) */}
+                        {(ap.status || '').toLowerCase() === 'completed' && (
+                          <div className="mt-2">
+                            <AssemblyPhotosViewer
+                              assemblyProductId={ap.id}
+                              size="sm"
+                            />
+                          </div>
                         )}
                       </div>
                     ))}

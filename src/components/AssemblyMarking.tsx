@@ -560,6 +560,35 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
 
         if (error) throw error;
 
+        // ===== LIMPAR FOTOS AO DESFAZER =====
+        // Deletar fotos do storage e da tabela assembly_photos
+        for (const itemId of ids) {
+          try {
+            // Buscar fotos do produto
+            const { data: photos } = await supabase
+              .from('assembly_photos')
+              .select('id, storage_path')
+              .eq('assembly_product_id', itemId);
+
+            if (photos && photos.length > 0) {
+              // Deletar arquivos do Storage
+              const paths = photos.map(p => p.storage_path);
+              await supabase.storage.from('assembly-photos').remove(paths);
+
+              // Deletar registros da tabela
+              await supabase
+                .from('assembly_photos')
+                .delete()
+                .eq('assembly_product_id', itemId);
+
+              console.log(`[undoAction] Deletadas ${photos.length} fotos do item ${itemId}`);
+            }
+          } catch (photoError) {
+            console.error(`[undoAction] Erro ao deletar fotos do item ${itemId}:`, photoError);
+            // Não interrompe o fluxo, apenas loga o erro
+          }
+        }
+
         toast.success('Ação desfeita!');
 
         const updated = assemblyItems.map(it => ids.includes(it.id) ? {
