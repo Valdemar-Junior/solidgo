@@ -1,5 +1,6 @@
 import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
 import type { Route, RouteOrder, Order } from '../../types/database';
+import { sanitizePdfText, wrapTextSafe } from './pdfTextSanitizer';
 
 export interface SeparationSheetData {
     route: Route;
@@ -32,24 +33,9 @@ export class SeparationSheetGenerator {
             page.drawText(text, { x, y, font, size, color });
         };
 
-        // Função de quebra de linha simplificada
+        // Função de quebra de linha com sanitização para evitar erros de caracteres especiais
         const wrapText = (text: string, maxWidth: number, font: any, size: number): string[] => {
-            const words = String(text || '').split(/\s+/);
-            const lines: string[] = [];
-            let currentLine = words[0] || '';
-
-            for (let i = 1; i < words.length; i++) {
-                const word = words[i];
-                const width = font.widthOfTextAtSize(currentLine + ' ' + word, size);
-                if (width < maxWidth) {
-                    currentLine += ' ' + word;
-                } else {
-                    lines.push(currentLine);
-                    currentLine = word;
-                }
-            }
-            lines.push(currentLine);
-            return lines;
+            return wrapTextSafe(text, maxWidth, font, size);
         };
 
         // 1. Cabeçalho do Romaneio

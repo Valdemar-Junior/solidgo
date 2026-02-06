@@ -5,7 +5,7 @@ import { supabase } from '../../supabase/client';
 import { useAuthStore } from '../../stores/authStore';
 import type { Order } from '../../types/database';
 import { toast } from 'sonner';
-import { AssemblyPhotosViewer } from '../../components/photos';
+import { AssemblyPhotosViewer, DeliveryPhotosViewer } from '../../components/photos';
 
 interface RouteOrderInfo {
   id: string;
@@ -653,14 +653,20 @@ export default function OrderLookup() {
                           <p className="text-xs text-gray-500 mt-2">Motorista: {(ro.route as any)?.driver_name || (ro.route as any)?.driver?.user?.name || (ro.route as any)?.driver?.name || '-'}</p>
                           <p className="text-xs text-gray-500">Veículo: {ro.route?.vehicle ? `${(ro.route?.vehicle as any)?.model || ''} ${(ro.route?.vehicle as any)?.plate || ''}`.trim() || '-' : '-'}</p>
                           {ro.status === 'delivered' && (
-                            <p className="text-xs text-green-600 font-medium">
-                              Entregue em: {ro.delivered_at ? formatDate(ro.delivered_at) : formatDate(ro.route?.updated_at)}
-                            </p>
+                            <div className="flex items-center gap-2 mt-1">
+                              <p className="text-xs text-green-600 font-medium">
+                                Entregue em: {ro.delivered_at ? formatDate(ro.delivered_at) : formatDate(ro.route?.updated_at)}
+                              </p>
+                              <DeliveryPhotosViewer routeOrderId={ro.id} size="sm" />
+                            </div>
                           )}
                           {ro.status === 'returned' && (
-                            <p className="text-xs text-red-600 font-medium">
-                              Retornado em: {ro.delivered_at ? formatDate(ro.delivered_at) : formatDate(ro.route?.updated_at)}
-                            </p>
+                            <div className="flex items-center gap-2 mt-1">
+                              <p className="text-xs text-red-600 font-medium">
+                                Retornado em: {ro.delivered_at ? formatDate(ro.delivered_at) : formatDate(ro.route?.updated_at)}
+                              </p>
+                              <DeliveryPhotosViewer routeOrderId={ro.id} size="sm" />
+                            </div>
                           )}
                           {(selectedOrder as any).import_source && (
                             <p className="text-xs text-gray-400 mb-2">

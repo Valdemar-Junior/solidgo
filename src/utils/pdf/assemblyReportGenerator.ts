@@ -2,6 +2,7 @@
 import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
 import type { AssemblyRoute, AssemblyProductWithDetails } from '../../types/database';
 import { calculateAssemblyStats, ConsolidatedAssemblyItem } from '../assemblyKitLogic';
+import { sanitizePdfText, wrapTextSafe, fitTextSafe } from './pdfTextSanitizer';
 
 export interface AssemblyReportData {
     route: AssemblyRoute;
@@ -25,16 +26,21 @@ export class AssemblyReportGenerator {
         const margin = 40;
         let y = height - margin;
 
-        // Helper to draw centered text in a box
+        // Helper to draw centered text in a box (with sanitization)
         const drawCenteredText = (text: string, x: number, y: number, boxWidth: number, fontRef: any, size: number, color: any) => {
-            const textWidth = fontRef.widthOfTextAtSize(text, size);
-            page.drawText(text, {
-                x: x + (boxWidth - textWidth) / 2,
-                y,
-                size,
-                font: fontRef,
-                color
-            });
+            const safeText = sanitizePdfText(text);
+            try {
+                const textWidth = fontRef.widthOfTextAtSize(safeText, size);
+                page.drawText(safeText, {
+                    x: x + (boxWidth - textWidth) / 2,
+                    y,
+                    size,
+                    font: fontRef,
+                    color
+                });
+            } catch (e) {
+                console.warn('[PDF] Error drawing centered text:', e);
+            }
         };
 
         // --- HEADER ---

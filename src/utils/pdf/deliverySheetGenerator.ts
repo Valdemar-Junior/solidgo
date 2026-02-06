@@ -1,5 +1,6 @@
 import { PDFDocument, rgb, StandardFonts, degrees } from 'pdf-lib';
 import type { Route, RouteOrder, Order, DriverWithUser, Vehicle } from '../../types/database';
+import { sanitizePdfText, wrapTextSafe, fitTextSafe } from './pdfTextSanitizer';
 
 export interface DeliverySheetData {
   route: Route;
@@ -532,36 +533,14 @@ export class DeliverySheetGenerator {
     return text.length > maxLength ? text.substring(0, maxLength - 3) + '...' : text;
   }
 
+  // Use centralized sanitization from pdfTextSanitizer.ts
   private static fitText(text: string, maxWidth: number, font: any, size: number): string {
-    let t = String(text || '');
-    if (font.widthOfTextAtSize(t, size) <= maxWidth) return t;
-    const ell = '...';
-    let lo = 0, hi = t.length;
-    while (lo < hi) {
-      const mid = Math.floor((lo + hi) / 2);
-      const candidate = t.substring(0, mid) + ell;
-      if (font.widthOfTextAtSize(candidate, size) <= maxWidth) lo = mid + 1; else hi = mid;
-    }
-    const slice = Math.max(0, lo - 1);
-    return (slice <= 0) ? ell : t.substring(0, slice) + ell;
+    return fitTextSafe(text, maxWidth, font, size);
   }
 
+  // Use centralized sanitization from pdfTextSanitizer.ts
   private static wrapText(text: string, maxWidth: number, font: any, size: number): string[] {
-    const words = String(text || '').split(/\s+/);
-    const lines: string[] = [];
-    let current = '';
-    for (const w of words) {
-      const test = current ? current + ' ' + w : w;
-      const width = font.widthOfTextAtSize(test, size);
-      if (width > maxWidth && current) {
-        lines.push(current);
-        current = w;
-      } else {
-        current = test;
-      }
-    }
-    if (current) lines.push(current);
-    return lines;
+    return wrapTextSafe(text, maxWidth, font, size);
   }
 
   private static formatDateBR(input: any): string {

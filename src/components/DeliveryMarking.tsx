@@ -6,6 +6,7 @@ import type { RouteOrderWithDetails, Order, ReturnReason } from '../types/databa
 import { Package, CheckCircle, XCircle, Clock, MapPin, Users } from 'lucide-react';
 import { buildFullAddress, geocodeAddress, openWazeWithLL } from '../utils/maps';
 import { toast } from 'sonner';
+import { useDeliveryPhotos } from '../hooks/useDeliveryPhotos';
 
 const FALLBACK_RETURN_REASONS: ReturnReason[] = [
   { id: '1', reason: 'Cliente ausente', type: 'both' },
@@ -33,6 +34,9 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
   const [returnReasonByOrder, setReturnReasonByOrder] = useState<Record<string, string>>({});
   const [returnObservationsByOrder, setReturnObservationsByOrder] = useState<Record<string, string>>({});
   const [routeDetails, setRouteDetails] = useState<any>(null);
+
+  // Hook de fotos isolado
+  const { renderModal, capturePhotos, isProcessing: isPhotoProcessing } = useDeliveryPhotos();
 
   useEffect(() => {
     loadRouteOrders();
@@ -230,6 +234,12 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
   const markAsDelivered = async (order: RouteOrderWithDetails) => {
     try {
       if (processingIds.has(order.id)) return;
+
+      // 1. Capturar Fotos (Obrigatório se configurado)
+      // Se user cancelar ou não tirar min fotos, retorna false e aborta o fluxo.
+      const photosCaptured = await capturePhotos('delivered', order.order_id, order.id);
+      if (!photosCaptured) return;
+
       const next = new Set(processingIds); next.add(order.id); setProcessingIds(next);
       const confirmation = {
         order_id: order.order_id,
@@ -380,6 +390,13 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
 
     try {
       if (processingIds.has(order.id)) return;
+
+      // 1. Capturar Fotos (Opcional, mas oferecido)
+      const photosCaptured = await capturePhotos('returned', order.order_id, order.id);
+      // Se cancelou mas era opcional, photosCaptured pode ser true (depende da impl do hook).
+      // Se o hook retornar false, significa "user cancelou ação inteira".
+      if (!photosCaptured) return;
+
       const next = new Set(processingIds); next.add(order.id); setProcessingIds(next);
       const confirmation = {
         order_id: order.order_id,
@@ -502,6 +519,33 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
         // But here assumption is user clicked undo immediately. 
         // For safety: force status back to 'assigned' to LOCK it from Admin Dashboard.
 
+        // ===== LIMPAR FOTOS AO DESFAZER =====
+        // Deletar fotos do storage e da tabela delivery_photos (específico para este pedido)
+        try {
+          // 1. Buscar fotos deste route_order específico
+          const { data: photos } = await supabase
+            .from('delivery_photos')
+            .select('id, storage_path')
+            .eq('route_order_id', routeOrderId);
+
+          if (photos && photos.length > 0) {
+            // 2. Deletar arquivos do Storage
+            const paths = photos.map(p => p.storage_path);
+            await supabase.storage.from('delivery-photos').remove(paths);
+
+            // 3. Deletar registros da tabela
+            await supabase
+              .from('delivery_photos')
+              .delete()
+              .eq('route_order_id', routeOrderId);
+
+            console.log(`[undoReturn] Deletadas ${photos.length} fotos do pedido ${routeOrderId}`);
+          }
+        } catch (photoError) {
+          console.error(`[undoReturn] Erro ao deletar fotos do pedido ${routeOrderId}:`, photoError);
+          // Não interrompe o fluxo, apenas loga o erro
+        }
+
         const { error } = await supabase
           .from('route_orders')
           .update({
@@ -588,6 +632,33 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
             timestamp: new Date().toISOString(),
           });
         } catch { }
+
+        // ===== LIMPAR FOTOS AO DESFAZER =====
+        // Deletar fotos do storage e da tabela delivery_photos (específico para este pedido)
+        try {
+          // 1. Buscar fotos deste route_order específico
+          const { data: photos } = await supabase
+            .from('delivery_photos')
+            .select('id, storage_path')
+            .eq('route_order_id', routeOrderId);
+
+          if (photos && photos.length > 0) {
+            // 2. Deletar arquivos do Storage
+            const paths = photos.map(p => p.storage_path);
+            await supabase.storage.from('delivery-photos').remove(paths);
+
+            // 3. Deletar registros da tabela
+            await supabase
+              .from('delivery_photos')
+              .delete()
+              .eq('route_order_id', routeOrderId);
+
+            console.log(`[undoDelivery] Deletadas ${photos.length} fotos do pedido ${routeOrderId}`);
+          }
+        } catch (photoError) {
+          console.error(`[undoDelivery] Erro ao deletar fotos do pedido ${routeOrderId}:`, photoError);
+          // Não interrompe o fluxo, apenas loga o erro
+        }
 
         const updated = routeOrders.map(ro => ro.id === routeOrderId ? { ...ro, status: 'pending' as const, delivered_at: null } : ro);
         setRouteOrders(updated);
@@ -946,6 +1017,9 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
         )}
       </div>
 
+      <div className="fixed bottom-4 right-4 z-50">
+        {renderModal()}
+      </div>
     </div>
   );
 }

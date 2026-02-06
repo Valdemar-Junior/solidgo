@@ -25,6 +25,8 @@ export interface PhotoCaptureModalProps {
     maxPhotos?: number;
     productName?: string;
     isOffline?: boolean;
+    title?: string; // Título do modal (default: "Fotos da Montagem")
+    confirmLabel?: string; // Texto do botão de confirmar (default: "Confirmar Montagem")
 }
 
 export default function PhotoCaptureModal({
@@ -35,6 +37,8 @@ export default function PhotoCaptureModal({
     maxPhotos = 3,
     productName,
     isOffline = false,
+    title = 'Fotos da Montagem',
+    confirmLabel = 'Confirmar Montagem',
 }: PhotoCaptureModalProps) {
     const [photos, setPhotos] = useState<CapturedPhoto[]>([]);
     const [isProcessing, setIsProcessing] = useState(false);
@@ -161,7 +165,7 @@ export default function PhotoCaptureModal({
                 <div className="bg-indigo-600 text-white px-6 py-4">
                     <div className="flex items-start justify-between gap-3">
                         <div className="flex-1 min-w-0">
-                            <h2 className="text-lg font-bold">Fotos da Montagem</h2>
+                            <h2 className="text-lg font-bold">{title}</h2>
                             {productName && (
                                 <p className="text-indigo-200 text-sm break-words leading-snug mt-1">{productName}</p>
                             )}
@@ -301,7 +305,7 @@ export default function PhotoCaptureModal({
                                 : 'bg-gray-300 text-gray-500 cursor-not-allowed'}`}
                     >
                         <Check className="w-5 h-5" />
-                        Confirmar Montagem
+                        {confirmLabel}
                     </button>
                 </div>
 

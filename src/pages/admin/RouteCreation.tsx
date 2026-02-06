@@ -201,6 +201,7 @@ function RouteCreationContent() {
   const [filterBrand, setFilterBrand] = useState<string>('');
   const [filterDeadline, setFilterDeadline] = useState<'all' | 'within' | 'out'>('all');
   const [filterReturnedOnly, setFilterReturnedOnly] = useState<boolean>(false);
+  const [filterRetirada, setFilterRetirada] = useState<boolean>(false);
   const [filterServiceType, setFilterServiceType] = useState<string>(''); // 'troca', 'assistencia', 'normal'
 
   // Logic specific
@@ -305,7 +306,11 @@ function RouteCreationContent() {
       if (filterSeller && !seller.includes(filterSeller.toLowerCase())) return false;
       if (filterSaleDateStart && saleDateStr < filterSaleDateStart) return false;
       if (filterSaleDateEnd && saleDateStr > filterSaleDateEnd) return false;
+      if (filterSaleDateEnd && saleDateStr > filterSaleDateEnd) return false;
       if (filterReturnedOnly && !isReturnedFlag) return false;
+
+      const obsIntLower = String(o.observacoes_internas || raw.observacoes_internas || '').toLowerCase();
+      if (filterRetirada && !obsIntLower.includes('*retirada*')) return false;
 
       if (filterDeadline !== 'all') {
         const st = getPrazoStatusForOrder(o);
@@ -318,6 +323,7 @@ function RouteCreationContent() {
         if (filterServiceType === 'normal' && o.service_type) return false;
         if (filterServiceType !== 'normal' && st !== filterServiceType) return false;
       }
+
 
       return true;
     });
@@ -434,7 +440,7 @@ function RouteCreationContent() {
     orders, filterCity, filterNeighborhood, clientQuery, filterFreightFull, filterOperation,
     filterFilialVenda, filterSeller, filterSaleDateStart, filterSaleDateEnd, filterReturnedOnly,
     filterDeadline, filterServiceType, strictLocal, filterLocalEstocagem, strictDepartment,
-    filterDepartment, filterBrand, filterHasAssembly
+    filterDepartment, filterBrand, filterHasAssembly, filterRetirada
   ]);
 
   const sortedRows = useMemo(() => {
@@ -1052,7 +1058,9 @@ function RouteCreationContent() {
           if ('saleDateStart' in f) setFilterSaleDateStart(f.saleDateStart || '');
           if ('saleDateEnd' in f) setFilterSaleDateEnd(f.saleDateEnd || '');
           if ('brand' in f) setFilterBrand(f.brand || '');
+          if ('brand' in f) setFilterBrand(f.brand || '');
           if ('serviceType' in f) setFilterServiceType(f.serviceType || '');
+          if ('retirada' in f) setFilterRetirada(!!f.retirada);
         }
       }
     } catch { }
@@ -1075,12 +1083,14 @@ function RouteCreationContent() {
         operation: filterOperation,
         saleDateStart: filterSaleDateStart,
         saleDateEnd: filterSaleDateEnd,
+        saleDateEnd: filterSaleDateEnd,
         brand: filterBrand,
-        serviceType: filterServiceType
+        serviceType: filterServiceType,
+        retirada: filterRetirada
       };
       localStorage.setItem('rc_filters', JSON.stringify(payload));
     } catch { }
-  }, [filterCity, filterNeighborhood, filterFilialVenda, filterLocalEstocagem, strictLocal, filterSeller, filterClient, filterDepartment, strictDepartment, filterFreightFull, filterHasAssembly, filterOperation, filterSaleDateStart, filterSaleDateEnd, filterBrand, filterServiceType]);
+  }, [filterCity, filterNeighborhood, filterFilialVenda, filterLocalEstocagem, strictLocal, filterSeller, filterClient, filterDepartment, strictDepartment, filterFreightFull, filterHasAssembly, filterOperation, filterSaleDateStart, filterSaleDateEnd, filterBrand, filterServiceType, filterRetirada]);
 
   // --- DATE HELPER FUNCTIONS ---
   const stringToDate = (str: string): Date | null => {
@@ -2368,6 +2378,13 @@ function RouteCreationContent() {
                 </div>
               </div>
               <div className="space-y-1">
+                <label className="text-xs font-semibold text-gray-500 uppercase">Retirada</label>
+                <div className="flex items-center gap-2 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg">
+                  <input id="fretirada" type="checkbox" className="h-4 w-4" checked={filterRetirada} onChange={(e) => setFilterRetirada(e.target.checked)} />
+                  <label htmlFor="fretirada" className="text-sm text-gray-700">Apenas pedidos para Retirada</label>
+                </div>
+              </div>
+              <div className="space-y-1">
                 <label className="text-xs font-semibold text-gray-500 uppercase">Tipo Serviço</label>
                 <select value={filterServiceType} onChange={(e) => setFilterServiceType(e.target.value)} className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all">
                   <option value="">Todos</option>
@@ -2380,7 +2397,7 @@ function RouteCreationContent() {
 
             <div className="flex justify-end mt-4 pt-4 border-t border-gray-100">
               <button
-                onClick={() => { setFilterCity(''); setFilterNeighborhood(''); setFilterFilialVenda(''); setFilterLocalEstocagem(''); setStrictLocal(false); setFilterSeller(''); setFilterClient(''); setClientQuery(''); setFilterFreightFull(''); setFilterOperation(''); setFilterDepartment(''); setFilterHasAssembly(false); setFilterSaleDateStart(''); setFilterSaleDateEnd(''); setFilterBrand(''); setFilterReturnedOnly(false); setFilterServiceType(''); }}
+                onClick={() => { setFilterCity(''); setFilterNeighborhood(''); setFilterFilialVenda(''); setFilterLocalEstocagem(''); setStrictLocal(false); setFilterSeller(''); setFilterClient(''); setClientQuery(''); setFilterFreightFull(''); setFilterOperation(''); setFilterDepartment(''); setFilterHasAssembly(false); setFilterSaleDateStart(''); setFilterSaleDateEnd(''); setFilterBrand(''); setFilterReturnedOnly(false); setFilterServiceType(''); setFilterRetirada(false); }}
                 className="text-sm text-red-600 hover:text-red-800 font-medium flex items-center"
               >
                 <X className="h-3 w-3 mr-1" /> Limpar filtros
@@ -2536,7 +2553,7 @@ function RouteCreationContent() {
                     const obsIntLower = String(o.observacoes_internas || raw.observacoes_internas || '').toLowerCase();
                     const obsLower = String(o.observacoes || raw.observacoes || '').toLowerCase();
                     const temFreteFull = hasFreteFull(o);
-                    const hasAssembly = (it?.has_assembly === true || String(it?.has_assembly) === 'true' || String(it?.has_assembly) === '1') || obsIntLower.includes('*montagem*');
+                    const hasAssembly = isTrueGlobal(it?.has_assembly) || obsIntLower.includes('*montagem*');
 
                     // Flags Logic
                     const isReturned = Boolean(o.return_flag) || String(o.status) === 'returned';
@@ -2621,6 +2638,12 @@ function RouteCreationContent() {
                                   <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-yellow-100 text-yellow-800 border border-yellow-200" title="Frete Full">
                                     <Zap className="h-3.5 w-3.5" />
                                     Full
+                                  </span>
+                                )}
+                                {obsIntLower.includes('*retirada*') && (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-purple-100 text-purple-800 border border-purple-200" title="Retirada em Loja/Fábrica">
+                                    <Store className="h-3.5 w-3.5" />
+                                    Retirada
                                   </span>
                                 )}
                                 {(() => {

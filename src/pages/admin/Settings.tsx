@@ -44,6 +44,7 @@ export default function Settings() {
   const [requireConference, setRequireConference] = useState(true);
   const [allowOrderUpdates, setAllowOrderUpdates] = useState(false);
   const [requireAssemblyPhotos, setRequireAssemblyPhotos] = useState(false); // NOVO: Fotos de montagem
+  const [requireDeliveryPhotos, setRequireDeliveryPhotos] = useState(false); // NOVO: Fotos de entrega
 
   // State for Logistics
   const [ruralKeywords, setRuralKeywords] = useState<string[]>([]);
@@ -63,7 +64,7 @@ export default function Settings() {
   const load = async () => {
     try {
       setLoading(true);
-      const [p, n, m, g, l, confFlag, updateFlag, photoFlag, ruralKeys, generalDeadlines] = await Promise.all([
+      const [p, n, m, g, l, confFlag, updateFlag, photoFlag, deliveryPhotoFlag, ruralKeys, generalDeadlines] = await Promise.all([
         getUrl('envia_pedidos'),
         getUrl('gera_nf'),
         getUrl('envia_mensagem'),
@@ -72,6 +73,7 @@ export default function Settings() {
         supabase.from('app_settings').select('value').eq('key', 'require_route_conference').single(),
         supabase.from('app_settings').select('value').eq('key', 'allow_order_updates_on_import').single(),
         supabase.from('app_settings').select('value').eq('key', 'require_assembly_photos').single(), // NOVO
+        supabase.from('app_settings').select('value').eq('key', 'require_delivery_photos').single(), // NOVO ENTREGA
         supabase.from('app_settings').select('value').eq('key', 'rural_keywords').single(),
         supabase.from('app_settings').select('value').eq('key', 'general_deadlines').single(),
       ]);
@@ -89,6 +91,9 @@ export default function Settings() {
 
       const photosEnabled = (photoFlag.data as any)?.value?.enabled;
       setRequireAssemblyPhotos(photosEnabled === true); // NOVO: Default to false
+
+      const deliveryPhotosEnabled = (deliveryPhotoFlag.data as any)?.value?.enabled;
+      setRequireDeliveryPhotos(deliveryPhotosEnabled === true); // Default false
 
       const keywords = (ruralKeys.data as any)?.value?.keywords;
       setRuralKeywords(Array.isArray(keywords) ? keywords : []);
@@ -148,6 +153,10 @@ export default function Settings() {
       }, {
         key: 'require_assembly_photos', // NOVO
         value: { enabled: requireAssemblyPhotos },
+        updated_at: new Date().toISOString()
+      }, {
+        key: 'require_delivery_photos', // NOVO ENTREGA
+        value: { enabled: requireDeliveryPhotos },
         updated_at: new Date().toISOString()
       }], { onConflict: 'key' });
       if (flagErr) throw flagErr;
@@ -301,6 +310,30 @@ export default function Settings() {
                     type="checkbox"
                     checked={requireAssemblyPhotos}
                     onChange={(e) => setRequireAssemblyPhotos(e.target.checked)}
+                    className="h-5 w-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                  />
+                </label>
+
+                <hr className="border-gray-100 my-4" />
+
+                <p className="text-sm text-gray-600">
+                  Configurações de Entrega
+                </p>
+                <label className="flex items-center justify-between bg-gray-50 border border-gray-100 rounded-lg px-4 py-3">
+                  <div>
+                    <p className="text-sm font-semibold text-gray-900">🚚 Exigir fotos na Entrega/Retorno</p>
+                    <p className="text-xs text-gray-500">
+                      Quando ligado:
+                      <ul className="list-disc list-inside mt-1 ml-1">
+                        <li><b>Entrega:</b> Exige 2 fotos (Produto + Recibo).</li>
+                        <li><b>Retorno:</b> Permite foto opcional.</li>
+                      </ul>
+                    </p>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={requireDeliveryPhotos}
+                    onChange={(e) => setRequireDeliveryPhotos(e.target.checked)}
                     className="h-5 w-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
                   />
                 </label>
