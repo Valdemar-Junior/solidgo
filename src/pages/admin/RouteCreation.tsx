@@ -44,7 +44,8 @@ import {
   Check,
   ArrowUp,
   ArrowDown,
-  ArrowUpDown
+  ArrowUpDown,
+  Replace
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { DeliverySheetGenerator } from '../../utils/pdf/deliverySheetGenerator';
@@ -144,6 +145,7 @@ function RouteCreationContent() {
   const [helpers, setHelpers] = useState<any[]>([]);
   const [selectedTeam, setSelectedTeam] = useState<string>('');
   const [selectedHelper, setSelectedHelper] = useState<string>(''); // helper_id
+  const [pickupTeam, setPickupTeam] = useState<string>(''); // Novo estado para seleção de equipe na coleta
 
   // UI States
   const [loading, setLoading] = useState(true);
@@ -225,7 +227,7 @@ function RouteCreationContent() {
   const loadDataRef = useRef<any>(null);
 
   // Tabs State - expandido para incluir bloqueados e coletas
-  const [activeRoutesTab, setActiveRoutesTab] = useState<'deliveries' | 'pickups' | 'blocked' | 'pickupOrders'>('deliveries');
+  const [activeRoutesTab, setActiveRoutesTab] = useState<'deliveries' | 'pickups' | 'blocked' | 'pickupOrders' | 'pickupRoutes'>('deliveries');
 
   // Sorting State
   const [sortColumn, setSortColumn] = useState<string>('');
@@ -402,27 +404,27 @@ function RouteCreationContent() {
         v['cliente'] = o.customer_name || raw?.destinatario_nome || '-';
         v['cpf'] = o.customer_cpf || raw?.cpf_cnpj || '-';
         v['telefone'] = o.phone || raw?.destinatario_telefone || '-';
-        v['cidade'] = addr?.city || raw?.destinatario_cidade || '-';
-        v['bairro'] = addr?.neighborhood || raw?.destinatario_bairro || '-';
-        v['sku'] = it?.sku || '-';
-        v['produto'] = it?.name || it?.descricao || '-';
-        v['quantidade'] = it?.quantity || 1;
-        v['department'] = it?.department || '-';
-        v['brand'] = it?.brand || '-';
-        v['localEstocagem'] = it?.location || '-';
+        v['cidade'] = (addr as any)?.city || raw?.destinatario_cidade || '-';
+        v['bairro'] = (addr as any)?.neighborhood || raw?.destinatario_bairro || '-';
+        v['sku'] = (it as any)?.sku || '-';
+        v['produto'] = (it as any)?.name || (it as any)?.descricao || '-';
+        v['quantidade'] = (it as any)?.quantity || 1;
+        v['department'] = (it as any)?.department || '-';
+        v['brand'] = (it as any)?.brand || '-';
+        v['localEstocagem'] = (it as any)?.location || '-';
         v['filialVenda'] = o.filial_venda || raw?.filial_venda || '-';
         v['operacao'] = raw?.operacoes || '-';
-        v['vendedor'] = o.vendedor_nome || raw?.vendedor || '-';
+        v['vendedor'] = (o as any).vendedor_nome || raw?.vendedor || '-';
         v['situacao'] = o.status || '-';
-        v['obsPublicas'] = o.observacoes || raw?.observacoes || '-';
+        v['obsPublicas'] = (o as any).observacoes || raw?.observacoes || '-';
         v['obsInternas'] = o.observacoes_internas || raw?.observacoes_internas || '-';
 
         // --- NEW COLUMN: Prev. Entrega ---
         v['previsaoEntrega'] = formatDate(getPrevisaoEntrega(o));
 
         // Address
-        const str = addr?.street || raw?.destinatario_endereco || '';
-        const num = addr?.number || raw?.destinatario_numero || '';
+        const str = (addr as any)?.street || raw?.destinatario_endereco || '';
+        const num = (addr as any)?.number || raw?.destinatario_numero || '';
         v['endereco'] = `${str}, ${num}`;
 
         // Other locations
@@ -589,7 +591,7 @@ function RouteCreationContent() {
       pending: 'Salvando alterações...',
       success: 'Rota atualizada com sucesso!',
       error: 'Erro ao atualizar rota'
-    });
+    } as any);
   };
 
   // Motorista placeholder para retiradas - não será mostrado na UI
@@ -597,6 +599,18 @@ function RouteCreationContent() {
 
   const filteredRoutesList = useMemo(() => {
     return routesList.filter(r => {
+      // Logic for tab filtering
+      const name = String(r.name || '');
+      const isRetirada = name.startsWith('RETIRADA');
+      const isColeta = name.startsWith('COLETA-'); // Rotas de coleta iniciam com COLETA-
+
+      if (activeRoutesTab === 'pickups') return isRetirada;
+      if (activeRoutesTab === 'pickupRoutes') return isColeta;
+      // Deliveries = Not Retirada AND Not Coleta
+      if (activeRoutesTab === 'deliveries') return !isRetirada && !isColeta;
+
+      return false;
+    }).filter(r => {
       const isPkp = String(r.name || '').startsWith('RETIRADA');
       const tabMatch = activeRoutesTab === 'pickups' ? isPkp : !isPkp;
       if (!tabMatch) return false;
@@ -1083,7 +1097,7 @@ function RouteCreationContent() {
         operation: filterOperation,
         saleDateStart: filterSaleDateStart,
         saleDateEnd: filterSaleDateEnd,
-        saleDateEnd: filterSaleDateEnd,
+
         brand: filterBrand,
         serviceType: filterServiceType,
         retirada: filterRetirada
@@ -1920,15 +1934,55 @@ function RouteCreationContent() {
   // Função para criar ordem de coleta de devolução
   const createPickupOrder = async () => {
     if (!selectedPickupOrder) return;
-    if (!pickupOrderConferente) {
-      toast.error('Selecione o conferente responsável');
+    if (!pickupTeam) {
+      toast.error('Selecione uma equipe');
       return;
     }
 
     setPickupOrderLoading(true);
     try {
       const order = selectedPickupOrder;
-      const conferenteName = conferentes.find(c => c.id === pickupOrderConferente)?.name || 'Conferente';
+
+      // Buscar dados da equipe selecionada
+      let teamData = teams.find(t => t.id === pickupTeam);
+
+      // Se não achou na lista local (raro), busca no banco
+      if (!teamData) {
+        const { data: t } = await supabase.from('teams_user').select('*').eq('id', pickupTeam).single();
+        if (t) teamData = t;
+      }
+
+      // Definição de Motorista e Ajudante baseado na equipe
+      let driverIdToUse = null;
+      let helperIdToUse = null;
+      let conferenteName = 'Conferente';
+
+      // Se a equipe tem driver_user_id, precisamos achar o driver correspondente na tabela drivers
+      if (teamData?.driver_user_id) {
+        // Tenta achar driver com esse user_id na lista
+        const drv = drivers.find(d => d.user_id === teamData.driver_user_id);
+        if (drv) driverIdToUse = drv.id;
+        else {
+          // Fallback: se não achar na lista, pode ser que drivers não esteja carregado full, ou o user_id não bata. 
+          // Tenta buscar driver pelo user_id
+          const { data: dDB } = await supabase.from('drivers').select('id').eq('user_id', teamData.driver_user_id).single();
+          if (dDB) driverIdToUse = dDB.id;
+        }
+      }
+
+      helperIdToUse = teamData?.helper_user_id || null;
+
+      // Se não achou motorista na equipe, usa o placeholder OU avisa (decisão: avisar/falhar é mais seguro, mas vou manter fallback para placeholder se crítico)
+      if (!driverIdToUse) {
+        console.warn('Motorista da equipe não encontrado na tabela drivers. Usando placeholder.');
+        driverIdToUse = PICKUP_PLACEHOLDER_DRIVER_ID;
+      }
+
+      // Conferente Name (apenas visual para observação)
+      if (pickupOrderConferente) {
+        const c = conferentes.find(x => x.id === pickupOrderConferente);
+        if (c) conferenteName = c.name;
+      }
 
       // 1. Gerar DANFE da nota de devolução via webhook
       toast.info('Gerando nota fiscal de devolução...');
@@ -1960,9 +2014,13 @@ function RouteCreationContent() {
           });
           if (resp.ok) {
             const payload = await resp.json();
+            console.log('Webhook Payload Recebido:', payload); // DEBUG
             const items = Array.isArray(payload) ? payload : [payload];
             if (items[0]?.pdf_base64) {
               danfeBase64 = items[0].pdf_base64;
+              console.log('DANFE Base64 extraído com sucesso. Tamanho:', danfeBase64.length); // DEBUG
+            } else {
+              console.warn('DANFE Base64 não encontrado no payload do webhook.', items);
             }
           }
         } catch (e) {
@@ -1970,14 +2028,73 @@ function RouteCreationContent() {
         }
       }
 
-      // 2. Criar rota de coleta
+      // 2. CRIAR NOVO PEDIDO DE COLETA (Prefixo C-)
+      // Isso é necessário para evitar conflito com o pedido original que já está Entregue
+      // e para ter um ciclo de vida independente na rota de coleta.
+
+      const newOrderErpId = `C-${order.order_id_erp}`;
+
+      // Preparar objeto do novo pedido copiando dados do original
+      const newOrderPayload = {
+        order_id_erp: newOrderErpId,
+        customer_name: order.customer_name,
+        phone: order.phone,
+        customer_cpf: order.customer_cpf,
+        address_json: order.address_json,
+        items_json: (order.items_json || []).map((item: any) => ({
+          ...item,
+          // Importante: Remover flags de montagem para não disparar trigger de assembly product ao entregar
+          tem_montagem: false,
+          has_assembly: false,
+          assembly_status: null
+        })),
+        status: 'pending', // Nasce pendente para poder ser roteirizado
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        raw_json: order.raw_json, // Mantém raw_json para referência
+
+        // Campos específicos da coleta
+        xml_documento: null, // Limpa XML de venda para evitar confusão
+        return_nfe_xml: order.return_nfe_xml, // XML da devolução no campo correto
+        return_nfe_number: order.return_nfe_number,
+
+        danfe_base64: null,
+        return_danfe_base64: danfeBase64, // Salva DANFE gerada no campo de retorno
+        danfe_gerada_em: new Date().toISOString(),
+
+        filial_venda: order.filial_venda,
+        data_venda: order.data_venda,
+
+        observacoes_internas: `PEDIDO DE COLETA GERADO AUTOMATICAMENTE.\nOrigem: ${order.order_id_erp}\nMotivo: ${order.blocked_reason || 'Devolução'}`.slice(0, 1000),
+
+        // Limpar flags de controle anteriores
+        return_flag: false,
+        requires_pickup: false, // Este pedido JÁ É a execução da pickup
+        pickup_created_at: null,
+        blocked_at: null
+      };
+
+      console.log('PAYLOAD SENDING TO DB:', newOrderPayload); // DEBUG: Verificar campos danfe_base64 vs return_danfe_base64
+
+      // Inserir novo pedido
+      const { data: newOrderData, error: newOrderError } = await supabase
+        .from('orders')
+        .insert(newOrderPayload)
+        .select()
+        .single();
+
+      if (newOrderError) throw newOrderError;
+
+      // 3. Criar rota de coleta
       const routeName = `COLETA-${order.return_nfe_number || order.order_id_erp}-${new Date().toLocaleDateString('pt-BR').replace(/\//g, '')}`;
 
       const { data: routeData, error: routeError } = await supabase
         .from('routes')
         .insert({
           name: routeName,
-          driver_id: PICKUP_PLACEHOLDER_DRIVER_ID,
+          team_id: pickupTeam, // ID da equipe
+          driver_id: driverIdToUse, // ID do motorista da equipe
+          helper_id: helperIdToUse, // ID do ajudante (user_id)
           vehicle_id: null,
           status: 'pending',
           observations: `Coleta de devolução. NF: ${order.return_nfe_number || '-'}. Resp: ${conferenteName}. ${pickupOrderObservations}`.trim()
@@ -1987,40 +2104,43 @@ function RouteCreationContent() {
 
       if (routeError) throw routeError;
 
-      // 3. Criar route_order
+      // 4. Criar route_order vinculada ao NOVO pedido de coleta
       const { error: roError } = await supabase.from('route_orders').insert({
         route_id: routeData.id,
-        order_id: order.id,
+        order_id: newOrderData.id, // ID do novo pedido C-
         sequence: 1,
         status: 'pending',
         delivery_observations: `Coleta de devolução. NF: ${order.return_nfe_number || '-'}. Motivo: ${order.blocked_reason || '-'}`
       });
       if (roError) throw roError;
 
-      // 4. Atualizar o pedido
+      // 5. Atualizar o pedido ORIGINAL marcando que a coleta foi criada
+      // Isso faz ele sumir da lista de "Coletas Pendentes"
       const updateData: any = {
         pickup_created_at: new Date().toISOString()
       };
+
+      // Opcional: Salvar DANFE no original também para histórico, se desejar
       if (danfeBase64) {
-        // Salvar DANFE de devolução em campo separado (não sobrescrever a de venda)
         updateData.return_danfe_base64 = danfeBase64;
       }
 
       const { error: ordError } = await supabase.from('orders').update(updateData).eq('id', order.id);
       if (ordError) throw ordError;
 
-      toast.success('Coleta de devolução criada com sucesso!');
+      toast.success(`Coleta criada! Pedido gerado: ${newOrderErpId}`);
 
       // Limpar e fechar modal
       setShowPickupOrderModal(false);
       setSelectedPickupOrder(null);
       setPickupOrderConferente('');
+      setPickupTeam(''); // Limpar equipe
       setPickupOrderObservations('');
 
       // Recarregar dados
       await loadData(false);
 
-      // Mudar para aba de retiradas
+      // Mudar para aba de retiradas (onde a rota vai aparecer)
       setActiveRoutesTab('pickups');
 
     } catch (error: any) {
@@ -2787,14 +2907,26 @@ function RouteCreationContent() {
                   <span className="bg-orange-500 text-white text-xs px-1.5 py-0.5 rounded-full">{pickupPendingOrders.length}</span>
                 )}
               </button>
+              <button
+                onClick={() => setActiveRoutesTab('pickupRoutes')}
+                className={`px-4 py-2 rounded-lg text-sm font-bold transition-all flex items-center gap-2 ${activeRoutesTab === 'pickupRoutes' ? 'bg-white shadow-sm text-teal-700' : 'text-gray-500 hover:text-gray-700'}`}
+              >
+                <Replace className="h-4 w-4" />
+                Rotas de Coleta
+              </button>
             </div>
 
             {(() => {
               let count = 0;
-              if (activeRoutesTab === 'deliveries' || activeRoutesTab === 'pickups') {
+              if (activeRoutesTab === 'deliveries' || activeRoutesTab === 'pickups' || activeRoutesTab === 'pickupRoutes') {
                 const filtered = routesList.filter(r => {
-                  const isPkp = String(r.name || '').startsWith('RETIRADA');
-                  return activeRoutesTab === 'pickups' ? isPkp : !isPkp;
+                  const name = String(r.name || '');
+                  const isRetirada = name.startsWith('RETIRADA');
+                  const isColeta = name.startsWith('COLETA-');
+
+                  if (activeRoutesTab === 'pickups') return isRetirada;
+                  if (activeRoutesTab === 'pickupRoutes') return isColeta;
+                  return !isRetirada && !isColeta;
                 });
                 count = filtered.length;
               } else if (activeRoutesTab === 'blocked') {
@@ -2811,16 +2943,18 @@ function RouteCreationContent() {
           </div>
 
           {/* Conteúdo condicional baseado na aba ativa */}
-          {(activeRoutesTab === 'deliveries' || activeRoutesTab === 'pickups') && (
+          {(activeRoutesTab === 'deliveries' || activeRoutesTab === 'pickups' || activeRoutesTab === 'pickupRoutes') && (
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
               {filteredRoutesList.length === 0 ? (
                 <div className="col-span-full bg-white rounded-xl border border-dashed border-gray-300 p-12 text-center">
                   <div className="mx-auto w-16 h-16 bg-gray-50 rounded-full flex items-center justify-center mb-4">
-                    {activeRoutesTab === 'pickups' ? <Store className="h-8 w-8 text-gray-400" /> : <Truck className="h-8 w-8 text-gray-400" />}
+                    {activeRoutesTab === 'pickups' ? <Store className="h-8 w-8 text-gray-400" /> :
+                      activeRoutesTab === 'pickupRoutes' ? <Replace className="h-8 w-8 text-gray-400" /> : <Truck className="h-8 w-8 text-gray-400" />}
                   </div>
                   <h3 className="text-lg font-medium text-gray-900">Nenhum registro encontrado</h3>
                   <p className="text-gray-500">
-                    {activeRoutesTab === 'pickups' ? 'Nenhuma retirada registrada recentemente.' : 'Crie sua primeira rota selecionando pedidos acima.'}
+                    {activeRoutesTab === 'pickups' ? 'Nenhuma retirada registrada recentemente.' :
+                      activeRoutesTab === 'pickupRoutes' ? 'Nenhuma rota de coleta registrada recentemente.' : 'Crie sua primeira rota selecionando pedidos acima.'}
                   </p>
                 </div>
               ) : (
@@ -2991,7 +3125,7 @@ function RouteCreationContent() {
 
 
               {/* Load More Button */}
-              {(activeRoutesTab === 'deliveries' || activeRoutesTab === 'pickups') && hasMoreRoutes && filteredRoutesList.length > 0 && (
+              {(activeRoutesTab === 'deliveries' || activeRoutesTab === 'pickups' || activeRoutesTab === 'pickupRoutes') && hasMoreRoutes && filteredRoutesList.length > 0 && (
                 <div className="col-span-full flex justify-center mt-4">
                   <button
                     onClick={() => fetchRoutes(false)}
@@ -3165,17 +3299,35 @@ function RouteCreationContent() {
                 </div>
               </div>
 
+              {/* Seleção de Equipe (Substitui motorista fixo) */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Equipe de Coleta *
+                </label>
+                <select
+                  value={pickupTeam}
+                  onChange={(e) => setPickupTeam(e.target.value)}
+                  className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none transition-all"
+                >
+                  <option value="">Selecione a equipe...</option>
+                  {teams.map(t => (
+                    <option key={t.id} value={t.id}>{t.name}</option>
+                  ))}
+                </select>
+                <p className="text-xs text-gray-500 mt-1">Motorista e ajudante serão definidos automaticamente pela equipe.</p>
+              </div>
+
               {/* Conferente */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Conferente Responsável *
+                  Conferente (Opcional)
                 </label>
                 <select
                   value={pickupOrderConferente}
                   onChange={(e) => setPickupOrderConferente(e.target.value)}
                   className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none transition-all"
                 >
-                  <option value="">Selecione o conferente...</option>
+                  <option value="">Selecione...</option>
                   {conferentes.map(c => (
                     <option key={c.id} value={c.id}>{c.name}</option>
                   ))}
@@ -4138,14 +4290,14 @@ function RouteCreationContent() {
                               if (!selectedRoute) return;
                               try {
                                 if (selectedRoute.status !== 'pending') { toast.error('A rota ja foi iniciada'); return; }
-                                const conf = (selectedRoute).conference;
+                                const conf = (selectedRoute as any).conference;
                                 const cStatus = String(conf?.status || '').toLowerCase();
                                 const ok = conf?.result_ok === true || cStatus === 'completed';
                                 if (requireConference && !ok) { toast.error('Finalize a conferencia para iniciar a rota'); return; }
                                 const { error } = await supabase.from('routes').update({ status: 'in_progress' }).eq('id', selectedRoute.id);
                                 if (error) throw error;
                                 const updated = { ...selectedRoute, status: 'in_progress' };
-                                setSelectedRoute(updated);
+                                setSelectedRoute(updated as any);
                                 toast.success('Rota iniciada');
                                 loadData();
                               } catch (e) {
@@ -4154,12 +4306,12 @@ function RouteCreationContent() {
                             }}
                             disabled={
                               selectedRoute.status !== 'pending' ||
-                              (requireConference && !((selectedRoute)?.conference?.result_ok === true || String((selectedRoute)?.conference?.status || '').toLowerCase() === 'completed'))
+                              (requireConference && !(((selectedRoute as any)?.conference?.result_ok === true) || String((selectedRoute as any)?.conference?.status || '').toLowerCase() === 'completed'))
                             }
                             title={
                               selectedRoute.status !== 'pending'
                                 ? 'A rota ja foi iniciada'
-                                : ((requireConference && !((selectedRoute)?.conference?.result_ok === true || String((selectedRoute)?.conference?.status || '').toLowerCase() === 'completed')) ? 'Finalize a conferencia para iniciar' : '')
+                                : ((requireConference && !(((selectedRoute as any)?.conference?.result_ok === true) || String((selectedRoute as any)?.conference?.status || '').toLowerCase() === 'completed')) ? 'Finalize a conferencia para iniciar' : '')
                             }
                             className="flex items-center justify-center px-4 py-2 bg-yellow-50 text-yellow-700 hover:bg-yellow-100 rounded-lg font-medium text-sm transition-colors border border-yellow-200 disabled:opacity-50 disabled:cursor-not-allowed"
                           >
@@ -4377,8 +4529,8 @@ function RouteCreationContent() {
                           // Verificar se é rota de coleta (usa DANFE de devolução)
                           const isPickupRoute = String(selectedRoute.name || '').startsWith('COLETA-');
 
-                          // Para coletas, usar return_danfe_base64; para entregas, usar danfe_base64
-                          const getDanfe = (order: any) => isPickupRoute ? order?.return_danfe_base64 : order?.danfe_base64;
+                          // Para coletas, usar return_danfe_base64; se não tiver, tenta danfe_base64 (retrocompatibilidade ou caso tenha salvo no padrão)
+                          const getDanfe = (order: any) => isPickupRoute ? (order?.return_danfe_base64 || order?.danfe_base64) : order?.danfe_base64;
                           const getXml = (order: any) => isPickupRoute ? order?.return_nfe_xml : (order?.xml_documento || '');
 
                           const allHaveDanfe = (roData || []).every((ro: any) => !!getDanfe(ro.order));
@@ -4721,11 +4873,48 @@ function RouteCreationContent() {
                                   title="Remover da rota"
                                   onClick={async () => {
                                     try {
-                                      const { error: delErr } = await supabase.from('route_orders').delete().eq('id', ro.id);
-                                      if (delErr) throw delErr;
-                                      const { error: updErr } = await supabase.from('orders').update({ status: 'pending' }).eq('id', ro.order_id);
-                                      if (updErr) throw updErr;
-                                      toast.success('Pedido removido da rota');
+                                      // LÓGICA DE EXCLUSÃO COM ROLLBACK PARA COLETAS
+                                      const orderERP = String(ro.order?.order_id_erp || '');
+                                      const isPickupOrder = orderERP.startsWith('C-');
+
+                                      if (isPickupOrder) {
+                                        // 1. Extrair ID original
+                                        const originalErpInfo = orderERP.substring(2); // remove "C-"
+                                        // Tenta achar o pedido original. Como não temos o ID original fácil aqui no objeto ro, 
+                                        // vamos buscar pelo order_id_erp se possível, ou assumir que o 'C-' foi criado corretamente.
+                                        // O ideal seria ter salvo o original_id no pedido de coleta, mas usamos o ERP ID como chave lógica.
+
+                                        // Buscar pedido original pelo ERP ID
+                                        const { data: originalOrder } = await supabase
+                                          .from('orders')
+                                          .select('id')
+                                          .eq('order_id_erp', originalErpInfo)
+                                          .single();
+
+                                        if (originalOrder) {
+                                          // Atualiza pedido original limpando pickup_created_at
+                                          await supabase.from('orders').update({ pickup_created_at: null }).eq('id', originalOrder.id);
+                                        }
+
+                                        // Excluir o pedido da rota
+                                        const { error: delErr } = await supabase.from('route_orders').delete().eq('id', ro.id);
+                                        if (delErr) throw delErr;
+
+                                        // EXCLUIR O PEDIDO "C-" (limpeza)
+                                        // Como ele foi criado só pra essa rota, se saiu da rota, deve sumir.
+                                        await supabase.from('orders').delete().eq('id', ro.order_id);
+
+                                        toast.success('Coleta cancelada. Pedido voltou para pendências.');
+
+                                      } else {
+                                        // LÓGICA PADRÃO PARA ENTREGAS NORMAIS
+                                        const { error: delErr } = await supabase.from('route_orders').delete().eq('id', ro.id);
+                                        if (delErr) throw delErr;
+                                        const { error: updErr } = await supabase.from('orders').update({ status: 'pending' }).eq('id', ro.order_id);
+                                        if (updErr) throw updErr;
+                                        toast.success('Pedido removido da rota');
+                                      }
+
                                       const updated = { ...selectedRoute } as any;
                                       updated.route_orders = (updated.route_orders || []).filter((x: any) => x.id !== ro.id);
                                       setSelectedRoute(updated);
@@ -4737,8 +4926,9 @@ function RouteCreationContent() {
                                           : r
                                       ));
                                       loadData();
-                                    } catch {
-                                      toast.error('Falha ao remover pedido');
+                                    } catch (err: any) {
+                                      console.error(err);
+                                      toast.error('Falha ao remover pedido: ' + err.message);
                                     }
                                   }}
                                 >
@@ -4806,23 +4996,23 @@ function RouteCreationContent() {
                                     });
 
                                     const mappedOrder = {
-                                      id: order.id || ro.order_id,
-                                      order_id_erp: String(order.order_id_erp || ro.order_id || ''),
-                                      customer_name: String(order.customer_name || (order.raw_json?.nome_cliente ?? '')),
-                                      phone: String(order.phone || (order.raw_json?.cliente_celular ?? '')),
+                                      id: (order as any).id || ro.order_id,
+                                      order_id_erp: String((order as any).order_id_erp || ro.order_id || ''),
+                                      customer_name: String((order as any).customer_name || ((order as any).raw_json?.nome_cliente ?? '')),
+                                      phone: String((order as any).phone || ((order as any).raw_json?.cliente_celular ?? '')),
                                       address_json: {
-                                        street: String(address.street || order.raw_json?.destinatario_endereco || ''),
-                                        neighborhood: String(address.neighborhood || order.raw_json?.destinatario_bairro || ''),
-                                        city: String(address.city || order.raw_json?.destinatario_cidade || ''),
-                                        state: String(address.state || ''),
-                                        zip: String(address.zip || order.raw_json?.destinatario_cep || ''),
-                                        complement: address.complement || order.raw_json?.destinatario_complemento || '',
+                                        street: String((address as any).street || (order as any).raw_json?.destinatario_endereco || ''),
+                                        neighborhood: String((address as any).neighborhood || (order as any).raw_json?.destinatario_bairro || ''),
+                                        city: String((address as any).city || (order as any).raw_json?.destinatario_cidade || ''),
+                                        state: String((address as any).state || ''),
+                                        zip: String((address as any).zip || (order as any).raw_json?.destinatario_cep || ''),
+                                        complement: (address as any).complement || (order as any).raw_json?.destinatario_complemento || '',
                                       },
                                       items_json: items,
                                       raw_json: order.raw_json || null,
-                                      total: Number(order.total || 0),
+                                      total: Number((order as any).total || 0),
                                       status: order.status || 'imported',
-                                      observations: order.observations || '',
+                                      observations: (order as any).observations || '',
                                       created_at: order.created_at || new Date().toISOString(),
                                       updated_at: order.updated_at || new Date().toISOString(),
                                     } as any;

@@ -888,7 +888,7 @@ function AssemblyManagementContent() {
           // Safe update: Add these products to the global list without overwriting
           setAssemblyInRoutes(prev => {
             const others = prev.filter(p => p.assembly_route_id !== formattedRoute.id);
-            return [...others, ...formattedRoute.assembly_products];
+            return [...others, ...(formattedRoute as any).assembly_products];
           });
 
           setSelectedRoute(formattedRoute);
@@ -1711,7 +1711,7 @@ function AssemblyManagementContent() {
       // Assembly Management works on Order Grouping.
       // We'll check if the order (or its products) match.
       // Simplified: check field on order record if available or first product.
-      const brand = String(order?.brand || raw?.marca || products[0]?.product_brand || '').toLowerCase();
+      const brand = String((order as any)?.brand || raw?.marca || (products[0] as any)?.product_brand || '').toLowerCase();
 
       const matchFilial = filterFilialVenda ? filial === filterFilialVenda.toLowerCase() : true;
       const matchSeller = filterSeller ? seller === filterSeller.toLowerCase() : true;
