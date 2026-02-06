@@ -2014,13 +2014,9 @@ function RouteCreationContent() {
           });
           if (resp.ok) {
             const payload = await resp.json();
-            console.log('Webhook Payload Recebido:', payload); // DEBUG
             const items = Array.isArray(payload) ? payload : [payload];
             if (items[0]?.pdf_base64) {
               danfeBase64 = items[0].pdf_base64;
-              console.log('DANFE Base64 extraído com sucesso. Tamanho:', danfeBase64.length); // DEBUG
-            } else {
-              console.warn('DANFE Base64 não encontrado no payload do webhook.', items);
             }
           }
         } catch (e) {
@@ -2074,7 +2070,7 @@ function RouteCreationContent() {
         blocked_at: null
       };
 
-      console.log('PAYLOAD SENDING TO DB:', newOrderPayload); // DEBUG: Verificar campos danfe_base64 vs return_danfe_base64
+
 
       // Inserir novo pedido
       const { data: newOrderData, error: newOrderError } = await supabase
