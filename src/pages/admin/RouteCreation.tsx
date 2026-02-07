@@ -1124,8 +1124,43 @@ function RouteCreationContent() {
   };
 
   // --- MEMOS (Options) ---
-  const cityOptions = useMemo(() => Array.from(new Set((orders || []).map((o: any) => String((o.address_json?.city || o.raw_json?.destinatario_cidade || '')).trim()).filter(Boolean))).sort(), [orders]);
-  const neighborhoodOptions = useMemo(() => Array.from(new Set((orders || []).map((o: any) => String((o.address_json?.neighborhood || o.raw_json?.destinatario_bairro || '')).trim()).filter(Boolean))).sort(), [orders]);
+  const cityOptions = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          (orders || [])
+            .map((o: any) => String((o.address_json?.city || o.raw_json?.destinatario_cidade || '')).trim())
+            .filter(Boolean)
+        )
+      ).sort((a, b) => a.localeCompare(b, 'pt-BR', { sensitivity: 'base' })),
+    [orders]
+  );
+
+  const neighborhoodOptions = useMemo(() => {
+    const selectedCity = String(filterCity || '').trim().toLowerCase();
+    const scopedOrders = (orders || []).filter((o: any) => {
+      if (!selectedCity) return true;
+      const city = String((o.address_json?.city || o.raw_json?.destinatario_cidade || '')).trim().toLowerCase();
+      return city === selectedCity;
+    });
+
+    return Array.from(
+      new Set(
+        scopedOrders
+          .map((o: any) => String((o.address_json?.neighborhood || o.raw_json?.destinatario_bairro || '')).trim())
+          .filter(Boolean)
+      )
+    ).sort((a, b) => a.localeCompare(b, 'pt-BR', { sensitivity: 'base' }));
+  }, [orders, filterCity]);
+
+  useEffect(() => {
+    if (!filterNeighborhood) return;
+    const current = String(filterNeighborhood).trim().toLowerCase();
+    const stillValid = neighborhoodOptions.some((n) => String(n).trim().toLowerCase() === current);
+    if (!stillValid) {
+      setFilterNeighborhood('');
+    }
+  }, [filterNeighborhood, neighborhoodOptions]);
   const filialOptions = useMemo(() => Array.from(new Set((orders || []).map((o: any) => String((o.filial_venda || o.raw_json?.filial_venda || '')).trim()).filter(Boolean))).sort(), [orders]);
   const localOptions = useMemo(() => {
     const fromItems = (orders || []).flatMap((o: any) => Array.isArray(o.items_json) ? o.items_json.map((it: any) => String(it?.location || '').trim()) : []);
