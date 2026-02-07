@@ -793,7 +793,7 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 overflow-x-hidden">
       {routeDetails && (
         <div className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm">
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 mb-3 border-b border-gray-100 pb-2">
@@ -839,14 +839,14 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
 
         return (
           <div key={routeOrder.id} className="bg-white rounded-lg shadow p-4">
-            <div className="flex items-start justify-between">
-              <div className="flex-1">
-                <div className="flex items-center mb-2">
+            <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+              <div className="flex-1 min-w-0">
+                <div className="flex flex-wrap items-center gap-2 mb-2">
                   <Package className="h-5 w-5 text-blue-600 mr-2" />
                   <span className="font-semibold text-gray-900">
                     {order.customer_name}
                   </span>
-                  <span className={`ml-2 px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(routeOrder.status)}`}>
+                  <span className={`px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(routeOrder.status)}`}>
                     {getStatusTextWithTime(routeOrder)}
                   </span>
                 </div>
@@ -956,14 +956,14 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
               </div>
 
               {/* Action Buttons */}
-              <div className="ml-4 flex flex-col space-y-2">
+              <div className="w-full md:w-auto ml-0 flex gap-2 md:ml-4 md:flex-col md:space-y-2 md:gap-0">
                 {/* GPS removido */}
                 {routeOrder.status === 'pending' && (
                   <>
                     <button
                       onClick={() => markAsDelivered(routeOrder)}
                       disabled={processingIds.has(routeOrder.id)}
-                      className="flex items-center px-3 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm"
+                      className="flex flex-1 md:flex-none items-center justify-center px-3 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm"
                     >
                       <CheckCircle className="h-4 w-4 mr-1" />
                       Entregue
@@ -972,7 +972,7 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
                     <button
                       onClick={() => markAsReturned(routeOrder)}
                       disabled={!selectedReason || processingIds.has(routeOrder.id)}
-                      className="flex items-center px-3 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm"
+                      className="flex flex-1 md:flex-none items-center justify-center px-3 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm"
                     >
                       <XCircle className="h-4 w-4 mr-1" />
                       Retornado
@@ -987,7 +987,7 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
         );
       })}
 
-      <div className="mt-8 pt-4 border-t border-gray-200 sticky bottom-0 bg-gray-50 pb-4 px-4 -mx-4 z-10">
+      <div className="mt-8 pt-4 border-t border-gray-200 sticky bottom-0 bg-gray-50 pb-4 px-2 sm:px-4 z-10">
         <button
           onClick={handleFinalizeRoute}
           disabled={loading || processingIds.size > 0 || (routeDetails?.status === 'completed')}

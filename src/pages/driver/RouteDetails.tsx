@@ -146,32 +146,32 @@ export default function DriverRouteDetails() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gray-50 overflow-x-hidden">
       {/* Header */}
       <div className="bg-white shadow">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="py-6">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+              <div className="flex items-start min-w-0">
                 <button
                   onClick={() => navigate(-1)}
-                  className="p-2 mr-3 hover:bg-gray-100 rounded-full text-gray-600 transition-colors"
+                  className="p-2 mr-3 hover:bg-gray-100 rounded-full text-gray-600 transition-colors flex-shrink-0"
                   title="Voltar"
                 >
                   <ArrowLeft className="h-6 w-6" />
                 </button>
-                <Truck className="h-8 w-8 text-blue-600 mr-3" />
-                <div>
-                  <h1 className="text-2xl font-bold text-gray-900">
+                <Truck className="h-8 w-8 text-blue-600 mr-3 flex-shrink-0" />
+                <div className="min-w-0">
+                  <h1 className="text-xl sm:text-2xl font-bold text-gray-900 break-words">
                     {route.name}
                   </h1>
-                  <p className="text-gray-600">
+                  <p className="text-sm text-gray-600 break-words">
                     Motorista: {user?.name || user?.email} • Veículo: {route.vehicle?.model} - {route.vehicle?.plate}
                   </p>
                 </div>
               </div>
 
-              <div className="flex items-center space-x-4">
+              <div className="flex flex-wrap items-center gap-2">
                 <div className={`flex items-center px-3 py-1 rounded-full text-sm ${isOnline ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
                   <div className={`w-2 h-2 rounded-full mr-2 ${isOnline ? 'bg-green-500' : 'bg-red-500'}`}></div>
                   {isOnline ? 'Online' : 'Offline'}
@@ -183,7 +183,7 @@ export default function DriverRouteDetails() {
                   <RefreshCw className="h-4 w-4 mr-1" />
                   Sincronizar
                 </button>
-                <div className="text-sm text-gray-600">
+                <div className="text-xs sm:text-sm text-gray-600">
                   Progresso: {getProgress()}%
                 </div>
                 <button
