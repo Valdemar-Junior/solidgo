@@ -161,7 +161,7 @@ export default function PhotoCaptureModal({
 
     return createPortal(
         <div className="fixed inset-0 bg-black bg-opacity-50 z-[9999] flex items-center justify-center p-4">
-            <div className="bg-white w-full max-w-md rounded-2xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col">
+            <div className="bg-white w-[90%] max-w-sm rounded-2xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col">
                 {/* Header */}
                 <div className="bg-indigo-600 text-white px-6 py-4">
                     <div className="flex items-start justify-between gap-3">
