@@ -5,8 +5,9 @@
  */
 
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { Camera, Image, X, Check, AlertCircle, Loader2, Plus } from 'lucide-react';
-import { compressImage, blobToBase64, generatePhotoFileName, formatFileSize } from '../../utils/imageCompression';
+import { createPortal } from 'react-dom';
+import { Camera, Image, X, Check, AlertCircle, Loader2 } from 'lucide-react';
+import { compressImage, blobToBase64, generatePhotoFileName } from '../../utils/imageCompression';
 import PhotoThumbnail from './PhotoThumbnail';
 
 export interface CapturedPhoto {
@@ -158,8 +159,8 @@ export default function PhotoCaptureModal({
     const canAddMore = photos.length < maxPhotos;
     const canConfirm = photos.length >= minPhotos && !isProcessing;
 
-    return (
-        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
+    return createPortal(
+        <div className="fixed inset-0 bg-black bg-opacity-50 z-[9999] flex items-center justify-center p-4">
             <div className="bg-white w-full max-w-md rounded-2xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col">
                 {/* Header */}
                 <div className="bg-indigo-600 text-white px-6 py-4">
@@ -259,7 +260,7 @@ export default function PhotoCaptureModal({
                             <button
                                 onClick={openCamera}
                                 className="flex flex-col items-center justify-center p-6 border-2 border-dashed 
-                         border-indigo-300 rounded-xl hover:bg-indigo-50 transition-colors"
+                          border-indigo-300 rounded-xl hover:bg-indigo-50 transition-colors"
                             >
                                 <Camera className="w-10 h-10 text-indigo-500 mb-2" />
                                 <span className="text-sm font-medium text-indigo-700">Tirar Foto</span>
@@ -268,7 +269,7 @@ export default function PhotoCaptureModal({
                             <button
                                 onClick={openGallery}
                                 className="flex flex-col items-center justify-center p-6 border-2 border-dashed 
-                         border-gray-300 rounded-xl hover:bg-gray-50 transition-colors"
+                          border-gray-300 rounded-xl hover:bg-gray-50 transition-colors"
                             >
                                 <Image className="w-10 h-10 text-gray-500 mb-2" />
                                 <span className="text-sm font-medium text-gray-700">Galeria</span>
@@ -305,7 +306,7 @@ export default function PhotoCaptureModal({
                     <button
                         onClick={handleCancel}
                         className="flex-1 px-4 py-3 border border-gray-300 rounded-lg text-gray-700 
-                     font-medium hover:bg-gray-100 transition-colors"
+                      font-medium hover:bg-gray-100 transition-colors"
                     >
                         Cancelar
                     </button>
@@ -313,7 +314,7 @@ export default function PhotoCaptureModal({
                         onClick={handleConfirm}
                         disabled={!canConfirm}
                         className={`flex-1 px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 transition-colors
-                      ${canConfirm
+                       ${canConfirm
                                 ? 'bg-green-500 text-white hover:bg-green-600'
                                 : 'bg-gray-300 text-gray-500 cursor-not-allowed'}`}
                     >
@@ -339,6 +340,7 @@ export default function PhotoCaptureModal({
                     onChange={handleFileSelect}
                 />
             </div>
-        </div>
+        </div>,
+        document.body
     );
 }
