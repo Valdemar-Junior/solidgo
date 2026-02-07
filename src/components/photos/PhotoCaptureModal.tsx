@@ -159,8 +159,8 @@ export default function PhotoCaptureModal({
     const canConfirm = photos.length >= minPhotos && !isProcessing;
 
     return (
-        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
-            <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl overflow-hidden">
+        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center md:p-4">
+            <div className="bg-white w-full h-full md:h-auto md:max-w-md md:rounded-2xl shadow-2xl overflow-hidden flex flex-col">
                 {/* Header */}
                 <div className="bg-indigo-600 text-white px-6 py-4">
                     <div className="flex items-start justify-between gap-3">
@@ -190,7 +190,7 @@ export default function PhotoCaptureModal({
                 )}
 
                 {/* Content */}
-                <div className="p-6">
+                <div className="p-6 overflow-y-auto flex-1">
                     {/* Contador */}
                     <div className="flex justify-between items-center mb-4">
                         <span className="text-sm text-gray-600">
@@ -225,18 +225,31 @@ export default function PhotoCaptureModal({
                                 />
                             ))}
 
-                            {/* Botão adicionar mais */}
+                            {/* Botão adicionar mais - CÂMERA (Prioridade) */}
                             {canAddMore && !isProcessing && (
                                 <button
-                                    onClick={openGallery}
-                                    className="w-32 h-32 border-2 border-dashed border-gray-300 rounded-lg
+                                    onClick={openCamera}
+                                    className="aspect-square border-2 border-dashed border-gray-300 rounded-lg
                            flex flex-col items-center justify-center text-gray-400
                            hover:border-indigo-400 hover:text-indigo-500 transition-colors"
                                 >
-                                    <Plus className="w-8 h-8" />
-                                    <span className="text-xs mt-1">Adicionar</span>
+                                    <Camera className="w-8 h-8" />
+                                    <span className="text-xs mt-1">Câmera</span>
                                 </button>
                             )}
+                        </div>
+                    )}
+
+                    {/* Link para Galeria (Secundário) quando já tem fotos */}
+                    {photos.length > 0 && canAddMore && !isProcessing && (
+                        <div className="flex justify-center mb-6">
+                            <button
+                                onClick={openGallery}
+                                className="text-sm text-indigo-600 font-medium hover:text-indigo-800 underline flex items-center gap-1"
+                            >
+                                <Image className="w-4 h-4" />
+                                Adicionar da Galeria
+                            </button>
                         </div>
                     )}
 
