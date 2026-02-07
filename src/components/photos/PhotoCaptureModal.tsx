@@ -305,8 +305,8 @@ export default function PhotoCaptureModal({
                 <div className="bg-gray-50 px-6 py-4 flex gap-3">
                     <button
                         onClick={handleCancel}
-                        className="flex-1 px-4 py-3 border border-gray-300 rounded-lg text-gray-700 
-                      font-medium hover:bg-gray-100 transition-colors"
+                        className="flex-1 px-4 py-3 border border-red-300 rounded-lg text-red-700 
+                      font-medium hover:bg-red-50 transition-colors"
                     >
                         Cancelar
                     </button>
