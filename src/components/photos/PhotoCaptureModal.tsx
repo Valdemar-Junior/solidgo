@@ -305,21 +305,21 @@ export default function PhotoCaptureModal({
                 <div className="bg-gray-50 px-6 py-4 flex gap-3">
                     <button
                         onClick={handleCancel}
-                        className="flex-1 px-4 py-3 border border-red-300 rounded-lg text-red-700 
-                      font-medium hover:bg-red-50 transition-colors"
+                        className="flex-1 px-4 py-3 border border-gray-300 rounded-lg text-gray-700 
+                      font-medium hover:bg-gray-100 transition-colors h-auto min-h-[48px]"
                     >
                         Cancelar
                     </button>
                     <button
                         onClick={handleConfirm}
                         disabled={!canConfirm}
-                        className={`flex-1 px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 transition-colors
+                        className={`flex-1 px-4 py-3 rounded-lg font-medium flex items-center justify-center gap-2 transition-colors h-auto min-h-[48px] whitespace-normal text-center leading-tight
                        ${canConfirm
                                 ? 'bg-green-500 text-white hover:bg-green-600'
                                 : 'bg-gray-300 text-gray-500 cursor-not-allowed'}`}
                     >
-                        <Check className="w-5 h-5" />
-                        {confirmLabel}
+                        <Check className="w-5 h-5 flex-shrink-0" />
+                        <span>{confirmLabel}</span>
                     </button>
                 </div>
 
