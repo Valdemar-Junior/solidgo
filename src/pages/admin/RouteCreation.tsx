@@ -152,6 +152,7 @@ function RouteCreationContent() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [routesList, setRoutesList] = useState<RouteWithDetails[]>([]);
+  const [allPendingRoutes, setAllPendingRoutes] = useState<any[]>([]);
 
   // Modals
   // Edit Mode State
@@ -942,6 +943,7 @@ function RouteCreationContent() {
   useEffect(() => {
     // Load data on mount
     loadData(true);
+    fetchAllPendingRoutes();
 
     // AUTO-OPEN LOGIC: Check for route details request from other screens
     const autoOpenId = localStorage.getItem('rc_selectedRouteId');
@@ -1213,6 +1215,11 @@ function RouteCreationContent() {
     return src.filter((c) => c.toLowerCase().includes(q)).slice(0, 20);
   }, [clientOptions, clientQuery]);
 
+  const pendingExistingRoutes = useMemo(
+    () => allPendingRoutes,
+    [allPendingRoutes]
+  );
+
   // --- HELPERS ---
   const formatDate = (dateStr: string | null | undefined) => {
     if (!dateStr) return '-';
@@ -1223,6 +1230,27 @@ function RouteCreationContent() {
     } catch {
       return '-';
     }
+  };
+
+  const getDriverLabelByRoute = (route: any) => {
+    const fromRoute = String((route as any)?.driver_name || (route as any)?.driver?.user?.name || (route as any)?.driver?.name || '').trim();
+    if (fromRoute) return fromRoute;
+
+    const fromState = drivers.find((d) => String(d.id) === String(route.driver_id));
+    return String(fromState?.user?.name || fromState?.name || 'Sem motorista').trim() || 'Sem motorista';
+  };
+
+  const getExistingDeliveryRouteOptionLabel = (route: any) => {
+    const routeCode = String((route as any).route_code || '').trim();
+    const driverLabel = getDriverLabelByRoute(route);
+    const createdAtLabel = formatDate(route.created_at);
+    const parts = [route.name];
+
+    if (routeCode) parts.push(routeCode);
+    parts.push(driverLabel);
+    if (createdAtLabel !== '-') parts.push(createdAtLabel);
+
+    return parts.join(' | ');
   };
 
   const getOrderLocations = (o: any) => {
@@ -1531,6 +1559,34 @@ function RouteCreationContent() {
     }
   };
 
+  // Lista completa de rotas em separação para o dropdown do modal
+  // (independente dos filtros de período/status da tela principal).
+  const fetchAllPendingRoutes = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('routes')
+        .select(`
+          id, name, driver_id, vehicle_id, conferente, observations, status, created_at, updated_at, team_id, helper_id, route_code,
+          driver:drivers!driver_id(id, user:users!user_id(name))
+        `)
+        .eq('status', 'pending')
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+
+      const normalized = (data || []).map((r: any) => ({
+        ...r,
+        driver_name: String(r?.driver?.user?.name || r?.driver?.name || '').trim(),
+      }));
+
+      setAllPendingRoutes(normalized);
+      return normalized;
+    } catch (err) {
+      console.error('Error fetching pending routes for modal:', err);
+      return [];
+    }
+  };
+
   useEffect(() => {
     fetchRoutes(true);
   }, [dateFilter, statusFilter]);
@@ -1542,6 +1598,12 @@ function RouteCreationContent() {
     }, 500);
     return () => clearTimeout(timer);
   }, [routeSearchQuery]);
+
+  useEffect(() => {
+    if (showCreateModal) {
+      fetchAllPendingRoutes();
+    }
+  }, [showCreateModal]);
 
   // --- DATA LOADING ---
   // This function loads data directly from Supabase with optimized parallel queries (METADATA ONLY)
@@ -1842,6 +1904,7 @@ function RouteCreationContent() {
           console.log('[Realtime] Routes changed');
           if (fetchRoutesRef.current) fetchRoutesRef.current(true);
           if (loadDataRef.current) loadDataRef.current(true);
+          fetchAllPendingRoutes();
         }
       )
       .subscribe();
@@ -3478,10 +3541,21 @@ function RouteCreationContent() {
                     className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all"
                   >
                     <option value="">Não, criar novo romaneio</option>
-                    {routesList.filter(r => r.status === 'pending').map(r => (
-                      <option key={r.id} value={r.id}>{r.name}</option>
+                    {pendingExistingRoutes.map(r => (
+                      <option key={r.id} value={r.id}>{getExistingDeliveryRouteOptionLabel(r)}</option>
                     ))}
                   </select>
+                  {selectedExistingRouteId && (
+                    <p className="mt-2 text-xs text-gray-500">
+                      Rota selecionada: {
+                        (() => {
+                          const selected = pendingExistingRoutes.find(r => String(r.id) === String(selectedExistingRouteId));
+                          if (!selected) return selectedExistingRouteId;
+                          return getExistingDeliveryRouteOptionLabel(selected);
+                        })()
+                      }
+                    </p>
+                  )}
                 </div>
 
                 {!selectedExistingRouteId && (

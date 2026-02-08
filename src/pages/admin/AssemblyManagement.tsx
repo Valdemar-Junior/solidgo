@@ -538,6 +538,25 @@ function AssemblyManagementContent() {
     }
   };
 
+  const getMontadorLabelById = (assemblerId: string | undefined) => {
+    if (!assemblerId) return 'Sem montador';
+    const montador = montadores.find(m => String(m.id) === String(assemblerId));
+    return montador?.name || montador?.email || 'Sem montador';
+  };
+
+  const getExistingRouteOptionLabel = (route: AssemblyRoute) => {
+    const routeCode = String((route as any).route_code || '').trim();
+    const montadorLabel = getMontadorLabelById((route as any).assembler_id);
+    const createdAtLabel = formatDate(route.created_at);
+    const parts = [route.name];
+
+    if (routeCode) parts.push(routeCode);
+    parts.push(montadorLabel);
+    if (createdAtLabel !== '-') parts.push(createdAtLabel);
+
+    return parts.join(' | ');
+  };
+
   const parseDateSafe = (input: any): Date | null => {
     if (!input) return null;
     try { const d = new Date(String(input)); return isNaN(d.getTime()) ? null : d; } catch { return null; }
@@ -1078,7 +1097,8 @@ function AssemblyManagementContent() {
         // Adding to existing route
         targetRouteId = selectedExistingRoute;
         // Get the existing route's assembler_id
-        const existingRoute = assemblyRoutes.find(r => r.id === selectedExistingRoute);
+        const existingRoute = allPendingRoutes.find(r => r.id === selectedExistingRoute)
+          || assemblyRoutes.find(r => r.id === selectedExistingRoute);
         targetInstallerId = (existingRoute as any)?.assembler_id || null;
       } else {
         // Create new route
@@ -2511,6 +2531,7 @@ function AssemblyManagementContent() {
 
                     const montador = montadores.find(m => m.id === route.assembler_id);
                     const vehicle = vehicles.find(v => v.id === route.vehicle_id);
+                    const routeObservation = String((route as any).observations || '').trim();
 
                     return (
                       <div key={route.id} className="bg-white rounded-xl shadow-sm border border-gray-200 hover:shadow-md transition-shadow group flex flex-col">
@@ -2550,6 +2571,14 @@ function AssemblyManagementContent() {
                               <div className="flex items-center text-sm text-gray-600">
                                 <Calendar className="h-4 w-4 mr-2 text-gray-400" />
                                 Prazo: {formatDate(route.deadline)}
+                              </div>
+                            )}
+                            {routeObservation && (
+                              <div className="flex items-start text-sm text-gray-600">
+                                <MessageSquare className="h-4 w-4 mr-2 mt-0.5 text-gray-400 shrink-0" />
+                                <span className="leading-snug break-words whitespace-pre-wrap" title={routeObservation}>
+                                  {routeObservation}
+                                </span>
                               </div>
                             )}
                           </div>
@@ -2730,10 +2759,21 @@ function AssemblyManagementContent() {
                     <option value="">Nao, criar nova rota de montagem</option>
                     {allPendingRoutes
                       .map(r => (
-                        <option key={r.id} value={r.id}>{r.name}</option>
+                        <option key={r.id} value={r.id}>{getExistingRouteOptionLabel(r)}</option>
                       ))
                     }
                   </select>
+                  {selectedExistingRoute && (
+                    <p className="mt-2 text-xs text-gray-500">
+                      Rota selecionada: {
+                        (() => {
+                          const selected = allPendingRoutes.find(r => String(r.id) === String(selectedExistingRoute));
+                          if (!selected) return selectedExistingRoute;
+                          return getExistingRouteOptionLabel(selected);
+                        })()
+                      }
+                    </p>
+                  )}
                 </div>
 
                 {/* Only show name field if creating new route */}
