@@ -111,6 +111,162 @@ export default function OrdersImport() {
     } catch { }
   }, []);
 
+  const normalizePdfBase64 = (value: unknown): string => {
+    if (typeof value !== 'string') return '';
+    const trimmed = value.trim();
+    if (!trimmed) return '';
+    const withoutPrefix = trimmed.startsWith('data:application/pdf;base64,')
+      ? trimmed.slice('data:application/pdf;base64,'.length)
+      : trimmed;
+    const compact = withoutPrefix.replace(/\s+/g, '');
+    return compact.startsWith('JVBER') ? compact : '';
+  };
+
+  const parseDanfeWebhookPayload = (payload: any) => {
+    const base64List: string[] = [];
+    const byOrderId = new Map<string, string>();
+    const byNumero = new Map<string, string>();
+
+    const push = (raw: unknown, orderId?: unknown, numero?: unknown) => {
+      const b64 = normalizePdfBase64(raw);
+      if (!b64) return;
+      base64List.push(b64);
+      if (orderId !== undefined && orderId !== null && String(orderId).trim()) {
+        byOrderId.set(String(orderId), b64);
+      }
+      if (numero !== undefined && numero !== null && String(numero).trim()) {
+        byNumero.set(String(numero), b64);
+      }
+    };
+
+    const readEntry = (entry: any) => {
+      if (!entry) return;
+      if (typeof entry === 'string') {
+        push(entry);
+        return;
+      }
+      if (typeof entry !== 'object') return;
+
+      const orderId = entry.order_id ?? entry.orderId ?? entry.id;
+      const numero = entry.numero ?? entry.order_id_erp ?? entry.pedido ?? entry.lancamento;
+
+      push(entry.pdf_base64, orderId, numero);
+      push(entry.base64, orderId, numero);
+      push(entry.pdf, orderId, numero);
+      push(entry.danfe_base64, orderId, numero);
+      push(entry.data, orderId, numero);
+    };
+
+    readEntry(payload);
+    if (Array.isArray(payload)) payload.forEach(readEntry);
+    if (payload && typeof payload === 'object') {
+      const nestedArrays = [payload.documentos, payload.arquivos, payload.items, payload.results, payload.resultados, payload.data];
+      nestedArrays.forEach((arr: any) => {
+        if (Array.isArray(arr)) arr.forEach(readEntry);
+      });
+    }
+
+    return { base64List: Array.from(new Set(base64List)), byOrderId, byNumero };
+  };
+
+  const generateDanfeInBackground = async (insertedOrders: any[], importedOrders: any[]) => {
+    if (!insertedOrders.length || !importedOrders.length) return;
+
+    try {
+      let nfWebhook = 'https://n8n.lojaodosmoveis.shop/webhook/gera_nf';
+      try {
+        const { data: s } = await supabase.from('webhook_settings').select('url').eq('key', 'gera_nf').eq('active', true).single();
+        if (s?.url) nfWebhook = s.url;
+      } catch { }
+
+      const xmlByNumero = new Map<string, string>(
+        importedOrders
+          .map((o: any) => [String(o.order_id_erp || '').trim(), String(o.xml_documento || '').trim()] as const)
+          .filter(([numero, xml]) => Boolean(numero && xml && xml.includes('<')))
+      );
+
+      const docs = insertedOrders
+        .map((saved: any) => ({
+          order_id: String(saved?.id || ''),
+          numero: String(saved?.order_id_erp || ''),
+          xml: xmlByNumero.get(String(saved?.order_id_erp || '').trim()) || ''
+        }))
+        .filter((d: any) => d.order_id && d.numero && d.xml && d.xml.includes('<'));
+
+      if (docs.length === 0) {
+        console.log('[Import] Nenhum XML valido encontrado para geracao de DANFE em background.');
+        return;
+      }
+
+      console.log(`[Import] Enviando ${docs.length} pedidos para geracao de DANFE em background`);
+
+      const response = await fetch(nfWebhook, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ documentos: docs, count: docs.length })
+      });
+
+      const text = await response.text();
+      let payload: any = null;
+      try {
+        payload = JSON.parse(text);
+      } catch {
+        payload = { raw: text };
+      }
+
+      if (!response.ok) {
+        console.warn('[Import] Webhook gera_nf retornou erro:', response.status, payload);
+        return;
+      }
+
+      const { base64List, byOrderId, byNumero } = parseDanfeWebhookPayload(payload);
+      if (base64List.length === 0) {
+        console.warn('[Import] Webhook gera_nf nao retornou DANFE em base64.');
+        return;
+      }
+
+      const updates = new Map<string, string>();
+      docs.forEach((doc: any, idx: number) => {
+        if (byOrderId.has(doc.order_id)) {
+          updates.set(doc.order_id, byOrderId.get(doc.order_id)!);
+          return;
+        }
+        if (byNumero.has(doc.numero)) {
+          updates.set(doc.order_id, byNumero.get(doc.numero)!);
+          return;
+        }
+        if (base64List.length === docs.length && base64List[idx]) {
+          updates.set(doc.order_id, base64List[idx]);
+        }
+      });
+
+      if (updates.size === 0 && docs.length === 1 && base64List[0]) {
+        updates.set(docs[0].order_id, base64List[0]);
+      }
+
+      let savedCount = 0;
+      for (const [orderId, b64] of updates.entries()) {
+        const { error } = await supabase
+          .from('orders')
+          .update({ danfe_base64: b64, danfe_gerada_em: new Date().toISOString() })
+          .eq('id', orderId);
+        if (error) {
+          console.warn(`[Import] Falha ao salvar DANFE do pedido ${orderId}:`, error);
+        } else {
+          savedCount++;
+        }
+      }
+
+      if (savedCount > 0) {
+        console.log(`[Import] DANFE em background concluida: ${savedCount} pedido(s) atualizado(s).`);
+      } else {
+        console.warn('[Import] Nenhuma DANFE foi salva apos retorno do webhook.');
+      }
+    } catch (e) {
+      console.warn('[Import] Erro ao gerar/salvar DANFE em background:', e);
+    }
+  };
+
   const importOrders = async () => {
     setLoading(true);
 
@@ -359,37 +515,9 @@ export default function OrdersImport() {
       setLastImport(new Date());
       setLoading(false); // Libera a UI
 
-      // FASE 3: GERAR DANFE EM BACKGROUND (Fire and Forget)
-      // Dispara webhook para gerar DANFEs sem bloquear o usuário
-      if (paraInserir.length > 0) {
-        try {
-          // Buscar URL do webhook de geração de NF
-          let nfWebhook = 'https://n8n.lojaodosmoveis.shop/webhook/gera_nf';
-          try {
-            const { data: s } = await supabase.from('webhook_settings').select('url').eq('key', 'gera_nf').eq('active', true).single();
-            if (s?.url) nfWebhook = s.url;
-          } catch { }
-
-          // Preparar documentos para envio (apenas os que têm XML)
-          const docs = paraInserir.filter((o: any) => o.xml_documento).map((o: any) => ({
-            numero: o.order_id_erp,
-            xml: o.xml_documento
-          }));
-
-          if (docs.length > 0) {
-            // Fire and forget - não espera resposta
-            fetch(nfWebhook, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ documentos: docs, count: docs.length, background: true })
-            }).catch(() => console.log('[Import] Background DANFE request sent'));
-
-            console.log(`[Import] Enviando ${docs.length} pedidos para geração de DANFE em background`);
-          }
-        } catch (e) {
-          // Silencioso - não bloqueia importação se falhar
-          console.warn('[Import] Erro ao disparar geração de DANFE em background:', e);
-        }
+      // FASE 3: GERAR DANFE EM SEGUNDO PLANO (sem bloquear a UI)
+      if (savedOrdersInfo.length > 0 && paraInserir.length > 0) {
+        void generateDanfeInBackground(savedOrdersInfo, paraInserir);
       }
 
       // FASE 2: GEOCODIFICAR (Removido - GPS via App Motorista)
