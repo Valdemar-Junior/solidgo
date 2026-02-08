@@ -142,6 +142,7 @@ function RouteCreationContent() {
   const [selectedDeliveryRouteId, setSelectedDeliveryRouteId] = useState<string>('');
   const [conferente, setConferente] = useState<string>('');
   const [observations, setObservations] = useState<string>('');
+  const [existingRouteObservations, setExistingRouteObservations] = useState<string>('');
   const [teams, setTeams] = useState<any[]>([]);
   const [helpers, setHelpers] = useState<any[]>([]);
   const [selectedTeam, setSelectedTeam] = useState<string>('');
@@ -1218,6 +1219,11 @@ function RouteCreationContent() {
   const pendingExistingRoutes = useMemo(
     () => allPendingRoutes,
     [allPendingRoutes]
+  );
+
+  const selectedExistingRoute = useMemo(
+    () => pendingExistingRoutes.find((r: any) => String(r.id) === String(selectedExistingRouteId)) || null,
+    [pendingExistingRoutes, selectedExistingRouteId]
   );
 
   // --- HELPERS ---
@@ -2363,6 +2369,11 @@ function RouteCreationContent() {
         if (selectedTeam) updatePayload.team_id = selectedTeam;
         if (selectedHelper) updatePayload.helper_id = selectedHelper;
         if (conferente) updatePayload.conferente = conferente.trim();
+        const currentObservation = String((selectedExistingRoute as any)?.observations || '').trim();
+        const nextObservation = existingRouteObservations.trim();
+        if (nextObservation !== currentObservation) {
+          updatePayload.observations = nextObservation || null;
+        }
         if (Object.keys(updatePayload).length > 0) {
           const { error: updErr } = await supabase.from('routes').update(updatePayload).eq('id', targetRouteId);
           if (updErr) throw updErr;
@@ -2406,6 +2417,7 @@ function RouteCreationContent() {
       setSelectedVehicle('');
       setConferente('');
       setObservations('');
+      setExistingRouteObservations('');
       setSelectedTeam('');
       setSelectedHelper('');
       setSelectedOrders(new Set());
@@ -2967,6 +2979,7 @@ function RouteCreationContent() {
                   { id: 'completed', label: 'Finalizada', color: 'text-green-700 bg-green-50 border-green-200' }
                 ].map(opt => {
                   const isActive = statusFilter.includes(opt.id);
+
                   return (
                     <button
                       key={opt.id}
@@ -3109,6 +3122,7 @@ function RouteCreationContent() {
                     in_progress: 'Em Rota',
                     completed: 'Finalizada'
                   };
+                  const routeObservation = String((route as any).observations || '').trim();
 
                   return (
                     <div key={route.id} className="bg-white rounded-xl shadow-sm border border-gray-200 hover:shadow-md transition-shadow group flex flex-col">
@@ -3181,6 +3195,14 @@ function RouteCreationContent() {
                               </>
                             );
                           })()}
+                          {routeObservation && (
+                            <div className="flex items-start text-sm text-gray-600">
+                              <MessageSquare className="h-4 w-4 mr-2 mt-0.5 text-gray-400 shrink-0" />
+                              <span className="leading-snug break-words whitespace-pre-wrap" title={routeObservation}>
+                                {routeObservation}
+                              </span>
+                            </div>
+                          )}
                         </div>
 
                         {/* Mini Stats */}
@@ -3537,7 +3559,16 @@ function RouteCreationContent() {
                   <label className="block text-sm font-medium text-gray-700 mb-2">Adicionar a romaneio existente?</label>
                   <select
                     value={selectedExistingRouteId}
-                    onChange={(e) => setSelectedExistingRouteId(e.target.value)}
+                    onChange={(e) => {
+                      const nextId = e.target.value;
+                      setSelectedExistingRouteId(nextId);
+                      if (!nextId) {
+                        setExistingRouteObservations('');
+                        return;
+                      }
+                      const selected = pendingExistingRoutes.find((r: any) => String(r.id) === String(nextId));
+                      setExistingRouteObservations(String((selected as any)?.observations || ''));
+                    }}
                     className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all"
                   >
                     <option value="">Não, criar novo romaneio</option>
@@ -3672,6 +3703,25 @@ function RouteCreationContent() {
                     </div>
                   </div>
                 )}
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Observações da Rota {selectedExistingRouteId ? '(editar rota selecionada)' : '(opcional)'}
+                  </label>
+                  <textarea
+                    value={selectedExistingRouteId ? existingRouteObservations : observations}
+                    onChange={(e) => {
+                      if (selectedExistingRouteId) {
+                        setExistingRouteObservations(e.target.value);
+                      } else {
+                        setObservations(e.target.value);
+                      }
+                    }}
+                    rows={3}
+                    placeholder={selectedExistingRouteId ? 'Edite as observações da rota existente...' : 'Observações sobre a rota...'}
+                    className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all"
+                  />
+                </div>
 
                 <div className="bg-blue-50 p-4 rounded-xl flex items-center justify-between">
                   <span className="text-blue-900 font-medium">Pedidos Selecionados</span>
