@@ -19,6 +19,31 @@ const FALLBACK_RETURN_REASONS: ReturnReason[] = [
   { id: '99', reason: 'Outro', type: 'both' }
 ];
 
+const RECIPIENT_RELATION_OPTIONS = ['Titular', 'Familiar', 'Porteiro', 'Vizinho', 'Outro'];
+
+const GPS_FAILURE_OPTIONS = [
+  { id: 'permission_denied', label: 'Permissão de localização negada' },
+  { id: 'gps_disabled', label: 'GPS do aparelho desligado' },
+  { id: 'signal_weak', label: 'Sinal GPS fraco' },
+  { id: 'indoor_no_fix', label: 'Área interna sem sinal de satélite' },
+  { id: 'timeout', label: 'Timeout de localização' },
+  { id: 'device_error', label: 'Falha temporária de dispositivo/app' },
+];
+
+type GpsCaptureStatus = 'idle' | 'capturing' | 'ok' | 'failed';
+type CapturedGps = {
+  lat: number;
+  lng: number;
+  accuracy: number | null;
+  captured_at: string;
+};
+
+type DeliveryProofConfig = {
+  enabled: boolean;
+  requireRecipient: boolean;
+  requireGps: boolean;
+};
+
 interface DeliveryMarkingProps {
   routeId: string;
   onUpdated?: () => void;
@@ -33,6 +58,17 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
   // Seleção por pedido para evitar pré-seleção global
   const [returnReasonByOrder, setReturnReasonByOrder] = useState<Record<string, string>>({});
   const [returnObservationsByOrder, setReturnObservationsByOrder] = useState<Record<string, string>>({});
+  const [recipientNameByOrder, setRecipientNameByOrder] = useState<Record<string, string>>({});
+  const [recipientRelationByOrder, setRecipientRelationByOrder] = useState<Record<string, string>>({});
+  const [recipientNotesByOrder, setRecipientNotesByOrder] = useState<Record<string, string>>({});
+  const [gpsDataByOrder, setGpsDataByOrder] = useState<Record<string, CapturedGps>>({});
+  const [gpsFailureReasonByOrder, setGpsFailureReasonByOrder] = useState<Record<string, string>>({});
+  const [gpsStatusByOrder, setGpsStatusByOrder] = useState<Record<string, GpsCaptureStatus>>({});
+  const [deliveryProofConfig, setDeliveryProofConfig] = useState<DeliveryProofConfig>({
+    enabled: false,
+    requireRecipient: false,
+    requireGps: false,
+  });
   const [routeDetails, setRouteDetails] = useState<any>(null);
 
   // Hook de fotos isolado
@@ -41,6 +77,7 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
   useEffect(() => {
     loadRouteOrders();
     loadReturnReasons();
+    loadDeliveryProofConfig();
     loadRouteDetails();
 
     const listener = (online: boolean) => {
@@ -231,9 +268,235 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
     toast.error('NÃ£o foi possÃ­vel obter coordenadas para este endereÃ§o. Ajuste o endereÃ§o no admin e tente novamente.');
   };
 
+  const loadDeliveryProofConfig = async () => {
+    try {
+      const defaults: DeliveryProofConfig = {
+        enabled: false,
+        requireRecipient: false,
+        requireGps: false,
+      };
+
+      const { data } = await supabase
+        .from('app_settings')
+        .select('value')
+        .eq('key', 'delivery_proof_settings')
+        .single();
+
+      const value = (data as any)?.value || {};
+      const next: DeliveryProofConfig = {
+        enabled: Boolean(value.enabled),
+        requireRecipient: Boolean(value.requireRecipient),
+        requireGps: Boolean(value.requireGps),
+      };
+
+      setDeliveryProofConfig(next);
+      await OfflineStorage.setItem('delivery_proof_settings', next);
+    } catch {
+      const cached = await OfflineStorage.getItem('delivery_proof_settings');
+      if (cached) {
+        setDeliveryProofConfig(cached as DeliveryProofConfig);
+      }
+    }
+  };
+
+  const clearDeliveryProofState = (routeOrderId: string) => {
+    setRecipientNameByOrder((prev) => {
+      const copy = { ...prev };
+      delete copy[routeOrderId];
+      return copy;
+    });
+    setRecipientRelationByOrder((prev) => {
+      const copy = { ...prev };
+      delete copy[routeOrderId];
+      return copy;
+    });
+    setRecipientNotesByOrder((prev) => {
+      const copy = { ...prev };
+      delete copy[routeOrderId];
+      return copy;
+    });
+    setGpsDataByOrder((prev) => {
+      const copy = { ...prev };
+      delete copy[routeOrderId];
+      return copy;
+    });
+    setGpsFailureReasonByOrder((prev) => {
+      const copy = { ...prev };
+      delete copy[routeOrderId];
+      return copy;
+    });
+    setGpsStatusByOrder((prev) => {
+      const copy = { ...prev };
+      delete copy[routeOrderId];
+      return copy;
+    });
+  };
+
+  const captureGpsForOrder = async (
+    routeOrderId: string
+  ): Promise<{ ok: true; data: CapturedGps } | { ok: false; reason: string }> => {
+    if (typeof navigator === 'undefined' || !navigator.geolocation) {
+      setGpsStatusByOrder((prev) => ({ ...prev, [routeOrderId]: 'failed' }));
+      setGpsFailureReasonByOrder((prev) => ({ ...prev, [routeOrderId]: prev[routeOrderId] || 'device_error' }));
+      toast.warning('GPS não disponível neste dispositivo');
+      return { ok: false, reason: 'device_error' };
+    }
+
+    setGpsStatusByOrder((prev) => ({ ...prev, [routeOrderId]: 'capturing' }));
+
+    try {
+      const position = await new Promise<GeolocationPosition>((resolve, reject) => {
+        navigator.geolocation.getCurrentPosition(resolve, reject, {
+          enableHighAccuracy: true,
+          timeout: 20000,
+          maximumAge: 0,
+        });
+      });
+
+      const gpsData: CapturedGps = {
+        lat: Number(position.coords.latitude),
+        lng: Number(position.coords.longitude),
+        accuracy: Number.isFinite(position.coords.accuracy) ? Number(position.coords.accuracy) : null,
+        captured_at: new Date().toISOString(),
+      };
+
+      setGpsDataByOrder((prev) => ({ ...prev, [routeOrderId]: gpsData }));
+      setGpsStatusByOrder((prev) => ({ ...prev, [routeOrderId]: 'ok' }));
+      setGpsFailureReasonByOrder((prev) => {
+        const copy = { ...prev };
+        delete copy[routeOrderId];
+        return copy;
+      });
+      toast.success('GPS capturado');
+      return { ok: true, data: gpsData };
+    } catch (error: any) {
+      let reason = 'device_error';
+      if (error?.code === 1) reason = 'permission_denied';
+      else if (error?.code === 2) reason = 'signal_weak';
+      else if (error?.code === 3) reason = 'timeout';
+
+      setGpsStatusByOrder((prev) => ({ ...prev, [routeOrderId]: 'failed' }));
+      setGpsFailureReasonByOrder((prev) => ({ ...prev, [routeOrderId]: prev[routeOrderId] || reason }));
+      toast.warning('Não foi possível capturar GPS. Informe motivo técnico para continuar.');
+      return { ok: false, reason };
+    }
+  };
+
+  const saveDeliveryReceiptShadow = async (
+    routeOrder: RouteOrderWithDetails,
+    deliveredByUserId: string,
+    deviceTimestamp: string,
+    metadata: {
+      recipientName: string;
+      recipientRelation: string;
+      recipientNotes: string;
+      gpsData: CapturedGps | null;
+      gpsFailureReason: string | null;
+      gpsStatus: 'ok' | 'failed';
+    }
+  ) => {
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const accessToken = sessionData.session?.access_token;
+      const sessionUserId = sessionData.session?.user?.id || deliveredByUserId;
+
+      const { data: photos } = await supabase
+        .from('delivery_photos')
+        .select('id, storage_path, photo_type')
+        .eq('route_order_id', routeOrder.id);
+
+      const photoRefs = (photos || []).map((p: any) => ({
+        id: p.id,
+        path: p.storage_path,
+        type: p.photo_type,
+      }));
+
+      const payload = {
+        orderId: routeOrder.order_id,
+        routeId,
+        routeOrderId: routeOrder.id,
+        deliveredByUserId: sessionUserId,
+        deviceTimestamp,
+        recipientName: metadata.recipientName,
+        recipientRelation: metadata.recipientRelation,
+        recipientNotes: metadata.recipientNotes || null,
+        gpsLat: metadata.gpsData?.lat ?? null,
+        gpsLng: metadata.gpsData?.lng ?? null,
+        gpsAccuracyM: metadata.gpsData?.accuracy ?? null,
+        gpsStatus: metadata.gpsStatus,
+        gpsFailureReason: metadata.gpsFailureReason || null,
+        photoCount: photoRefs.length,
+        photoRefs,
+        networkMode: isOnline ? 'online' : 'offline',
+        deviceInfo: {
+          userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : 'unknown',
+          platform: typeof navigator !== 'undefined' ? navigator.platform : 'unknown',
+        },
+        appVersion: import.meta.env.VITE_APP_VERSION || null,
+      };
+
+      const response = await fetch('/api/delivery-proof', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+        },
+        body: JSON.stringify(payload),
+      });
+
+      const responseBody = await response.json().catch(() => null);
+      if (!response.ok || (responseBody && responseBody.ok === false)) {
+        console.warn('[DeliveryMarking] Delivery proof shadow save failed:', responseBody || response.statusText);
+      }
+    } catch (error) {
+      console.warn('[DeliveryMarking] Delivery proof shadow save error:', error);
+    }
+  };
+
   const markAsDelivered = async (order: RouteOrderWithDetails) => {
     try {
       if (processingIds.has(order.id)) return;
+
+      const recipientName = String(recipientNameByOrder[order.id] || '').trim();
+      const recipientRelation = String(recipientRelationByOrder[order.id] || '').trim();
+      const recipientNotes = String(recipientNotesByOrder[order.id] || '').trim();
+
+      let gpsData: CapturedGps | null = gpsDataByOrder[order.id] || null;
+      let gpsStatus: 'ok' | 'failed' = gpsData ? 'ok' : 'failed';
+      let gpsFailureReason: string | null = null;
+
+      if (deliveryProofConfig.enabled) {
+        if (deliveryProofConfig.requireRecipient) {
+          if (!recipientName) {
+            toast.error('Informe o nome de quem recebeu');
+            return;
+          }
+          if (!recipientRelation) {
+            toast.error('Selecione a relação de quem recebeu');
+            return;
+          }
+        }
+
+        if (deliveryProofConfig.requireGps && !gpsData) {
+          const gpsResult = await captureGpsForOrder(order.id);
+          if (gpsResult.ok) {
+            gpsData = gpsResult.data;
+            gpsStatus = 'ok';
+          } else {
+            gpsStatus = 'failed';
+            const fallbackReason = 'reason' in gpsResult ? gpsResult.reason : '';
+            gpsFailureReason = String(gpsFailureReasonByOrder[order.id] || fallbackReason || '').trim() || null;
+          }
+        }
+
+        if (deliveryProofConfig.requireGps && !gpsData) {
+          gpsFailureReason = String(gpsFailureReasonByOrder[order.id] || gpsFailureReason || '').trim() || null;
+          if (!gpsFailureReason) {
+            toast.error('GPS indisponível. Selecione um motivo técnico para continuar.');
+            return;
+          }
+        }
+      }
 
       // 1. Capturar Fotos (Obrigatório se configurado)
       // Se user cancelar ou não tirar min fotos, retorna false e aborta o fluxo.
@@ -247,6 +510,14 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
         action: 'delivered' as const,
         local_timestamp: new Date().toISOString(),
         user_id: (await supabase.auth.getUser()).data.user?.id || '',
+        recipient_name: recipientName,
+        recipient_relation: recipientRelation,
+        recipient_notes: recipientNotes || null,
+        gps_status: gpsStatus,
+        gps_failure_reason: gpsFailureReason,
+        gps_lat: gpsData?.lat ?? null,
+        gps_lng: gpsData?.lng ?? null,
+        gps_accuracy_m: gpsData?.accuracy ?? null,
       };
 
       if (isOnline) {
@@ -276,6 +547,20 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
 
         toast.success('Pedido marcado como entregue!');
         setRouteOrders(prev => prev.map(ro => ro.id === order.id ? { ...ro, status: 'delivered', delivered_at: confirmation.local_timestamp } : ro));
+
+        if (deliveryProofConfig.enabled) {
+          // Modo sombra: grava comprovante digital em paralelo sem bloquear o fluxo atual.
+          void saveDeliveryReceiptShadow(order, confirmation.user_id, confirmation.local_timestamp, {
+            recipientName: confirmation.recipient_name,
+            recipientRelation: confirmation.recipient_relation,
+            recipientNotes: confirmation.recipient_notes || '',
+            gpsData,
+            gpsFailureReason: confirmation.gps_failure_reason,
+            gpsStatus: confirmation.gps_status,
+          });
+
+          clearDeliveryProofState(order.id);
+        }
 
         // Verificar se o pedido tem produtos com montagem
         try {
@@ -362,6 +647,9 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
         setRouteOrders(updated);
         await OfflineStorage.setItem(`route_orders_${routeId}`, updated);
         toast.success('Pedido marcado como entregue (offline)!');
+        if (deliveryProofConfig.enabled) {
+          clearDeliveryProofState(order.id);
+        }
       }
     } catch (error) {
       console.error('Error marking as delivered:', error);
@@ -836,6 +1124,12 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
         if (!order) return null;
         const selectedReason = returnReasonByOrder[routeOrder.id] || '';
         const selectedObs = returnObservationsByOrder[routeOrder.id] || '';
+        const recipientName = recipientNameByOrder[routeOrder.id] || '';
+        const recipientRelation = recipientRelationByOrder[routeOrder.id] || '';
+        const recipientNotes = recipientNotesByOrder[routeOrder.id] || '';
+        const gpsData = gpsDataByOrder[routeOrder.id];
+        const gpsStatus = gpsStatusByOrder[routeOrder.id] || 'idle';
+        const gpsFailureReason = gpsFailureReasonByOrder[routeOrder.id] || '';
 
         return (
           <div key={routeOrder.id} className="bg-white rounded-lg shadow p-4">
@@ -892,6 +1186,88 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
                 {routeOrder.status === 'pending' && (
                   <div className="mt-4 p-3 bg-gray-50 rounded-lg">
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      {deliveryProofConfig.enabled && (
+                        <>
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">
+                              Nome de quem recebeu
+                            </label>
+                            <input
+                              type="text"
+                              value={recipientName}
+                              onChange={(e) => setRecipientNameByOrder(prev => ({ ...prev, [routeOrder.id]: e.target.value }))}
+                              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+                              placeholder="Ex.: Maria da Silva"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">
+                              Relação com destinatário
+                            </label>
+                            <select
+                              value={recipientRelation}
+                              onChange={(e) => setRecipientRelationByOrder(prev => ({ ...prev, [routeOrder.id]: e.target.value }))}
+                              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+                            >
+                              <option value="">Selecione</option>
+                              {RECIPIENT_RELATION_OPTIONS.map((option) => (
+                                <option key={option} value={option}>{option}</option>
+                              ))}
+                            </select>
+                          </div>
+                          <div className="md:col-span-2">
+                            <label className="block text-sm font-medium text-gray-700 mb-1">
+                              Observação do recebimento (opcional)
+                            </label>
+                            <input
+                              type="text"
+                              value={recipientNotes}
+                              onChange={(e) => setRecipientNotesByOrder(prev => ({ ...prev, [routeOrder.id]: e.target.value }))}
+                              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+                              placeholder="Portaria, vizinho, bloco/apto, etc."
+                            />
+                          </div>
+                          <div className="md:col-span-2 border-t border-gray-200 pt-3">
+                            <div className="flex flex-wrap items-center gap-2 mb-2">
+                              <button
+                                type="button"
+                                onClick={() => { void captureGpsForOrder(routeOrder.id); }}
+                                disabled={gpsStatus === 'capturing'}
+                                className="inline-flex items-center px-3 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-60 text-sm"
+                              >
+                                {gpsStatus === 'capturing' ? 'Capturando GPS...' : 'Capturar GPS'}
+                              </button>
+                              {gpsData && (
+                                <span className="text-xs text-green-700 bg-green-100 px-2 py-1 rounded">
+                                  GPS OK: {gpsData.lat.toFixed(5)}, {gpsData.lng.toFixed(5)} (±{gpsData.accuracy ? Math.round(gpsData.accuracy) : '-'}m)
+                                </span>
+                              )}
+                              {!gpsData && gpsStatus === 'failed' && (
+                                <span className="text-xs text-amber-700 bg-amber-100 px-2 py-1 rounded">
+                                  GPS indisponível. Informe motivo técnico.
+                                </span>
+                              )}
+                            </div>
+                            {!gpsData && (
+                              <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">
+                                  Motivo técnico (se GPS falhar)
+                                </label>
+                                <select
+                                  value={gpsFailureReason}
+                                  onChange={(e) => setGpsFailureReasonByOrder(prev => ({ ...prev, [routeOrder.id]: e.target.value }))}
+                                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
+                                >
+                                  <option value="">Selecione o motivo técnico</option>
+                                  {GPS_FAILURE_OPTIONS.map((option) => (
+                                    <option key={option.id} value={option.id}>{option.label}</option>
+                                  ))}
+                                </select>
+                              </div>
+                            )}
+                          </div>
+                        </>
+                      )}
                       <div>
                         <label className="block text-sm font-medium text-gray-700 mb-1">
                           Motivo do Retorno

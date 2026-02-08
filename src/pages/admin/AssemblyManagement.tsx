@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../../supabase/client';
-import type { AssemblyRoute, AssemblyProductWithDetails, User, Vehicle } from '../../types/database';
+import type { AssemblyRoute, AssemblyProductWithDetails, DeliveryRouteCatalog, User, Vehicle } from '../../types/database';
 import DatePicker, { registerLocale } from 'react-datepicker';
 import { ptBR } from 'date-fns/locale';
 import {
@@ -126,12 +126,13 @@ function AssemblyManagementContent() {
   const [assemblyInRoutes, setAssemblyInRoutes] = useState<AssemblyProductWithDetails[]>([]);
   const [montadores, setMontadores] = useState<User[]>([]);
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
+  const [deliveryRouteCatalog, setDeliveryRouteCatalog] = useState<DeliveryRouteCatalog[]>([]);
 
   // Selection
   const [selectedOrders, setSelectedOrders] = useState<Set<string>>(new Set());
 
   // New Route Form
-  const [routeName, setRouteName] = useState<string>('');
+  const [selectedDeliveryRouteId, setSelectedDeliveryRouteId] = useState<string>('');
   const [selectedMontador, setSelectedMontador] = useState<string>('');
   const [selectedVehicle, setSelectedVehicle] = useState<string>('');
   const [observations, setObservations] = useState<string>('');
@@ -153,7 +154,7 @@ function AssemblyManagementContent() {
   const [groupSending, setGroupSending] = useState(false);
   // Edit route states
   const [isEditingRoute, setIsEditingRoute] = useState(false);
-  const [editRouteName, setEditRouteName] = useState('');
+  const [editSelectedDeliveryRouteId, setEditSelectedDeliveryRouteId] = useState('');
   const [editRouteMontador, setEditRouteMontador] = useState('');
   const [editRouteVehicle, setEditRouteVehicle] = useState('');
   const [editRouteDeadline, setEditRouteDeadline] = useState('');
@@ -676,9 +677,28 @@ function AssemblyManagementContent() {
       setAllPendingRoutes(data || []);
     } catch (err) {
       console.error('Error fetching all pending routes:', err);
-      toast.error('Erro ao atualizar lista de romaneios');
+      toast.error('Erro ao atualizar lista de rotas de montagem');
     } finally {
       setLoadingAllPending(false);
+    }
+  };
+
+  const fetchDeliveryRouteCatalog = async (): Promise<DeliveryRouteCatalog[]> => {
+    try {
+      const { data, error } = await supabase
+        .from('delivery_route_catalog')
+        .select('id, name, active, created_at, updated_at')
+        .eq('active', true)
+        .order('name');
+
+      if (error) throw error;
+      const catalog = (data || []) as DeliveryRouteCatalog[];
+      setDeliveryRouteCatalog(catalog);
+      return catalog;
+    } catch (err) {
+      console.error('Error fetching delivery route catalog:', err);
+      toast.error('Erro ao carregar rotas padronizadas');
+      return [];
     }
   };
 
@@ -904,6 +924,7 @@ function AssemblyManagementContent() {
   useEffect(() => {
     if (showCreateModal) {
       fetchAllPendingRoutes();
+      fetchDeliveryRouteCatalog();
     }
   }, [showCreateModal]);
 
@@ -1000,9 +1021,14 @@ function AssemblyManagementContent() {
   };
 
   const createAssemblyRoute = async () => {
+    const selectedCatalogRouteName = deliveryRouteCatalog
+      .find((route) => String(route.id) === String(selectedDeliveryRouteId))
+      ?.name
+      ?.trim() || '';
+
     // If creating new route, name is required
-    if (!selectedExistingRoute && !routeName.trim()) {
-      toast.error('Por favor, informe um nome para o romaneio');
+    if (!selectedExistingRoute && !selectedCatalogRouteName) {
+      toast.error('Por favor, selecione uma rota de montagem cadastrada');
       return;
     }
 
@@ -1062,7 +1088,7 @@ function AssemblyManagementContent() {
         const { data: routeData, error: routeError } = await supabase
           .from('assembly_routes')
           .insert({
-            name: routeName.trim(),
+            name: selectedCatalogRouteName,
             deadline: deadline || null,
             observations: observations.trim() || null,
             assembler_id: selectedMontador || null,
@@ -1092,11 +1118,11 @@ function AssemblyManagementContent() {
       if (updateError) throw updateError;
 
       toast.success(selectedExistingRoute
-        ? 'Pedidos adicionados ao romaneio existente!'
-        : 'Romaneio de montagem criado com sucesso!');
+        ? 'Pedidos adicionados a rota de montagem existente!'
+        : 'Rota de montagem criada com sucesso!');
 
       // Reset form
-      setRouteName('');
+      setSelectedDeliveryRouteId('');
       setSelectedMontador('');
       setSelectedVehicle('');
       setObservations('');
@@ -1110,7 +1136,7 @@ function AssemblyManagementContent() {
 
     } catch (error) {
       console.error('Error creating assembly route:', error);
-      toast.error('Erro ao criar romaneio de montagem');
+      toast.error('Erro ao criar rota de montagem');
     } finally {
       setSaving(false);
     }
@@ -1118,8 +1144,13 @@ function AssemblyManagementContent() {
 
   const saveRouteEdits = async () => {
     if (!selectedRoute) return;
-    if (!editRouteName.trim()) {
-      toast.error('Por favor, informe um nome para o romaneio');
+    const selectedCatalogRouteName = deliveryRouteCatalog
+      .find((route) => String(route.id) === String(editSelectedDeliveryRouteId))
+      ?.name
+      ?.trim() || '';
+
+    if (!selectedCatalogRouteName) {
+      toast.error('Por favor, selecione uma rota de montagem cadastrada');
       return;
     }
     if (!editRouteMontador) {
@@ -1132,7 +1163,7 @@ function AssemblyManagementContent() {
       const { error } = await supabase
         .from('assembly_routes')
         .update({
-          name: editRouteName.trim(),
+          name: selectedCatalogRouteName,
           assembler_id: editRouteMontador || null,
           vehicle_id: editRouteVehicle || null,
           deadline: editRouteDeadline || null,
@@ -1143,13 +1174,13 @@ function AssemblyManagementContent() {
 
       if (error) throw error;
 
-      toast.success('Romaneio atualizado com sucesso!');
+      toast.success('Rota de montagem atualizada com sucesso!');
       setIsEditingRoute(false);
 
       // Update the selectedRoute in state
       setSelectedRoute({
         ...selectedRoute,
-        name: editRouteName.trim(),
+        name: selectedCatalogRouteName,
         assembler_id: editRouteMontador || null,
         vehicle_id: editRouteVehicle || null,
         deadline: editRouteDeadline || null,
@@ -1160,7 +1191,7 @@ function AssemblyManagementContent() {
       loadData(true);
     } catch (error) {
       console.error('Error updating assembly route:', error);
-      toast.error('Erro ao atualizar romaneio');
+      toast.error('Erro ao atualizar rota de montagem');
     } finally {
       setSavingEdit(false);
     }
@@ -1869,7 +1900,7 @@ function AssemblyManagementContent() {
                   <Hammer className="h-6 w-6 text-blue-600" />
                   Gestão de Montagem
                 </h1>
-                <p className="text-sm text-gray-500">Crie, monitore e gerencie montagens e romaneios</p>
+                <p className="text-sm text-gray-500">Crie, monitore e gerencie montagens e rotas de montagem</p>
               </div>
             </div>
             <div className="flex items-center gap-3">
@@ -1902,7 +1933,7 @@ function AssemblyManagementContent() {
                 className="inline-flex items-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm transition-all transform active:scale-95"
               >
                 <Plus className="h-4 w-4 mr-2" />
-                Criar Romaneio ({selectedOrders.size})
+                Criar Rota de Montagem ({selectedOrders.size})
               </button>
             </div>
           </div>
@@ -1932,7 +1963,7 @@ function AssemblyManagementContent() {
                     onClick={() => scrollToSection(routesSectionRef)}
                     className="px-3 py-2 text-sm font-medium rounded-lg border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100"
                   >
-                    Ir para romaneios
+                    Ir para rotas de montagem
                   </button>
                 </div>
               </div>
@@ -2357,7 +2388,7 @@ function AssemblyManagementContent() {
                 <div className="flex items-center justify-between">
                   <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
                     <Truck className="h-6 w-6 text-gray-700" />
-                    Romaneios de Montagem Ativos
+                    Rotas de Montagem Ativas
                   </h2>
                   <span className="bg-gray-100 text-gray-600 px-3 py-1 rounded-full text-xs font-bold">
                     {assemblyRoutes.length}{hasMoreRoutes ? '+' : ''}
@@ -2445,8 +2476,8 @@ function AssemblyManagementContent() {
                     <div className="mx-auto w-16 h-16 bg-gray-50 rounded-full flex items-center justify-center mb-4">
                       <Truck className="h-8 w-8 text-gray-400" />
                     </div>
-                    <h3 className="text-lg font-medium text-gray-900">Nenhum romaneio encontrado</h3>
-                    <p className="text-gray-500">Crie seu primeiro romaneio selecionando pedidos acima.</p>
+                    <h3 className="text-lg font-medium text-gray-900">Nenhuma rota de montagem encontrada</h3>
+                    <p className="text-gray-500">Crie sua primeira rota de montagem selecionando pedidos acima.</p>
                   </div>
                 ) : (
                   assemblyRoutes.map(route => {
@@ -2654,11 +2685,11 @@ function AssemblyManagementContent() {
                                   assemblyVehiclePlate: vehicle?.plate || '',
                                 };
 
-                                const pdfBytes = await DeliverySheetGenerator.generateDeliverySheet(data, 'Romaneio de Montagem');
+                                const pdfBytes = await DeliverySheetGenerator.generateDeliverySheet(data, 'Rota de Montagem');
                                 DeliverySheetGenerator.openPDFInNewTab(pdfBytes);
                               } catch (e) {
                                 console.error(e);
-                                toast.error('Erro ao gerar PDF do romaneio');
+                                toast.error('Erro ao gerar PDF da rota de montagem');
                               }
                             }}
                             className="flex-1 inline-flex items-center justify-center px-4 py-2 bg-blue-50 border border-blue-100 text-blue-700 text-sm font-medium rounded-lg hover:bg-blue-100 transition-colors"
@@ -2684,19 +2715,19 @@ function AssemblyManagementContent() {
           <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
             <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden">
               <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50 flex-shrink-0">
-                <h3 className="text-lg font-bold text-gray-900">Novo Romaneio de Montagem</h3>
+                <h3 className="text-lg font-bold text-gray-900">Nova Rota de Montagem</h3>
                 <button onClick={() => { try { localStorage.setItem('am_showCreateModal', '0'); } catch { } setShowCreateModal(false); }} className="text-gray-400 hover:text-gray-600"><X className="h-5 w-5" /></button>
               </div>
               <div className="p-6 space-y-6 overflow-y-auto flex-1">
                 {/* Select existing route or create new */}
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Adicionar a romaneio existente?</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Adicionar a rota de montagem existente?</label>
                   <select
                     value={selectedExistingRoute}
                     onChange={(e) => setSelectedExistingRoute(e.target.value)}
                     className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all"
                   >
-                    <option value="">Não, criar novo romaneio</option>
+                    <option value="">Nao, criar nova rota de montagem</option>
                     {allPendingRoutes
                       .map(r => (
                         <option key={r.id} value={r.id}>{r.name}</option>
@@ -2708,14 +2739,22 @@ function AssemblyManagementContent() {
                 {/* Only show name field if creating new route */}
                 {!selectedExistingRoute && (
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">Nome do Romaneio <span className="text-red-500">*</span></label>
-                    <input
-                      type="text"
-                      value={routeName}
-                      onChange={(e) => setRouteName(e.target.value)}
-                      placeholder="Ex: Montagem Zona Sul - Manhã"
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Rota Cadastrada <span className="text-red-500">*</span></label>
+                    <select
+                      value={selectedDeliveryRouteId}
+                      onChange={(e) => setSelectedDeliveryRouteId(e.target.value)}
                       className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all"
-                    />
+                    >
+                      <option value="">Selecione...</option>
+                      {deliveryRouteCatalog.map(route => (
+                        <option key={route.id} value={route.id}>{route.name}</option>
+                      ))}
+                    </select>
+                    {deliveryRouteCatalog.length === 0 && (
+                      <p className="mt-2 text-xs text-amber-600">
+                        Nenhuma rota cadastrada em Usuarios e Equipes &gt; Rotas.
+                      </p>
+                    )}
                   </div>
                 )}
 
@@ -2779,10 +2818,10 @@ function AssemblyManagementContent() {
                 <button onClick={() => setShowCreateModal(false)} className="px-6 py-2.5 rounded-xl border border-gray-300 text-gray-700 font-medium hover:bg-white transition-colors">Cancelar</button>
                 <button
                   onClick={() => createAssemblyRoute()}
-                  disabled={saving || (selectedOrders.size === 0) || (!selectedExistingRoute && !routeName.trim())}
+                  disabled={saving || (selectedOrders.size === 0) || (!selectedExistingRoute && !selectedDeliveryRouteId)}
                   className="px-6 py-2.5 rounded-xl bg-blue-600 text-white font-bold hover:bg-blue-700 shadow-lg shadow-blue-200 disabled:opacity-50 disabled:shadow-none transition-all transform active:scale-95"
                 >
-                  {saving ? 'Salvando...' : (selectedExistingRoute ? 'Adicionar à Rota' : 'Confirmar Romaneio')}
+                  {saving ? 'Salvando...' : (selectedExistingRoute ? 'Adicionar a Rota de Montagem' : 'Confirmar Rota de Montagem')}
                 </button>
               </div>
             </div>
@@ -2901,17 +2940,23 @@ function AssemblyManagementContent() {
                     </div>
                   ) : (
                     <div className="flex-1 mr-4">
-                      <h3 className="text-lg font-bold text-gray-900 mb-3">Editar Romaneio</h3>
+                      <h3 className="text-lg font-bold text-gray-900 mb-3">Editar Rota de Montagem</h3>
                       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
                         <div>
-                          <label className="block text-xs font-medium text-gray-700 mb-1">Nome do Romaneio *</label>
-                          <input
-                            type="text"
-                            value={editRouteName}
-                            onChange={(e) => setEditRouteName(e.target.value)}
+                          <label className="block text-xs font-medium text-gray-700 mb-1">Nome da Rota de Montagem *</label>
+                          <select
+                            value={editSelectedDeliveryRouteId}
+                            onChange={(e) => setEditSelectedDeliveryRouteId(e.target.value)}
                             className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                            placeholder="Nome do romaneio"
-                          />
+                          >
+                            <option value="">Selecione...</option>
+                            {deliveryRouteCatalog.map(route => (
+                              <option key={route.id} value={route.id}>{route.name}</option>
+                            ))}
+                          </select>
+                          {deliveryRouteCatalog.length === 0 && (
+                            <p className="mt-1 text-xs text-amber-600">Nenhuma rota cadastrada em Usuarios e Equipes &gt; Rotas.</p>
+                          )}
                         </div>
                         <div>
                           <label className="block text-xs font-medium text-gray-700 mb-1">Montador *</label>
@@ -2965,9 +3010,14 @@ function AssemblyManagementContent() {
                     {/* Edit / Save / Cancel buttons */}
                     {!isEditingRoute ? (
                       <button
-                        onClick={() => {
+                        onClick={async () => {
                           const r = selectedRoute as any;
-                          setEditRouteName(r.name || '');
+                          const catalog = await fetchDeliveryRouteCatalog();
+                          const list = (catalog && catalog.length > 0) ? catalog : deliveryRouteCatalog;
+                          const matchedRoute = list.find((route) =>
+                            String(route.name || '').trim().toLowerCase() === String(r.name || '').trim().toLowerCase()
+                          );
+                          setEditSelectedDeliveryRouteId(matchedRoute ? String(matchedRoute.id) : '');
                           setEditRouteMontador(r.assembler_id || '');
                           setEditRouteVehicle(r.vehicle_id || '');
                           setEditRouteDeadline(r.deadline ? r.deadline.split('T')[0] : '');
@@ -2983,7 +3033,7 @@ function AssemblyManagementContent() {
                       <>
                         <button
                           onClick={() => saveRouteEdits()}
-                          disabled={savingEdit}
+                          disabled={savingEdit || !editSelectedDeliveryRouteId || !editRouteMontador}
                           className="inline-flex items-center px-3 py-2 border border-green-200 shadow-sm text-sm font-medium rounded-lg text-green-700 bg-green-50 hover:bg-green-100 disabled:opacity-50"
                         >
                           <Save className="h-4 w-4 mr-2" /> {savingEdit ? 'Salvando...' : 'Salvar'}
@@ -3359,9 +3409,9 @@ function AssemblyManagementContent() {
                                     {/* Individual Assembly Romaneio Print */}
                                     <button
                                       className="p-1.5 text-purple-600 hover:text-purple-800 hover:bg-purple-50 rounded-lg border border-purple-200 transition-colors"
-                                      title="Imprimir Romaneio Individual"
+                                      title="Imprimir Rota de Montagem Individual"
                                       onClick={async () => {
-                                        const toastId = toast.loading('Gerando Romaneio Individual...');
+                                        const toastId = toast.loading('Gerando Rota de Montagem Individual...');
                                         try {
                                           if (!order || !selectedRoute) throw new Error("Dados não encontrados");
 
@@ -3403,12 +3453,12 @@ function AssemblyManagementContent() {
                                             assemblyVehiclePlate: v?.plate || ''
                                           };
 
-                                          const pdfBytes = await DeliverySheetGenerator.generateDeliverySheet(data, 'Romaneio de Montagem');
+                                          const pdfBytes = await DeliverySheetGenerator.generateDeliverySheet(data, 'Rota de Montagem');
                                           DeliverySheetGenerator.openPDFInNewTab(pdfBytes);
-                                          toast.success('Romaneio Individual gerado!', { id: toastId });
+                                          toast.success('Rota de Montagem Individual gerada!', { id: toastId });
                                         } catch (e) {
                                           console.error(e);
-                                          toast.error('Erro ao gerar romaneio', { id: toastId });
+                                          toast.error('Erro ao gerar rota de montagem', { id: toastId });
                                         }
                                       }}
                                     >
@@ -3696,7 +3746,7 @@ function AssemblyManagementContent() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 overflow-hidden">
             <div className="bg-gradient-to-r from-blue-600 to-blue-700 px-6 py-4">
-              <h3 className="text-lg font-bold text-white">Gerar Romaneio de Montagem</h3>
+              <h3 className="text-lg font-bold text-white">Gerar Rota de Montagem</h3>
               <p className="text-blue-100 text-sm">Escolha a ordenação dos pedidos</p>
             </div>
             <div className="p-6 space-y-4">
@@ -3845,12 +3895,12 @@ function AssemblyManagementContent() {
                       assemblyVehicleModel: v?.model || '',
                       assemblyVehiclePlate: v?.plate || ''
                     };
-                    const pdfBytes = await DeliverySheetGenerator.generateDeliverySheet(data, 'Romaneio de Montagem');
+                    const pdfBytes = await DeliverySheetGenerator.generateDeliverySheet(data, 'Rota de Montagem');
                     DeliverySheetGenerator.openPDFInNewTab(pdfBytes);
                     setShowPdfSortModal(false);
                   } catch (e) {
                     console.error(e);
-                    toast.error('Erro ao gerar PDF do romaneio');
+                    toast.error('Erro ao gerar PDF da rota de montagem');
                   }
                 }}
                 className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700"

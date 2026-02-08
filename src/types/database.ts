@@ -132,6 +132,14 @@ export interface Route {
   route_code?: string;
 }
 
+export interface DeliveryRouteCatalog {
+  id: string;
+  name: string;
+  active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface RouteWithDetails extends Route {
   driver: Driver;
   vehicle?: Vehicle;

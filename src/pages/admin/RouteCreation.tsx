@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../../supabase/client';
-import type { Order, DriverWithUser, Vehicle, RouteWithDetails } from '../../types/database';
+import type { DeliveryRouteCatalog, Order, DriverWithUser, Vehicle, RouteWithDetails } from '../../types/database';
 import {
   Truck,
   Package,
@@ -131,6 +131,7 @@ function RouteCreationContent() {
   const [drivers, setDrivers] = useState<DriverWithUser[]>([]);
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [conferentes, setConferentes] = useState<{ id: string, name: string }[]>([]);
+  const [deliveryRouteCatalog, setDeliveryRouteCatalog] = useState<DeliveryRouteCatalog[]>([]);
 
   // Selection
   const [selectedOrders, setSelectedOrders] = useState<Set<string>>(new Set());
@@ -138,7 +139,7 @@ function RouteCreationContent() {
   // New Route Form
   const [selectedDriver, setSelectedDriver] = useState<string>('');
   const [selectedVehicle, setSelectedVehicle] = useState<string>('');
-  const [routeName, setRouteName] = useState<string>('');
+  const [selectedDeliveryRouteId, setSelectedDeliveryRouteId] = useState<string>('');
   const [conferente, setConferente] = useState<string>('');
   const [observations, setObservations] = useState<string>('');
   const [teams, setTeams] = useState<any[]>([]);
@@ -156,6 +157,7 @@ function RouteCreationContent() {
   // Edit Mode State
   const [isEditingRoute, setIsEditingRoute] = useState(false);
   const [editRouteName, setEditRouteName] = useState('');
+  const [editSelectedDeliveryRouteId, setEditSelectedDeliveryRouteId] = useState('');
   const [editRouteTeam, setEditRouteTeam] = useState('');
   const [editRouteDriver, setEditRouteDriver] = useState('');
   const [editRouteHelper, setEditRouteHelper] = useState('');
@@ -498,17 +500,27 @@ function RouteCreationContent() {
 
   const [pickupOrderObservations, setPickupOrderObservations] = useState('');
 
+  const isStandardDeliveryRoute = (route: RouteWithDetails | null) => {
+    if (!route) return false;
+    const routeName = String(route.name || '');
+    return !routeName.startsWith('RETIRADA') && !routeName.startsWith('COLETA-');
+  };
+
   // --- EDIT ROUTE LOGIC ---
   useEffect(() => {
     if (showRouteModal && selectedRoute && !isEditingRoute) {
       setEditRouteName(selectedRoute.name || '');
+      const matchedRoute = deliveryRouteCatalog.find((route) =>
+        String(route.name || '').trim().toLowerCase() === String(selectedRoute.name || '').trim().toLowerCase()
+      );
+      setEditSelectedDeliveryRouteId(matchedRoute ? String(matchedRoute.id) : '');
       setEditRouteTeam(selectedRoute.team_id || '');
       setEditRouteDriver(selectedRoute.driver_id || '');
       setEditRouteHelper(selectedRoute.helper_id || '');
       setEditRouteVehicle(selectedRoute.vehicle_id || '');
       setEditRouteConferente(selectedRoute.conferente_id || '');
     }
-  }, [showRouteModal, selectedRoute, isEditingRoute]);
+  }, [showRouteModal, selectedRoute, isEditingRoute, deliveryRouteCatalog]);
 
   const handleEditTeamChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const tid = e.target.value;
@@ -558,13 +570,23 @@ function RouteCreationContent() {
 
   const handleUpdateRoute = async () => {
     if (!selectedRoute) return;
-    if (!editRouteName.trim()) { toast.error('Nome da rota é obrigatório'); return; }
+    const selectedCatalogRouteName = deliveryRouteCatalog
+      .find((route) => String(route.id) === String(editSelectedDeliveryRouteId))
+      ?.name
+      ?.trim() || '';
+    const shouldUseCatalogName = isStandardDeliveryRoute(selectedRoute);
+    const finalRouteName = shouldUseCatalogName ? selectedCatalogRouteName : editRouteName.trim();
+
+    if (!finalRouteName) {
+      toast.error(shouldUseCatalogName ? 'Por favor, selecione uma rota cadastrada' : 'Nome da rota é obrigatório');
+      return;
+    }
 
     const updatePromise = (async () => {
       const { error } = await supabase
         .from('routes')
         .update({
-          name: editRouteName,
+          name: finalRouteName,
           team_id: editRouteTeam || null,
           driver_id: editRouteDriver || null,
           helper_id: editRouteHelper || null,
@@ -1538,6 +1560,7 @@ function RouteCreationContent() {
         confSettingRes,
         driversRes,
         conferentesRes,
+        deliveryRouteCatalogRes,
         // routesRes, (REMOVED)
         activeRouteOrdersRes,
         // Pedidos bloqueados (cancelados/devolvidos via n8n)
@@ -1577,6 +1600,13 @@ function RouteCreationContent() {
           .from('users')
           .select('id,name,role')
           .eq('role', 'conferente'),
+
+        // Catalogo de rotas padronizadas (dropdown no modal)
+        supabase
+          .from('delivery_route_catalog')
+          .select('id,name,active,created_at,updated_at')
+          .eq('active', true)
+          .order('name'),
 
         // Routes fetch moved to separate fetchRoutes function for independent filtering
         // supabase.from('routes')...
@@ -1694,6 +1724,13 @@ function RouteCreationContent() {
         id: String(u.id),
         name: String(u.name || u.id)
       })));
+
+      if (deliveryRouteCatalogRes.error) {
+        console.error('Error fetching delivery route catalog:', deliveryRouteCatalogRes.error);
+        setDeliveryRouteCatalog([]);
+      } else {
+        setDeliveryRouteCatalog((deliveryRouteCatalogRes.data || []) as DeliveryRouteCatalog[]);
+      }
 
       // Teams and Helpers
       console.log('Fetching teams and helpers...');
@@ -2214,8 +2251,12 @@ function RouteCreationContent() {
 
   const createRoute = async (forceProceed: boolean = false) => {
     if (!forceProceed && openMixedConfirm('create')) return;
+    const selectedCatalogRouteName = deliveryRouteCatalog
+      .find((route) => String(route.id) === String(selectedDeliveryRouteId))
+      ?.name
+      ?.trim() || '';
     if (!selectedExistingRouteId) {
-      if (!routeName.trim()) { toast.error('Por favor, informe um nome para a rota'); return; }
+      if (!selectedCatalogRouteName) { toast.error('Por favor, selecione uma rota cadastrada'); return; }
       if (!selectedDriver) { toast.error('Por favor, selecione um motorista'); return; }
     }
     if (selectedOrders.size === 0) { toast.error('Por favor, selecione pelo menos um pedido'); return; }
@@ -2231,7 +2272,7 @@ function RouteCreationContent() {
         const { data: routeData, error: routeError } = await supabase
           .from('routes')
           .insert({
-            name: routeName.trim(),
+            name: selectedCatalogRouteName,
             driver_id: selectedDriver,
             vehicle_id: selectedVehicle || null,
             // We need to save BOTH correctly (conferente name string and conferente_id uuid)
@@ -2297,7 +2338,7 @@ function RouteCreationContent() {
       toast.success(selectedExistingRouteId ? 'Pedidos adicionados ao romaneio' : 'Rota criada com sucesso!');
 
       // Reset form
-      setRouteName('');
+      setSelectedDeliveryRouteId('');
       setSelectedDriver('');
       setSelectedVehicle('');
       setConferente('');
@@ -3487,14 +3528,22 @@ function RouteCreationContent() {
                     </div>
 
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">Nome da Rota <span className="text-red-500">*</span></label>
-                      <input
-                        type="text"
-                        value={routeName}
-                        onChange={(e) => setRouteName(e.target.value)}
-                        placeholder="Ex: Rota Zona Sul - Manhã"
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Rota Cadastrada <span className="text-red-500">*</span></label>
+                      <select
+                        value={selectedDeliveryRouteId}
+                        onChange={(e) => setSelectedDeliveryRouteId(e.target.value)}
                         className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all"
-                      />
+                      >
+                        <option value="">Selecione...</option>
+                        {deliveryRouteCatalog.map(route => (
+                          <option key={route.id} value={route.id}>{route.name}</option>
+                        ))}
+                      </select>
+                      {deliveryRouteCatalog.length === 0 && (
+                        <p className="mt-2 text-xs text-amber-600">
+                          Nenhuma rota cadastrada em Usuários e Equipes &gt; Rotas.
+                        </p>
+                      )}
                     </div>
                     <div className="grid grid-cols-2 gap-4">
                       <div>
@@ -3559,7 +3608,7 @@ function RouteCreationContent() {
                 <button onClick={() => setShowCreateModal(false)} className="px-6 py-2.5 rounded-xl border border-gray-300 text-gray-700 font-medium hover:bg-white transition-colors">Cancelar</button>
                 <button
                   onClick={() => createRoute()}
-                  disabled={saving || (!selectedExistingRouteId && (!routeName || !selectedDriver || !selectedVehicle || !conferente))}
+                  disabled={saving || (!selectedExistingRouteId && (!selectedDeliveryRouteId || !selectedDriver || !selectedVehicle || !conferente))}
                   className="px-6 py-2.5 rounded-xl bg-blue-600 text-white font-bold hover:bg-blue-700 shadow-lg shadow-blue-200 disabled:opacity-50 disabled:shadow-none transition-all transform active:scale-95"
                 >
                   {saving ? 'Salvando...' : 'Confirmar Rota'}
@@ -3635,7 +3684,7 @@ function RouteCreationContent() {
                     </div>
                     {launchType === 'venda' && (
                       <p className="mt-2 text-xs text-emerald-600 bg-emerald-50 p-2 rounded-lg border border-emerald-100">
-                        💡 Use para pedidos antigos aguardando liberação do cliente (reformas, etc.)
+                        Dica: Use para pedidos antigos aguardando liberação do cliente (reformas, etc.)
                       </p>
                     )}
                   </div>
@@ -4038,13 +4087,33 @@ function RouteCreationContent() {
                   <div className="flex items-center gap-2">
                     {isEditingRoute ? (
                       <div className="w-full max-w-md">
-                        <label className="block text-xs font-medium text-gray-500 mb-1">Nome da Rota</label>
-                        <input
-                          type="text"
-                          value={editRouteName}
-                          onChange={(e) => setEditRouteName(e.target.value)}
-                          className="w-full text-lg font-bold border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 px-3 py-1"
-                        />
+                        <label className="block text-xs font-medium text-gray-500 mb-1">
+                          {isStandardDeliveryRoute(selectedRoute) ? 'Rota Cadastrada' : 'Nome da Rota'}
+                        </label>
+                        {isStandardDeliveryRoute(selectedRoute) ? (
+                          <>
+                            <select
+                              value={editSelectedDeliveryRouteId}
+                              onChange={(e) => setEditSelectedDeliveryRouteId(e.target.value)}
+                              className="w-full text-lg font-bold border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 px-3 py-1 bg-white"
+                            >
+                              <option value="">Selecione...</option>
+                              {deliveryRouteCatalog.map(route => (
+                                <option key={route.id} value={route.id}>{route.name}</option>
+                              ))}
+                            </select>
+                            {deliveryRouteCatalog.length === 0 && (
+                              <p className="mt-1 text-xs text-amber-600">Nenhuma rota cadastrada em Usuários e Equipes &gt; Rotas.</p>
+                            )}
+                          </>
+                        ) : (
+                          <input
+                            type="text"
+                            value={editRouteName}
+                            onChange={(e) => setEditRouteName(e.target.value)}
+                            className="w-full text-lg font-bold border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 px-3 py-1"
+                          />
+                        )}
                       </div>
                     ) : (
                       <h2 className="text-xl font-bold text-gray-900">
@@ -4079,7 +4148,8 @@ function RouteCreationContent() {
                   <div className="flex gap-2 w-full">
                     <button
                       onClick={handleUpdateRoute}
-                      className="flex items-center px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
+                      disabled={isStandardDeliveryRoute(selectedRoute) && !editSelectedDeliveryRouteId}
+                      className="flex items-center px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       <Check className="h-4 w-4 mr-2" />
                       Salvar
@@ -5458,3 +5528,5 @@ export default function RouteCreation() {
     </RouteCreationErrorBoundary>
   );
 }
+
+

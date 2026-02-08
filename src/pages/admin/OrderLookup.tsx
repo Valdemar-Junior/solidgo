@@ -6,6 +6,7 @@ import { useAuthStore } from '../../stores/authStore';
 import type { Order } from '../../types/database';
 import { toast } from 'sonner';
 import { AssemblyPhotosViewer, DeliveryPhotosViewer } from '../../components/photos';
+import { DeliveryProofPdfGenerator } from '../../utils/pdf/deliveryProofPdfGenerator';
 
 interface RouteOrderInfo {
   id: string;
@@ -28,6 +29,35 @@ interface AssemblyInfo {
   assembly_date?: string;
   completion_date?: string;
   updated_at?: string;
+}
+
+interface DeliveryReceiptInfo {
+  id: string;
+  route_order_id: string;
+  delivered_by_user_id?: string | null;
+  delivered_at_server?: string | null;
+  device_timestamp?: string | null;
+  gps_lat?: number | string | null;
+  gps_lng?: number | string | null;
+  gps_accuracy_m?: number | string | null;
+  gps_status?: string | null;
+  gps_failure_reason?: string | null;
+  recipient_name?: string | null;
+  recipient_relation?: string | null;
+  recipient_notes?: string | null;
+  photo_count?: number | null;
+  sync_status?: string | null;
+  network_mode?: string | null;
+  proof_hash?: string | null;
+  created_at?: string | null;
+}
+
+interface DeliveryPhotoRow {
+  id: string;
+  storage_path: string;
+  file_name?: string | null;
+  photo_type?: string | null;
+  created_at?: string | null;
 }
 
 // Pequeno componente auxiliar para botão de copiar
@@ -65,6 +95,9 @@ export default function OrderLookup() {
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
   const [routeOrders, setRouteOrders] = useState<RouteOrderInfo[]>([]);
   const [assemblies, setAssemblies] = useState<AssemblyInfo[]>([]);
+  const [deliveryReceiptsByRouteOrder, setDeliveryReceiptsByRouteOrder] = useState<Record<string, DeliveryReceiptInfo>>({});
+  const [deliveryReceiptUserNames, setDeliveryReceiptUserNames] = useState<Record<string, string>>({});
+  const [proofPdfLoadingByRouteOrder, setProofPdfLoadingByRouteOrder] = useState<Record<string, boolean>>({});
   const [showObservations, setShowObservations] = useState(false);
 
   // Check if user is consultor to hide certain elements
@@ -151,11 +184,17 @@ export default function OrderLookup() {
       setSelectedOrder(null);
       setRouteOrders([]);
       setAssemblies([]);
+      setDeliveryReceiptsByRouteOrder({});
+      setDeliveryReceiptUserNames({});
+      setProofPdfLoadingByRouteOrder({});
 
       const results = await fetchOrders(q);
       if (results.length === 0) {
         if (!fromTyping) toast.error('Nenhum pedido encontrado');
         setOrders([]);
+        setDeliveryReceiptsByRouteOrder({});
+        setDeliveryReceiptUserNames({});
+        setProofPdfLoadingByRouteOrder({});
         return;
       }
       setOrders(results);
@@ -254,6 +293,75 @@ export default function OrderLookup() {
 
         setRouteOrders(roData as RouteOrderInfo[] || []);
 
+        const { data: receiptsData, error: receiptsError } = await supabase
+          .from('delivery_receipts')
+          .select(`
+            id,
+            route_order_id,
+            delivered_by_user_id,
+            delivered_at_server,
+            device_timestamp,
+            gps_lat,
+            gps_lng,
+            gps_accuracy_m,
+            gps_status,
+            gps_failure_reason,
+            recipient_name,
+            recipient_relation,
+            recipient_notes,
+            photo_count,
+            sync_status,
+            network_mode,
+            proof_hash,
+            created_at
+          `)
+          .eq('order_id', selectedOrder.id)
+          .order('delivered_at_server', { ascending: false });
+
+        if (receiptsError) {
+          console.warn('[OrderLookup] Falha ao carregar comprovantes digitais:', receiptsError.message);
+          setDeliveryReceiptsByRouteOrder({});
+          setDeliveryReceiptUserNames({});
+          setProofPdfLoadingByRouteOrder({});
+        } else {
+          const byRouteOrder: Record<string, DeliveryReceiptInfo> = {};
+          for (const row of (receiptsData || []) as DeliveryReceiptInfo[]) {
+            if (!row.route_order_id) continue;
+            if (!byRouteOrder[row.route_order_id]) {
+              byRouteOrder[row.route_order_id] = row;
+            }
+          }
+          setDeliveryReceiptsByRouteOrder(byRouteOrder);
+
+          const userIds = Array.from(
+            new Set(
+              Object.values(byRouteOrder)
+                .map((r) => String(r.delivered_by_user_id || '').trim())
+                .filter(Boolean)
+            )
+          );
+
+          if (userIds.length > 0) {
+            const { data: usersData, error: usersError } = await supabase
+              .from('users')
+              .select('id, name')
+              .in('id', userIds);
+
+            if (usersError) {
+              console.warn('[OrderLookup] Falha ao carregar nomes de usuarios dos comprovantes:', usersError.message);
+              setDeliveryReceiptUserNames({});
+            } else {
+              const namesMap: Record<string, string> = {};
+              for (const userRow of (usersData || []) as Array<{ id: string; name: string }>) {
+                namesMap[String(userRow.id)] = String(userRow.name || '').trim();
+              }
+              setDeliveryReceiptUserNames(namesMap);
+            }
+          } else {
+            setDeliveryReceiptUserNames({});
+          }
+        }
+
         const { data: apData } = await supabase
           .from('assembly_products')
           .select('*, assembly_route:assembly_routes(*)')
@@ -330,6 +438,152 @@ export default function OrderLookup() {
     if (!d) return '-';
     const dt = new Date(d);
     return isNaN(dt.getTime()) ? '-' : dt.toLocaleDateString('pt-BR');
+  };
+
+  const formatDateTime = (d?: string | null) => {
+    if (!d) return '-';
+    const dt = new Date(d);
+    return isNaN(dt.getTime()) ? '-' : dt.toLocaleString('pt-BR');
+  };
+
+  const asNumber = (value: unknown): number | null => {
+    if (value === null || typeof value === 'undefined' || value === '') return null;
+    const n = Number(value);
+    return Number.isFinite(n) ? n : null;
+  };
+
+  const getProofStatus = (receipt?: DeliveryReceiptInfo) => {
+    if (!receipt) {
+      return {
+        label: 'Sem comprovante',
+        className: 'bg-gray-100 text-gray-600 border-gray-200',
+      };
+    }
+
+    if (String(receipt.sync_status || '').toLowerCase() === 'pending_sync') {
+      return {
+        label: 'Pendente sync',
+        className: 'bg-amber-100 text-amber-700 border-amber-200',
+      };
+    }
+
+    const hasRecipient = Boolean(String(receipt.recipient_name || '').trim()) && Boolean(String(receipt.recipient_relation || '').trim());
+    const hasPhoto = Number(receipt.photo_count || 0) >= 1;
+    const gpsOk = String(receipt.gps_status || '').toLowerCase() === 'ok';
+    const hasGpsReason = Boolean(String(receipt.gps_failure_reason || '').trim());
+
+    if (hasRecipient && hasPhoto && (gpsOk || hasGpsReason)) {
+      return {
+        label: 'Completo',
+        className: 'bg-green-100 text-green-700 border-green-200',
+      };
+    }
+
+    return {
+      label: 'Parcial',
+      className: 'bg-blue-100 text-blue-700 border-blue-200',
+    };
+  };
+
+  const openMapFromReceipt = (receipt?: DeliveryReceiptInfo) => {
+    if (!receipt) return;
+    const lat = asNumber(receipt.gps_lat);
+    const lng = asNumber(receipt.gps_lng);
+    if (lat === null || lng === null) {
+      toast.error('Comprovante sem coordenadas GPS');
+      return;
+    }
+    window.open(`https://www.google.com/maps?q=${lat},${lng}`, '_blank', 'noopener,noreferrer');
+  };
+
+  const fetchDeliveryPhotosForPdf = async (routeOrderId: string) => {
+    const { data, error } = await supabase
+      .from('delivery_photos')
+      .select('id, storage_path, file_name, photo_type, created_at')
+      .eq('route_order_id', routeOrderId)
+      .order('created_at', { ascending: true });
+
+    if (error) throw error;
+
+    const rows = (data || []) as DeliveryPhotoRow[];
+    const withUrls = await Promise.all(
+      rows.map(async (photo) => {
+        const { data: signed } = await supabase.storage
+          .from('delivery-photos')
+          .createSignedUrl(photo.storage_path, 3600);
+
+        return {
+          id: photo.id,
+          url: signed?.signedUrl || '',
+          label: `${photo.photo_type || 'foto'}${photo.file_name ? ` - ${photo.file_name}` : ''}`,
+          createdAt: photo.created_at || null,
+        };
+      })
+    );
+
+    return withUrls.filter((p) => p.url);
+  };
+
+  const generateProofPdf = async (ro: RouteOrderInfo, receipt?: DeliveryReceiptInfo) => {
+    if (!selectedOrder) return;
+    if (!receipt) {
+      toast.error('Ainda nao existe comprovante digital para esta entrega');
+      return;
+    }
+
+    const routeOrderId = String(ro.id);
+    setProofPdfLoadingByRouteOrder((prev) => ({ ...prev, [routeOrderId]: true }));
+
+    try {
+      const photos = await fetchDeliveryPhotosForPdf(routeOrderId);
+      const driverName = (ro.route as any)?.driver_name || (ro.route as any)?.driver?.user?.name || (ro.route as any)?.driver?.name || '';
+      const vehicleInfo = ro.route?.vehicle
+        ? `${(ro.route?.vehicle as any)?.model || ''} ${(ro.route?.vehicle as any)?.plate || ''}`.trim()
+        : '';
+      const proofUserId = String(receipt.delivered_by_user_id || '').trim();
+      const deliveredByName = proofUserId ? (deliveryReceiptUserNames[proofUserId] || driverName || '-') : (driverName || '-');
+
+      const pdfBytes = await DeliveryProofPdfGenerator.generate({
+        order: selectedOrder,
+        route: {
+          routeName: ro.route?.name || '-',
+          routeCode: (ro.route as any)?.route_code || null,
+          routeId: ro.route_id,
+          routeOrderId: ro.id,
+          routeOrderStatus: ro.status,
+          deliveredAt: ro.delivered_at || null,
+          driverName: driverName || '-',
+          vehicleInfo: vehicleInfo || '-',
+        },
+        receipt: {
+          id: receipt.id,
+          deliveredAtServer: receipt.delivered_at_server || receipt.created_at || null,
+          deviceTimestamp: receipt.device_timestamp || null,
+          recipientName: receipt.recipient_name || null,
+          recipientRelation: receipt.recipient_relation || null,
+          recipientNotes: receipt.recipient_notes || null,
+          gpsStatus: receipt.gps_status || null,
+          gpsLat: asNumber(receipt.gps_lat),
+          gpsLng: asNumber(receipt.gps_lng),
+          gpsAccuracyM: asNumber(receipt.gps_accuracy_m),
+          gpsFailureReason: receipt.gps_failure_reason || null,
+          syncStatus: receipt.sync_status || null,
+          networkMode: receipt.network_mode || null,
+          photoCount: Number(receipt.photo_count || photos.length || 0),
+          proofHash: receipt.proof_hash || null,
+        },
+        deliveredByName,
+        photos,
+        generatedAt: new Date().toISOString(),
+      });
+
+      DeliveryProofPdfGenerator.openPDFInNewTab(pdfBytes);
+    } catch (error) {
+      console.error('[OrderLookup] Erro ao gerar PDF do comprovante:', error);
+      toast.error('Erro ao gerar PDF do comprovante digital');
+    } finally {
+      setProofPdfLoadingByRouteOrder((prev) => ({ ...prev, [routeOrderId]: false }));
+    }
   };
 
   const statusLabelEntrega: Record<string, string> = {
@@ -420,6 +674,9 @@ export default function OrderLookup() {
                     setSelectedOrder(null);
                     setRouteOrders([]);
                     setAssemblies([]);
+                    setDeliveryReceiptsByRouteOrder({});
+                    setDeliveryReceiptUserNames({});
+                    setProofPdfLoadingByRouteOrder({});
                   }
                 }}
                 onKeyDown={(e) => e.key === 'Enter' && handleSearch(query)}
@@ -626,9 +883,14 @@ export default function OrderLookup() {
                       const orderStatus = ro.status === 'returned' ? 'returned'
                         : ro.status === 'delivered' ? 'delivered'
                           : 'pending';
-                      const orderStatusColor = orderStatus === 'delivered' ? 'text-green-600'
-                        : orderStatus === 'returned' ? 'text-red-600'
-                          : 'text-yellow-600';
+                      const receipt = deliveryReceiptsByRouteOrder[ro.id];
+                      const proofStatus = getProofStatus(receipt);
+                      const proofUserId = String(receipt?.delivered_by_user_id || '').trim();
+                      const proofUserName = proofUserId ? (deliveryReceiptUserNames[proofUserId] || '-') : '-';
+                      const gpsLat = asNumber(receipt?.gps_lat);
+                      const gpsLng = asNumber(receipt?.gps_lng);
+                      const hasGpsPoint = gpsLat !== null && gpsLng !== null;
+                      const isGeneratingProofPdf = proofPdfLoadingByRouteOrder[ro.id] === true;
 
                       return (
                         <div key={ro.id} className="border border-gray-100 rounded-lg p-3 relative group hover:border-blue-200 transition-colors">
@@ -657,7 +919,6 @@ export default function OrderLookup() {
                               <p className="text-xs text-green-600 font-medium">
                                 Entregue em: {ro.delivered_at ? formatDate(ro.delivered_at) : formatDate(ro.route?.updated_at)}
                               </p>
-                              <DeliveryPhotosViewer routeOrderId={ro.id} size="sm" />
                             </div>
                           )}
                           {ro.status === 'returned' && (
@@ -665,7 +926,75 @@ export default function OrderLookup() {
                               <p className="text-xs text-red-600 font-medium">
                                 Retornado em: {ro.delivered_at ? formatDate(ro.delivered_at) : formatDate(ro.route?.updated_at)}
                               </p>
-                              <DeliveryPhotosViewer routeOrderId={ro.id} size="sm" />
+                            </div>
+                          )}
+                          {(ro.status === 'delivered' || ro.status === 'returned') && (
+                            <div className="mt-2 p-2 rounded-lg border border-gray-200 bg-gray-50">
+                              <div className="flex items-center justify-between gap-2">
+                                <p className="text-xs font-semibold text-gray-700 uppercase">Comprovante digital</p>
+                                <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full border ${proofStatus.className}`}>
+                                  {proofStatus.label}
+                                </span>
+                              </div>
+
+                              {receipt ? (
+                                <div className="mt-2 space-y-1">
+                                  <p className="text-xs text-gray-600">
+                                    Servidor: <span className="font-medium text-gray-800">{formatDateTime(receipt.delivered_at_server || receipt.created_at)}</span>
+                                  </p>
+                                  <p className="text-xs text-gray-600">
+                                    Recebedor: <span className="font-medium text-gray-800">{receipt.recipient_name || '-'}</span>
+                                    {receipt.recipient_relation ? ` (${receipt.recipient_relation})` : ''}
+                                  </p>
+                                  <p className="text-xs text-gray-600">
+                                    Entregador: <span className="font-medium text-gray-800">{proofUserName}</span>
+                                  </p>
+                                  <p className="text-xs text-gray-600">
+                                    Fotos: <span className="font-medium text-gray-800">{Number(receipt.photo_count || 0)}</span>
+                                  </p>
+                                  {hasGpsPoint ? (
+                                    <p className="text-xs text-gray-600">
+                                      GPS: <span className="font-medium text-gray-800">{gpsLat?.toFixed(5)}, {gpsLng?.toFixed(5)}</span>
+                                      {receipt.gps_accuracy_m ? ` (±${Math.round(Number(receipt.gps_accuracy_m))}m)` : ''}
+                                    </p>
+                                  ) : (
+                                    <p className="text-xs text-amber-700">
+                                      GPS: sem coordenadas
+                                      {receipt.gps_failure_reason ? ` (motivo: ${receipt.gps_failure_reason})` : ''}
+                                    </p>
+                                  )}
+                                  {!!receipt.recipient_notes && (
+                                    <p className="text-xs text-gray-600">
+                                      Obs. recebedor: <span className="font-medium text-gray-800">{receipt.recipient_notes}</span>
+                                    </p>
+                                  )}
+                                </div>
+                              ) : (
+                                <p className="mt-2 text-xs text-gray-500">
+                                  Este pedido ainda nao possui comprovante digital gravado para esta rota.
+                                </p>
+                              )}
+
+                              <div className="mt-2 flex items-center gap-2">
+                                <DeliveryPhotosViewer routeOrderId={ro.id} size="sm" />
+                                <button
+                                  type="button"
+                                  onClick={() => generateProofPdf(ro, receipt)}
+                                  disabled={!receipt || isGeneratingProofPdf}
+                                  className="text-xs px-2 py-1 rounded border border-emerald-200 text-emerald-700 hover:bg-emerald-50 disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-1"
+                                >
+                                  {isGeneratingProofPdf ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FileText className="h-3.5 w-3.5" />}
+                                  PDF
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => openMapFromReceipt(receipt)}
+                                  disabled={!hasGpsPoint}
+                                  className="text-xs px-2 py-1 rounded border border-blue-200 text-blue-700 hover:bg-blue-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                  Abrir no mapa
+                                </button>
+                              </div>
                             </div>
                           )}
                           {(selectedOrder as any).import_source && (

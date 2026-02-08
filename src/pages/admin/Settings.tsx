@@ -45,6 +45,9 @@ export default function Settings() {
   const [allowOrderUpdates, setAllowOrderUpdates] = useState(false);
   const [requireAssemblyPhotos, setRequireAssemblyPhotos] = useState(false); // NOVO: Fotos de montagem
   const [requireDeliveryPhotos, setRequireDeliveryPhotos] = useState(false); // NOVO: Fotos de entrega
+  const [deliveryProofEnabled, setDeliveryProofEnabled] = useState(false);
+  const [deliveryProofRequireRecipient, setDeliveryProofRequireRecipient] = useState(false);
+  const [deliveryProofRequireGps, setDeliveryProofRequireGps] = useState(false);
 
   // State for Logistics
   const [ruralKeywords, setRuralKeywords] = useState<string[]>([]);
@@ -64,7 +67,7 @@ export default function Settings() {
   const load = async () => {
     try {
       setLoading(true);
-      const [p, n, m, g, l, confFlag, updateFlag, photoFlag, deliveryPhotoFlag, ruralKeys, generalDeadlines] = await Promise.all([
+      const [p, n, m, g, l, confFlag, updateFlag, photoFlag, deliveryPhotoFlag, deliveryProofFlag, ruralKeys, generalDeadlines] = await Promise.all([
         getUrl('envia_pedidos'),
         getUrl('gera_nf'),
         getUrl('envia_mensagem'),
@@ -74,6 +77,7 @@ export default function Settings() {
         supabase.from('app_settings').select('value').eq('key', 'allow_order_updates_on_import').single(),
         supabase.from('app_settings').select('value').eq('key', 'require_assembly_photos').single(), // NOVO
         supabase.from('app_settings').select('value').eq('key', 'require_delivery_photos').single(), // NOVO ENTREGA
+        supabase.from('app_settings').select('value').eq('key', 'delivery_proof_settings').single(),
         supabase.from('app_settings').select('value').eq('key', 'rural_keywords').single(),
         supabase.from('app_settings').select('value').eq('key', 'general_deadlines').single(),
       ]);
@@ -94,6 +98,12 @@ export default function Settings() {
 
       const deliveryPhotosEnabled = (deliveryPhotoFlag.data as any)?.value?.enabled;
       setRequireDeliveryPhotos(deliveryPhotosEnabled === true); // Default false
+
+      const deliveryProofSettings = (deliveryProofFlag.data as any)?.value || {};
+      const proofEnabled = deliveryProofSettings?.enabled === true;
+      setDeliveryProofEnabled(proofEnabled);
+      setDeliveryProofRequireRecipient(proofEnabled && deliveryProofSettings?.requireRecipient === true);
+      setDeliveryProofRequireGps(proofEnabled && deliveryProofSettings?.requireGps === true);
 
       const keywords = (ruralKeys.data as any)?.value?.keywords;
       setRuralKeywords(Array.isArray(keywords) ? keywords : []);
@@ -157,6 +167,14 @@ export default function Settings() {
       }, {
         key: 'require_delivery_photos', // NOVO ENTREGA
         value: { enabled: requireDeliveryPhotos },
+        updated_at: new Date().toISOString()
+      }, {
+        key: 'delivery_proof_settings',
+        value: {
+          enabled: deliveryProofEnabled,
+          requireRecipient: deliveryProofEnabled && deliveryProofRequireRecipient,
+          requireGps: deliveryProofEnabled && deliveryProofRequireGps
+        },
         updated_at: new Date().toISOString()
       }], { onConflict: 'key' });
       if (flagErr) throw flagErr;
@@ -335,6 +353,60 @@ export default function Settings() {
                     checked={requireDeliveryPhotos}
                     onChange={(e) => setRequireDeliveryPhotos(e.target.checked)}
                     className="h-5 w-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                  />
+                </label>
+
+                <label className="flex items-center justify-between bg-gray-50 border border-gray-100 rounded-lg px-4 py-3">
+                  <div>
+                    <p className="text-sm font-semibold text-gray-900">Comprovante digital de entrega</p>
+                    <p className="text-xs text-gray-500">
+                      Quando ligado, ativa os novos campos no app do motorista e grava os dados de auditoria da entrega.
+                    </p>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={deliveryProofEnabled}
+                    onChange={(e) => {
+                      const checked = e.target.checked;
+                      setDeliveryProofEnabled(checked);
+                      if (!checked) {
+                        setDeliveryProofRequireRecipient(false);
+                        setDeliveryProofRequireGps(false);
+                      }
+                    }}
+                    className="h-5 w-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                  />
+                </label>
+
+                <label className={`flex items-center justify-between border rounded-lg px-4 py-3 ${deliveryProofEnabled ? 'bg-gray-50 border-gray-100' : 'bg-gray-100 border-gray-200'}`}>
+                  <div>
+                    <p className="text-sm font-semibold text-gray-900">Exigir nome e relacao de quem recebeu</p>
+                    <p className="text-xs text-gray-500">
+                      Se ligado, o motorista so conclui a entrega preenchendo nome do recebedor e relacao.
+                    </p>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={deliveryProofRequireRecipient}
+                    disabled={!deliveryProofEnabled}
+                    onChange={(e) => setDeliveryProofRequireRecipient(e.target.checked)}
+                    className="h-5 w-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500 disabled:opacity-50"
+                  />
+                </label>
+
+                <label className={`flex items-center justify-between border rounded-lg px-4 py-3 ${deliveryProofEnabled ? 'bg-gray-50 border-gray-100' : 'bg-gray-100 border-gray-200'}`}>
+                  <div>
+                    <p className="text-sm font-semibold text-gray-900">Exigir GPS no momento da entrega</p>
+                    <p className="text-xs text-gray-500">
+                      Se ligado, exige latitude/longitude para concluir. No piloto inicial, pode deixar desligado.
+                    </p>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={deliveryProofRequireGps}
+                    disabled={!deliveryProofEnabled}
+                    onChange={(e) => setDeliveryProofRequireGps(e.target.checked)}
+                    className="h-5 w-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500 disabled:opacity-50"
                   />
                 </label>
 
