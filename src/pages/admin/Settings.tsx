@@ -60,7 +60,12 @@ export default function Settings() {
   useEffect(() => { load() }, []);
 
   const getUrl = async (key: string) => {
-    const { data } = await supabase.from('webhook_settings').select('*').eq('key', key).eq('active', true).single();
+    const { data } = await supabase
+      .from('webhook_settings')
+      .select('*')
+      .eq('key', key)
+      .eq('active', true)
+      .maybeSingle();
     return data?.url as string | undefined;
   };
 
@@ -73,13 +78,13 @@ export default function Settings() {
         getUrl('envia_mensagem'),
         getUrl('envia_grupo'),
         getUrl('consulta_lancamento'),
-        supabase.from('app_settings').select('value').eq('key', 'require_route_conference').single(),
-        supabase.from('app_settings').select('value').eq('key', 'allow_order_updates_on_import').single(),
-        supabase.from('app_settings').select('value').eq('key', 'require_assembly_photos').single(), // NOVO
-        supabase.from('app_settings').select('value').eq('key', 'require_delivery_photos').single(), // NOVO ENTREGA
-        supabase.from('app_settings').select('value').eq('key', 'delivery_proof_settings').single(),
-        supabase.from('app_settings').select('value').eq('key', 'rural_keywords').single(),
-        supabase.from('app_settings').select('value').eq('key', 'general_deadlines').single(),
+        supabase.from('app_settings').select('value').eq('key', 'require_route_conference').maybeSingle(),
+        supabase.from('app_settings').select('value').eq('key', 'allow_order_updates_on_import').maybeSingle(),
+        supabase.from('app_settings').select('value').eq('key', 'require_assembly_photos').maybeSingle(), // NOVO
+        supabase.from('app_settings').select('value').eq('key', 'require_delivery_photos').maybeSingle(), // NOVO ENTREGA
+        supabase.from('app_settings').select('value').eq('key', 'delivery_proof_settings').maybeSingle(),
+        supabase.from('app_settings').select('value').eq('key', 'rural_keywords').maybeSingle(),
+        supabase.from('app_settings').select('value').eq('key', 'general_deadlines').maybeSingle(),
       ]);
       setEnviaPedidos(p || '');
       setGeraNf(n || '');
@@ -139,6 +144,22 @@ export default function Settings() {
     try {
       setSaving(true);
 
+      const { data: authData, error: authErr } = await supabase.auth.getUser();
+      if (authErr || !authData?.user?.id) {
+        throw new Error('Sessao expirada. Faca login novamente.');
+      }
+
+      const { data: me, error: meErr } = await supabase
+        .from('users')
+        .select('role')
+        .eq('id', authData.user.id)
+        .maybeSingle();
+
+      if (meErr) throw meErr;
+      if (me?.role !== 'admin') {
+        throw new Error('Usuario sem permissao de admin para salvar configuracoes.');
+      }
+
       // Upsert data
       const rows = [
         { key: 'envia_pedidos', url: enviaPedidos, active: true },
@@ -197,7 +218,7 @@ export default function Settings() {
       toast.success('Configurações salvas com sucesso!');
     } catch (e: any) {
       console.error(e);
-      toast.error('Erro ao salvar configurações');
+      toast.error(`Erro ao salvar configurações: ${e?.message || 'sem detalhes'}`);
     } finally {
       setSaving(false);
     }
