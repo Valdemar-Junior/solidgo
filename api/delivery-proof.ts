@@ -1,4 +1,3 @@
-import { createHash } from 'crypto';
 import { createClient } from '@supabase/supabase-js';
 import { getDeliveryProofFlags } from './_lib/feature-flags';
 
@@ -81,7 +80,19 @@ const normalizeBody = (body: AnyRecord) => {
 };
 
 const buildProofHash = (payload: AnyRecord): string => {
-  return createHash('sha256').update(JSON.stringify(payload)).digest('hex');
+  // Hash deterministico leve para auditoria (sem dependencia de runtime Node crypto).
+  const text = JSON.stringify(payload);
+  let hash = 2166136261;
+  for (let i = 0; i < text.length; i += 1) {
+    hash ^= text.charCodeAt(i);
+    hash +=
+      (hash << 1) +
+      (hash << 4) +
+      (hash << 7) +
+      (hash << 8) +
+      (hash << 24);
+  }
+  return `fnv1a_${(hash >>> 0).toString(16)}_${text.length}`;
 };
 
 const fail = (res: any, flags: ReturnType<typeof getDeliveryProofFlags>, message: string, statusIfBlocking = 400) => {
@@ -92,99 +103,117 @@ const fail = (res: any, flags: ReturnType<typeof getDeliveryProofFlags>, message
 };
 
 export default async function handler(req: any, res: any) {
-  if (req.method !== 'POST') return res.status(405).json({ ok: false, error: 'Method not allowed' });
-
-  const flags = getDeliveryProofFlags();
-  if (!flags.enabled) return res.status(200).json({ ok: true, skipped: true, reason: 'DELIVERY_PROOF_DISABLED' });
-
-  const url = asString(process.env.SUPABASE_URL).replace(/\s+/g, '').replace(/\.+$/, '').replace(/\/+$/, '');
-  const serviceKey = asString(process.env.SUPABASE_SERVICE_KEY).replace(/\s+/g, '');
-  if (!url || !serviceKey) {
-    return fail(res, flags, 'Server not configured for delivery proof', 500);
-  }
-
-  const admin = createClient(url, serviceKey);
-  const rawBody = (req.body || {}) as AnyRecord;
-  const payload = normalizeBody(rawBody);
-
-  let authenticatedUserId = '';
+  let stage = 'start';
   try {
-    const authHeader = req.headers?.authorization || req.headers?.Authorization || '';
-    const token = String(authHeader).startsWith('Bearer ') ? String(authHeader).slice(7).trim() : '';
-    if (token) {
-      const { data, error } = await admin.auth.getUser(token);
-      if (!error && data?.user?.id) authenticatedUserId = data.user.id;
+    stage = 'method-check';
+    if (req.method !== 'POST') return res.status(405).json({ ok: false, error: 'Method not allowed' });
+
+    stage = 'read-flags';
+    const flags = getDeliveryProofFlags();
+    if (!flags.enabled) return res.status(200).json({ ok: true, skipped: true, reason: 'DELIVERY_PROOF_DISABLED' });
+
+    stage = 'read-env';
+    const url = asString(process.env.SUPABASE_URL).replace(/\s+/g, '').replace(/\.+$/, '').replace(/\/+$/, '');
+    const serviceKey = asString(process.env.SUPABASE_SERVICE_KEY).replace(/\s+/g, '');
+    if (!url || !serviceKey) {
+      return fail(res, flags, 'Server not configured for delivery proof', 500);
     }
-  } catch {
-    // Non-blocking: token verification is best-effort for shadow mode.
+
+    stage = 'create-client';
+    const admin = createClient(url, serviceKey);
+    const rawBody = (req.body || {}) as AnyRecord;
+    const payload = normalizeBody(rawBody);
+
+    stage = 'resolve-user';
+    let authenticatedUserId = '';
+    try {
+      const authHeader = req.headers?.authorization || req.headers?.Authorization || '';
+      const token = String(authHeader).startsWith('Bearer ') ? String(authHeader).slice(7).trim() : '';
+      if (token) {
+        const { data, error } = await admin.auth.getUser(token);
+        if (!error && data?.user?.id) authenticatedUserId = data.user.id;
+      }
+    } catch {
+      // Non-blocking: token verification is best-effort for shadow mode.
+    }
+
+    const deliveredByUserId = asString(authenticatedUserId || payload.deliveredByUserId) || null;
+
+    stage = 'validate-payload';
+    if (!payload.orderId || !payload.routeId || !payload.routeOrderId) {
+      return fail(res, flags, 'Missing required identifiers: orderId/routeId/routeOrderId');
+    }
+
+    if (flags.requireRecipient) {
+      if (!payload.recipientName) return fail(res, flags, 'Recipient name is required');
+      if (!payload.recipientRelation) return fail(res, flags, 'Recipient relation is required');
+    }
+
+    if (flags.requireGps && payload.gpsStatus === 'failed' && !payload.gpsFailureReason) {
+      return fail(res, flags, 'GPS is required or technical reason must be provided');
+    }
+
+    stage = 'build-row';
+    const proofHash = asString(rawBody.proofHash || rawBody.proof_hash) || buildProofHash({
+      orderId: payload.orderId,
+      routeId: payload.routeId,
+      routeOrderId: payload.routeOrderId,
+      deliveredByUserId,
+      recipientName: payload.recipientName,
+      recipientRelation: payload.recipientRelation,
+      gpsLat: payload.gpsLat,
+      gpsLng: payload.gpsLng,
+      gpsStatus: payload.gpsStatus,
+      photoCount: payload.photoCount,
+      deviceTimestamp: payload.deviceTimestamp,
+    });
+
+    const row = {
+      order_id: payload.orderId,
+      route_id: payload.routeId,
+      route_order_id: payload.routeOrderId,
+      delivered_by_user_id: deliveredByUserId,
+      device_timestamp: payload.deviceTimestamp,
+      gps_lat: payload.gpsLat,
+      gps_lng: payload.gpsLng,
+      gps_accuracy_m: payload.gpsAccuracyM,
+      gps_status: payload.gpsStatus,
+      gps_failure_reason: payload.gpsFailureReason,
+      recipient_name: payload.recipientName || null,
+      recipient_relation: payload.recipientRelation || null,
+      recipient_notes: payload.recipientNotes,
+      photo_count: payload.photoCount,
+      photo_refs: payload.photoRefs,
+      network_mode: payload.networkMode,
+      device_info: payload.deviceInfo,
+      app_version: payload.appVersion,
+      sync_status: payload.syncStatus,
+      proof_hash: proofHash,
+    };
+
+    stage = 'insert-receipt';
+    const { data, error } = await admin
+      .from('delivery_receipts')
+      .insert(row)
+      .select('id, created_at')
+      .single();
+
+    if (error) {
+      return fail(res, flags, `Failed to save delivery receipt: ${error.message}`, 500);
+    }
+
+    return res.status(200).json({
+      ok: true,
+      receiptId: data.id,
+      createdAt: data.created_at,
+      shadowMode: !flags.blockOnError,
+    });
+  } catch (error: any) {
+    const message = String(error?.message || error || 'Unknown server error');
+    return res.status(500).json({
+      ok: false,
+      error: `Unhandled error at ${stage}: ${message}`,
+      blocking: true,
+    });
   }
-
-  const deliveredByUserId = asString(authenticatedUserId || payload.deliveredByUserId) || null;
-
-  if (!payload.orderId || !payload.routeId || !payload.routeOrderId) {
-    return fail(res, flags, 'Missing required identifiers: orderId/routeId/routeOrderId');
-  }
-
-  if (flags.requireRecipient) {
-    if (!payload.recipientName) return fail(res, flags, 'Recipient name is required');
-    if (!payload.recipientRelation) return fail(res, flags, 'Recipient relation is required');
-  }
-
-  if (flags.requireGps && payload.gpsStatus === 'failed' && !payload.gpsFailureReason) {
-    return fail(res, flags, 'GPS is required or technical reason must be provided');
-  }
-
-  const proofHash = asString(rawBody.proofHash || rawBody.proof_hash) || buildProofHash({
-    orderId: payload.orderId,
-    routeId: payload.routeId,
-    routeOrderId: payload.routeOrderId,
-    deliveredByUserId,
-    recipientName: payload.recipientName,
-    recipientRelation: payload.recipientRelation,
-    gpsLat: payload.gpsLat,
-    gpsLng: payload.gpsLng,
-    gpsStatus: payload.gpsStatus,
-    photoCount: payload.photoCount,
-    deviceTimestamp: payload.deviceTimestamp,
-  });
-
-  const row = {
-    order_id: payload.orderId,
-    route_id: payload.routeId,
-    route_order_id: payload.routeOrderId,
-    delivered_by_user_id: deliveredByUserId,
-    device_timestamp: payload.deviceTimestamp,
-    gps_lat: payload.gpsLat,
-    gps_lng: payload.gpsLng,
-    gps_accuracy_m: payload.gpsAccuracyM,
-    gps_status: payload.gpsStatus,
-    gps_failure_reason: payload.gpsFailureReason,
-    recipient_name: payload.recipientName || null,
-    recipient_relation: payload.recipientRelation || null,
-    recipient_notes: payload.recipientNotes,
-    photo_count: payload.photoCount,
-    photo_refs: payload.photoRefs,
-    network_mode: payload.networkMode,
-    device_info: payload.deviceInfo,
-    app_version: payload.appVersion,
-    sync_status: payload.syncStatus,
-    proof_hash: proofHash,
-  };
-
-  const { data, error } = await admin
-    .from('delivery_receipts')
-    .insert(row)
-    .select('id, created_at')
-    .single();
-
-  if (error) {
-    return fail(res, flags, `Failed to save delivery receipt: ${error.message}`, 500);
-  }
-
-  return res.status(200).json({
-    ok: true,
-    receiptId: data.id,
-    createdAt: data.created_at,
-    shadowMode: !flags.blockOnError,
-  });
 }
