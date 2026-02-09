@@ -293,7 +293,8 @@ export default function OrderLookup() {
 
         setRouteOrders(roData as RouteOrderInfo[] || []);
 
-        const { data: receiptsData, error: receiptsError } = await supabase
+        const routeOrderIds = Array.from(new Set((roData || []).map((r: any) => String(r.id || '').trim()).filter(Boolean)));
+        let receiptsQuery = supabase
           .from('delivery_receipts')
           .select(`
             id,
@@ -315,8 +316,15 @@ export default function OrderLookup() {
             proof_hash,
             created_at
           `)
-          .eq('order_id', selectedOrder.id)
           .order('delivered_at_server', { ascending: false });
+
+        if (routeOrderIds.length > 0) {
+          receiptsQuery = receiptsQuery.in('route_order_id', routeOrderIds);
+        } else {
+          receiptsQuery = receiptsQuery.eq('order_id', selectedOrder.id);
+        }
+
+        const { data: receiptsData, error: receiptsError } = await receiptsQuery;
 
         if (receiptsError) {
           console.warn('[OrderLookup] Falha ao carregar comprovantes digitais:', receiptsError.message);
@@ -503,7 +511,10 @@ export default function OrderLookup() {
       .eq('route_order_id', routeOrderId)
       .order('created_at', { ascending: true });
 
-    if (error) throw error;
+    if (error) {
+      console.warn('[OrderLookup] Falha ao buscar fotos para PDF do comprovante:', error.message);
+      return [];
+    }
 
     const rows = (data || []) as DeliveryPhotoRow[];
     const withUrls = await Promise.all(
@@ -526,21 +537,58 @@ export default function OrderLookup() {
 
   const generateProofPdf = async (ro: RouteOrderInfo, receipt?: DeliveryReceiptInfo) => {
     if (!selectedOrder) return;
-    if (!receipt) {
-      toast.error('Ainda nao existe comprovante digital para esta entrega');
-      return;
-    }
 
     const routeOrderId = String(ro.id);
     setProofPdfLoadingByRouteOrder((prev) => ({ ...prev, [routeOrderId]: true }));
 
     try {
+      let currentReceipt = receipt;
+      if (!currentReceipt) {
+        const { data: fetchedReceipts, error: receiptError } = await supabase
+          .from('delivery_receipts')
+          .select(`
+            id,
+            route_order_id,
+            delivered_by_user_id,
+            delivered_at_server,
+            device_timestamp,
+            gps_lat,
+            gps_lng,
+            gps_accuracy_m,
+            gps_status,
+            gps_failure_reason,
+            recipient_name,
+            recipient_relation,
+            recipient_notes,
+            photo_count,
+            sync_status,
+            network_mode,
+            proof_hash,
+            created_at
+          `)
+          .eq('route_order_id', routeOrderId)
+          .order('delivered_at_server', { ascending: false })
+          .limit(1);
+
+        if (receiptError) {
+          console.warn('[OrderLookup] Falha ao buscar comprovante para PDF:', receiptError.message);
+        } else if (fetchedReceipts && fetchedReceipts.length > 0) {
+          currentReceipt = fetchedReceipts[0] as DeliveryReceiptInfo;
+          setDeliveryReceiptsByRouteOrder((prev) => ({ ...prev, [routeOrderId]: currentReceipt as DeliveryReceiptInfo }));
+        }
+      }
+
+      if (!currentReceipt) {
+        toast.error('Ainda nao existe comprovante digital para esta entrega');
+        return;
+      }
+
       const photos = await fetchDeliveryPhotosForPdf(routeOrderId);
       const driverName = (ro.route as any)?.driver_name || (ro.route as any)?.driver?.user?.name || (ro.route as any)?.driver?.name || '';
       const vehicleInfo = ro.route?.vehicle
         ? `${(ro.route?.vehicle as any)?.model || ''} ${(ro.route?.vehicle as any)?.plate || ''}`.trim()
         : '';
-      const proofUserId = String(receipt.delivered_by_user_id || '').trim();
+      const proofUserId = String(currentReceipt.delivered_by_user_id || '').trim();
       const deliveredByName = proofUserId ? (deliveryReceiptUserNames[proofUserId] || driverName || '-') : (driverName || '-');
 
       const pdfBytes = await DeliveryProofPdfGenerator.generate({
@@ -556,21 +604,21 @@ export default function OrderLookup() {
           vehicleInfo: vehicleInfo || '-',
         },
         receipt: {
-          id: receipt.id,
-          deliveredAtServer: receipt.delivered_at_server || receipt.created_at || null,
-          deviceTimestamp: receipt.device_timestamp || null,
-          recipientName: receipt.recipient_name || null,
-          recipientRelation: receipt.recipient_relation || null,
-          recipientNotes: receipt.recipient_notes || null,
-          gpsStatus: receipt.gps_status || null,
-          gpsLat: asNumber(receipt.gps_lat),
-          gpsLng: asNumber(receipt.gps_lng),
-          gpsAccuracyM: asNumber(receipt.gps_accuracy_m),
-          gpsFailureReason: receipt.gps_failure_reason || null,
-          syncStatus: receipt.sync_status || null,
-          networkMode: receipt.network_mode || null,
-          photoCount: Number(receipt.photo_count || photos.length || 0),
-          proofHash: receipt.proof_hash || null,
+          id: currentReceipt.id,
+          deliveredAtServer: currentReceipt.delivered_at_server || currentReceipt.created_at || null,
+          deviceTimestamp: currentReceipt.device_timestamp || null,
+          recipientName: currentReceipt.recipient_name || null,
+          recipientRelation: currentReceipt.recipient_relation || null,
+          recipientNotes: currentReceipt.recipient_notes || null,
+          gpsStatus: currentReceipt.gps_status || null,
+          gpsLat: asNumber(currentReceipt.gps_lat),
+          gpsLng: asNumber(currentReceipt.gps_lng),
+          gpsAccuracyM: asNumber(currentReceipt.gps_accuracy_m),
+          gpsFailureReason: currentReceipt.gps_failure_reason || null,
+          syncStatus: currentReceipt.sync_status || null,
+          networkMode: currentReceipt.network_mode || null,
+          photoCount: Number(currentReceipt.photo_count || photos.length || 0),
+          proofHash: currentReceipt.proof_hash || null,
         },
         deliveredByName,
         photos,
@@ -980,7 +1028,7 @@ export default function OrderLookup() {
                                 <button
                                   type="button"
                                   onClick={() => generateProofPdf(ro, receipt)}
-                                  disabled={!receipt || isGeneratingProofPdf}
+                                  disabled={isGeneratingProofPdf}
                                   className="text-xs px-2 py-1 rounded border border-emerald-200 text-emerald-700 hover:bg-emerald-50 disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-1"
                                 >
                                   {isGeneratingProofPdf ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FileText className="h-3.5 w-3.5" />}
