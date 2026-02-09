@@ -447,9 +447,20 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
       const responseBody = await response.json().catch(() => null);
       if (!response.ok || (responseBody && responseBody.ok === false)) {
         console.warn('[DeliveryMarking] Delivery proof shadow save failed:', responseBody || response.statusText);
+        const message = String(
+          responseBody?.error ||
+          responseBody?.warning ||
+          responseBody?.reason ||
+          response.statusText ||
+          'Falha ao salvar comprovante digital'
+        );
+        toast.warning(`Comprovante digital: ${message}`);
+      } else if (responseBody?.ok === true && responseBody?.receiptId) {
+        toast.success('Comprovante digital salvo');
       }
     } catch (error) {
       console.warn('[DeliveryMarking] Delivery proof shadow save error:', error);
+      toast.warning('Comprovante digital: erro de comunicação com o servidor');
     }
   };
 

@@ -119,14 +119,10 @@ export default async function handler(req: any, res: any) {
     // Non-blocking: token verification is best-effort for shadow mode.
   }
 
-  const deliveredByUserId = authenticatedUserId || payload.deliveredByUserId;
+  const deliveredByUserId = asString(authenticatedUserId || payload.deliveredByUserId) || null;
 
   if (!payload.orderId || !payload.routeId || !payload.routeOrderId) {
     return fail(res, flags, 'Missing required identifiers: orderId/routeId/routeOrderId');
-  }
-
-  if (!deliveredByUserId) {
-    return fail(res, flags, 'Missing deliveredByUserId');
   }
 
   if (flags.requireRecipient) {
@@ -192,4 +188,3 @@ export default async function handler(req: any, res: any) {
     shadowMode: !flags.blockOnError,
   });
 }
-
