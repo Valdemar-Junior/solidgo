@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
-import { getDeliveryProofFlags } from './_lib/feature-flags';
+import { getDeliveryProofFlags } from './_lib/feature-flags.js';
 
 type AnyRecord = Record<string, any>;
 
