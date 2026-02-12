@@ -190,11 +190,6 @@ export class BackgroundSyncService {
         throw error;
       }
       console.log('[BackgroundSync] Assembly confirmation synced successfully:', item_id);
-
-      // Verificar se todos os produtos da rota estão concluídos
-      if (route_id) {
-        await this.checkAssemblyRouteCompletion(route_id);
-      }
     }
   }
 
@@ -230,35 +225,8 @@ export class BackgroundSyncService {
     }
 
     console.log('[BackgroundSync] Assembly return synced successfully:', item_id, 'Rows:', count);
-
-    // REMOVIDO: Criação de clone aqui causava duplicação
-    // Clones são criados na syncAssemblyRouteCompletion ou finalizeRoute
-
-    // Verificar se todos os produtos da rota estão concluídos
-    if (route_id) {
-      await this.checkAssemblyRouteCompletion(route_id);
-    }
   }
 
-  // Verifica se todos os produtos de uma rota de montagem estão concluídos
-  private async checkAssemblyRouteCompletion(route_id: string): Promise<void> {
-    try {
-      const { data: allProducts } = await supabase
-        .from('assembly_products')
-        .select('status')
-        .eq('assembly_route_id', route_id);
-
-      if (allProducts && allProducts.length > 0) {
-        const allDone = allProducts.every((p: any) => p.status !== 'pending');
-        if (allDone) {
-          await supabase.from('assembly_routes').update({ status: 'completed' }).eq('id', route_id);
-          console.log('[BackgroundSync] Assembly route marked as completed:', route_id);
-        }
-      }
-    } catch (routeErr) {
-      console.warn('[BackgroundSync] Failed to check/update assembly route status:', routeErr);
-    }
-  }
 
   private async syncRouteCompletion(data: any): Promise<void> {
     const { route_id } = data;
