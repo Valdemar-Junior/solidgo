@@ -3646,7 +3646,7 @@ function RouteCreationContent() {
                       </select>
                       {deliveryRouteCatalog.length === 0 && (
                         <p className="mt-2 text-xs text-amber-600">
-                          Nenhuma rota cadastrada em Usuários e Equipes &gt; Rotas.
+                          Nenhuma rota cadastrada em Cadastros &gt; Rotas.
                         </p>
                       )}
                     </div>
@@ -4227,7 +4227,7 @@ function RouteCreationContent() {
                               ))}
                             </select>
                             {deliveryRouteCatalog.length === 0 && (
-                              <p className="mt-1 text-xs text-amber-600">Nenhuma rota cadastrada em Usuários e Equipes &gt; Rotas.</p>
+                              <p className="mt-1 text-xs text-amber-600">Nenhuma rota cadastrada em Cadastros &gt; Rotas.</p>
                             )}
                           </>
                         ) : (

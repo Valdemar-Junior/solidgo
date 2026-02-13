@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { supabase } from '../../supabase/client';
 import { backgroundSync } from '../../utils/offline/backgroundSync';
@@ -7,6 +7,7 @@ import { OfflineStorage, NetworkStatus } from '../../utils/offline/storage';
 import { Package, MapPin, RefreshCw, LogOut, ArrowLeft, PenTool } from 'lucide-react';
 import { useAuthStore } from '../../stores/authStore';
 import { toast } from 'sonner';
+import { calculateAssemblyStats } from '../../utils/assemblyKitLogic';
 
 export default function AssemblyRouteDetails() {
     const navigate = useNavigate();
@@ -67,7 +68,7 @@ export default function AssemblyRouteDetails() {
 
                 const { data: itemsData, error: itemsError } = await supabase
                     .from('assembly_products')
-                    .select('*')
+                    .select('*, order:order_id(*)')
                     .eq('assembly_route_id', routeId);
 
                 if (itemsError) throw itemsError;
@@ -96,10 +97,13 @@ export default function AssemblyRouteDetails() {
         await loadRouteDetails();
     };
 
+    // Use kit-consolidated stats for progress and counters
+    const consolidatedStats = useMemo(() => calculateAssemblyStats(items), [items]);
+
     const getProgress = () => {
-        if (items.length === 0) return 0;
-        const completed = items.filter(i => i.status === 'completed' || i.status === 'cancelled').length;
-        return Math.round((completed / items.length) * 100);
+        if (consolidatedStats.totalItems === 0) return 0;
+        const done = consolidatedStats.completedItems + consolidatedStats.returnedItems;
+        return Math.round((done / consolidatedStats.totalItems) * 100);
     };
 
     if (loading) {
@@ -167,8 +171,8 @@ export default function AssemblyRouteDetails() {
                                 ></div>
                             </div>
                             <div className="flex justify-between text-[10px] text-gray-400 mt-1">
-                                <span>{items.filter(i => i.status === 'completed').length} montados</span>
-                                <span>{items.filter(i => i.status === 'pending').length} pendentes</span>
+                                <span>{consolidatedStats.completedItems} montados</span>
+                                <span>{consolidatedStats.pendingItems} pendentes</span>
                             </div>
                         </div>
                     </div>
@@ -186,18 +190,18 @@ export default function AssemblyRouteDetails() {
 
                     <div className="grid grid-cols-3 gap-4">
                         <div className="text-center p-2 bg-indigo-50 rounded-lg">
-                            <div className="text-xl font-bold text-indigo-600">{items.length}</div>
+                            <div className="text-xl font-bold text-indigo-600">{consolidatedStats.totalItems}</div>
                             <div className="text-xs text-indigo-800">Total Serviços</div>
                         </div>
                         <div className="text-center p-2 bg-green-50 rounded-lg">
                             <div className="text-xl font-bold text-green-600">
-                                {items.filter(i => i.status === 'completed').length}
+                                {consolidatedStats.completedItems}
                             </div>
                             <div className="text-xs text-green-800">Concluídos</div>
                         </div>
                         <div className="text-center p-2 bg-red-50 rounded-lg">
                             <div className="text-xl font-bold text-red-600">
-                                {items.filter(i => i.status === 'cancelled').length}
+                                {consolidatedStats.returnedItems}
                             </div>
                             <div className="text-xs text-red-800">Retornados</div>
                         </div>

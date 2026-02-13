@@ -126,8 +126,8 @@ export default function AdminDashboard() {
       gradient: 'from-orange-500 to-orange-600',
     },
     {
-      title: 'Usuários e Equipes',
-      description: 'Cadastrar usuários, ajudantes e equipes',
+      title: 'Cadastros',
+      description: 'Cadastrar usuários, ajudantes, equipes e rotas',
       icon: Users,
       href: '/admin/users-teams',
       color: 'bg-violet-600',

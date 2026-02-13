@@ -393,11 +393,11 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
     }
   };
 
-  const markAsReturned = async (itemsToMark: any[]) => {
+  const markAsReturned = async (itemsToMark: any[], reasonOverride?: Record<string, string>, obsOverride?: Record<string, string>) => {
     // Check reasons for ALL items individually
     for (const item of itemsToMark) {
-      const reason = returnReasonByProduct[item.id];
-      const obsPromise = returnObservationsByProduct[item.id];
+      const reason = reasonOverride?.[item.id] || returnReasonByProduct[item.id];
+      const obsPromise = obsOverride?.[item.id] || returnObservationsByProduct[item.id];
       if (!reason) {
         toast.error(`Selecione um motivo para o produto: ${item.product_name}`);
         return;
@@ -422,8 +422,8 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
       if (isOnline) {
         // Update each item individually
         for (const item of itemsToMark) {
-          const reason = returnReasonByProduct[item.id];
-          const obs = returnObservationsByProduct[item.id] || '';
+          const reason = reasonOverride?.[item.id] || returnReasonByProduct[item.id];
+          const obs = obsOverride?.[item.id] || returnObservationsByProduct[item.id] || '';
           const isOther = reason === 'other' || reason === '99' || reason === 'Outro';
           const reasonValue = isOther ? obs.trim() : reason;
           const fullObs = obs ? `(Retorno: ${reasonValue}) ${obs}` : `Retorno: ${reasonValue}`;
@@ -444,8 +444,8 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
         // CORREÇÃO: Atualizar estado local após sucesso no Supabase
         const updated = assemblyItems.map(it => {
           if (ids.includes(it.id)) {
-            const reason = returnReasonByProduct[it.id];
-            const obs = returnObservationsByProduct[it.id] || '';
+            const reason = reasonOverride?.[it.id] || returnReasonByProduct[it.id];
+            const obs = obsOverride?.[it.id] || returnObservationsByProduct[it.id] || '';
             const isOther = reason === 'other' || reason === '99' || reason === 'Outro';
             const reasonValue = isOther ? obs.trim() : reason;
             const fullObs = obs ? `(Retorno: ${reasonValue}) ${obs}` : `Retorno: ${reasonValue}`;
@@ -469,8 +469,8 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
         // Offline
         // Offline
         for (const item of itemsToMark) {
-          const reason = returnReasonByProduct[item.id];
-          const obs = returnObservationsByProduct[item.id] || '';
+          const reason = reasonOverride?.[item.id] || returnReasonByProduct[item.id];
+          const obs = obsOverride?.[item.id] || returnObservationsByProduct[item.id] || '';
           const isOther = reason === 'other' || reason === '99' || reason === 'Outro';
           const reasonValue = isOther ? obs.trim() : reason;
 
@@ -886,7 +886,23 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
                   <div className="flex items-center mb-2">
                     <Package className="h-5 w-5 text-indigo-600 mr-2" />
                     <span className="font-semibold text-gray-900">
-                      {firstItem.customer_name} ({groupItems.length} itens)
+                      {firstItem.customer_name} ({(() => {
+                        // Count consolidated items (kits count as 1)
+                        const kitCodes = new Set<string>();
+                        let singleCount = 0;
+                        for (const gi of groupItems) {
+                          const oi = gi.order?.items_json?.find((x: any) => x.sku === gi.product_sku);
+                          const ri = gi.order?.raw_json?.items?.find((x: any) => x.sku === gi.product_sku);
+                          const isKit = (oi as any)?.faz_parte_de_kit === 'SIM' || (ri as any)?.faz_parte_de_kit === 'SIM';
+                          const kitCode = (oi as any)?.codigo_kit_pai || (ri as any)?.codigo_kit_pai;
+                          if (isKit && kitCode) {
+                            kitCodes.add(`${gi.order_id}_${kitCode}`);
+                          } else {
+                            singleCount++;
+                          }
+                        }
+                        return kitCodes.size + singleCount;
+                      })()} itens)
                     </span>
                     <span className={`ml-2 px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(groupStatus)}`}>
                       {getStatusText(groupStatus)}
@@ -946,109 +962,269 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
                     })()}
                   </div>
 
-                  {/* Lista de Produtos do Pedido */}
+                  {/* Lista de Produtos do Pedido (com agrupamento de kit) */}
                   <div className="bg-gray-50 rounded p-3 text-sm space-y-3 border border-gray-100">
-                    {groupItems.map(item => {
-                      const itemStatus = item.status || 'pending';
-                      const isPending = itemStatus === 'pending';
-                      const isCompleted = itemStatus === 'completed';
-                      const isCancelled = itemStatus === 'cancelled';
+                    {(() => {
+                      // Sub-agrupar itens por kit dentro do pedido
+                      const kitSubGroups = new Map<string, any[]>();
+                      const singleSubItems: any[] = [];
 
-                      const reason = returnReasonByProduct[item.id] || '';
-                      const obs = returnObservationsByProduct[item.id] || '';
+                      for (const item of groupItems) {
+                        const orderItems = item.order?.items_json || [];
+                        const matchingOrderItem = orderItems.find((oi: any) => oi.sku === item.product_sku);
+                        const rawItem = item.order?.raw_json?.items?.find((ri: any) => ri.sku === item.product_sku);
 
-                      return (
-                        <div key={item.id} className="border-b border-gray-200 last:border-0 pb-3 last:pb-0">
-                          <div className="flex justify-between items-start mb-2">
-                            <div className="flex-1 pr-2">
-                              <div className="font-medium text-gray-700">{item.product_name}</div>
-                              <div className="text-xs text-gray-500">SKU: {item.product_sku}</div>
-                              {item.observations && (
-                                <div className="text-yellow-600 text-xs mt-0.5">Note: {item.observations}</div>
-                              )}
-                            </div>
+                        const isKit = (matchingOrderItem as any)?.faz_parte_de_kit === 'SIM' || (rawItem as any)?.faz_parte_de_kit === 'SIM';
+                        const kitCode = (matchingOrderItem as any)?.codigo_kit_pai || (rawItem as any)?.codigo_kit_pai;
 
-                            {/* Badge de Status Individual */}
-                            <span className={`px-2 py-1 rounded-full text-xs font-bold uppercase tracking-wider ${isCompleted ? 'bg-green-100 text-green-700' :
-                              isCancelled ? 'bg-red-100 text-red-700' :
-                                'bg-yellow-100 text-yellow-700'
-                              }`}>
-                              {isCompleted ? 'Montado' : isCancelled ? 'Retornado' : 'Pendente'}
-                            </span>
-                          </div>
+                        if (isKit && kitCode) {
+                          const key = `${item.order_id}_${kitCode}`;
+                          if (!kitSubGroups.has(key)) kitSubGroups.set(key, []);
+                          kitSubGroups.get(key)!.push(item);
+                        } else {
+                          singleSubItems.push(item);
+                        }
+                      }
 
-                          {/* Ações por Produto */}
-                          {routeStatus !== 'completed' && (
-                            <div className="mt-2 space-y-2">
-                              {isPending && (
-                                <div className="flex gap-2">
-                                  <button
-                                    onClick={() => handleMarkAsCompleted([item])}
-                                    disabled={processingIds.has(item.id)}
-                                    className="flex-1 flex items-center justify-center py-2 bg-green-600 text-white rounded hover:bg-green-700 disabled:opacity-50 text-xs font-bold shadow-sm"
-                                  >
-                                    <CheckCircle className="h-4 w-4 mr-1" />
-                                    MONTAR
-                                  </button>
+                      // Build consolidated display items
+                      type DisplayItem = { type: 'single'; item: any } | { type: 'kit'; kitName: string; kitCode: string; items: any[] };
+                      const displayItems: DisplayItem[] = [];
 
-                                  <button
-                                    onClick={() => {
-                                      if (reason) {
-                                        markAsReturned([item]);
-                                      } else {
-                                        toast.error('Selecione o motivo do retorno abaixo');
-                                      }
-                                    }}
-                                    disabled={!reason || processingIds.has(item.id)}
-                                    className="flex-1 flex items-center justify-center py-2 bg-red-100 text-red-700 rounded hover:bg-red-200 disabled:opacity-50 text-xs font-bold shadow-sm"
-                                  >
-                                    <XCircle className="h-4 w-4 mr-1" />
-                                    RETORNAR
-                                  </button>
+                      // Add kits
+                      for (const [key, kitItems] of kitSubGroups.entries()) {
+                        const firstKit = kitItems[0];
+                        const orderItems = firstKit.order?.items_json || [];
+                        const matchingOrderItem = orderItems.find((oi: any) => oi.sku === firstKit.product_sku);
+                        const rawItem = firstKit.order?.raw_json?.items?.find((ri: any) => ri.sku === firstKit.product_sku);
+                        const kitName = (matchingOrderItem as any)?.nome_kit_pai || (rawItem as any)?.nome_kit_pai || 'Kit';
+                        const kitCode = (matchingOrderItem as any)?.codigo_kit_pai || (rawItem as any)?.codigo_kit_pai || '';
+                        displayItems.push({ type: 'kit', kitName, kitCode, items: kitItems });
+                      }
+
+                      // Add singles
+                      for (const item of singleSubItems) {
+                        displayItems.push({ type: 'single', item });
+                      }
+
+                      return displayItems.map((displayItem, idx) => {
+                        if (displayItem.type === 'kit') {
+                          // === RENDERIZAR KIT AGRUPADO ===
+                          const { kitName, kitCode, items: kitItems } = displayItem;
+                          const allKitCompleted = kitItems.every((i: any) => i.status === 'completed');
+                          const allKitCancelled = kitItems.every((i: any) => i.status === 'cancelled');
+                          const kitIsPending = !allKitCompleted && !allKitCancelled;
+                          const kitIsCompleted = allKitCompleted;
+                          const kitIsCancelled = allKitCancelled;
+
+                          // Use first item's id as key for return reason (shared across all kit items)
+                          const kitReasonKey = `kit_${kitCode}_${kitItems[0].order_id}`;
+                          const kitReason = returnReasonByProduct[kitReasonKey] || '';
+                          const kitObs = returnObservationsByProduct[kitReasonKey] || '';
+                          const anyKitProcessing = kitItems.some((i: any) => processingIds.has(i.id));
+
+                          return (
+                            <div key={`kit-${kitCode}-${idx}`} className="border-b border-gray-200 last:border-0 pb-3 last:pb-0">
+                              <div className="flex justify-between items-start mb-2">
+                                <div className="flex-1 pr-2">
+                                  <div className="flex items-center gap-2">
+                                    <div className="font-medium text-gray-700">{kitName}</div>
+                                    <span className="px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-700 text-[10px] font-bold uppercase">Kit</span>
+                                  </div>
+                                  <div className="text-xs text-gray-500">Código: {kitCode} • {kitItems.length} peças</div>
                                 </div>
-                              )}
 
-                              {isPending && (
-                                <div className="bg-white p-2 rounded border border-gray-200 text-xs space-y-2">
-                                  <p className="font-semibold text-gray-500">Motivo (se retornar):</p>
-                                  <select
-                                    value={reason}
-                                    onChange={(e) => setReturnReasonByProduct(prev => ({ ...prev, [item.id]: e.target.value }))}
-                                    className="w-full px-2 py-1.5 border border-gray-300 rounded text-xs"
-                                  >
-                                    <option value="">Selecione...</option>
-                                    {returnReasons.map((r: any) => (
-                                      <option key={r.id || r.reason} value={r.reason || r.id}>{r.reason || r.reason_text}</option>
-                                    ))}
-                                  </select>
-                                  {(reason === 'Outro' || reason === '99' || reason === 'other') && (
-                                    <input
-                                      type="text"
-                                      placeholder="Descreva o motivo..."
-                                      value={obs}
-                                      onChange={(e) => setReturnObservationsByProduct(prev => ({ ...prev, [item.id]: e.target.value }))}
-                                      className="w-full px-2 py-1.5 border border-gray-300 rounded text-xs"
-                                    />
+                                {/* Badge de Status do Kit */}
+                                <span className={`px-2 py-1 rounded-full text-xs font-bold uppercase tracking-wider ${kitIsCompleted ? 'bg-green-100 text-green-700' :
+                                  kitIsCancelled ? 'bg-red-100 text-red-700' :
+                                    'bg-yellow-100 text-yellow-700'
+                                  }`}>
+                                  {kitIsCompleted ? 'Montado' : kitIsCancelled ? 'Retornado' : 'Pendente'}
+                                </span>
+                              </div>
+
+                              {/* Ações do Kit (unificadas) */}
+                              {routeStatus !== 'completed' && (
+                                <div className="mt-2 space-y-2">
+                                  {kitIsPending && (
+                                    <div className="flex gap-2">
+                                      <button
+                                        onClick={() => handleMarkAsCompleted(kitItems)}
+                                        disabled={anyKitProcessing}
+                                        className="flex-1 flex items-center justify-center py-2 bg-green-600 text-white rounded hover:bg-green-700 disabled:opacity-50 text-xs font-bold shadow-sm"
+                                      >
+                                        <CheckCircle className="h-4 w-4 mr-1" />
+                                        MONTAR
+                                      </button>
+
+                                      <button
+                                        onClick={() => {
+                                          if (kitReason) {
+                                            // Build reason/obs maps for all kit items and pass directly
+                                            const reasonMap: Record<string, string> = {};
+                                            const obsMap: Record<string, string> = {};
+                                            for (const ki of kitItems) {
+                                              reasonMap[ki.id] = kitReason;
+                                              obsMap[ki.id] = kitObs;
+                                            }
+                                            markAsReturned(kitItems, reasonMap, obsMap);
+                                          } else {
+                                            toast.error('Selecione o motivo do retorno abaixo');
+                                          }
+                                        }}
+                                        disabled={!kitReason || anyKitProcessing}
+                                        className="flex-1 flex items-center justify-center py-2 bg-red-100 text-red-700 rounded hover:bg-red-200 disabled:opacity-50 text-xs font-bold shadow-sm"
+                                      >
+                                        <XCircle className="h-4 w-4 mr-1" />
+                                        RETORNAR
+                                      </button>
+                                    </div>
+                                  )}
+
+                                  {kitIsPending && (
+                                    <div className="bg-white p-2 rounded border border-gray-200 text-xs space-y-2">
+                                      <p className="font-semibold text-gray-500">Motivo (se retornar):</p>
+                                      <select
+                                        value={kitReason}
+                                        onChange={(e) => setReturnReasonByProduct(prev => ({ ...prev, [kitReasonKey]: e.target.value }))}
+                                        className="w-full px-2 py-1.5 border border-gray-300 rounded text-xs"
+                                      >
+                                        <option value="">Selecione...</option>
+                                        {returnReasons.map((r: any) => (
+                                          <option key={r.id || r.reason} value={r.reason || r.id}>{r.reason || r.reason_text}</option>
+                                        ))}
+                                      </select>
+                                      {(kitReason === 'Outro' || kitReason === '99' || kitReason === 'other') && (
+                                        <input
+                                          type="text"
+                                          placeholder="Descreva o motivo..."
+                                          value={kitObs}
+                                          onChange={(e) => setReturnObservationsByProduct(prev => ({ ...prev, [kitReasonKey]: e.target.value }))}
+                                          className="w-full px-2 py-1.5 border border-gray-300 rounded text-xs"
+                                        />
+                                      )}
+                                    </div>
+                                  )}
+
+                                  {(kitIsCompleted || kitIsCancelled) && (
+                                    <div className="flex justify-end">
+                                      <button
+                                        onClick={() => undoAction(kitItems, groupId)}
+                                        disabled={anyKitProcessing}
+                                        className="px-3 py-1.5 bg-gray-100 text-gray-600 rounded hover:bg-gray-200 disabled:opacity-50 text-xs font-medium border border-gray-200 shadow-sm flex items-center"
+                                      >
+                                        <Clock className="w-3 h-3 mr-1" /> Desfazer
+                                      </button>
+                                    </div>
                                   )}
                                 </div>
                               )}
+                            </div>
+                          );
+                        } else {
+                          // === RENDERIZAR ITEM AVULSO (sem mudança) ===
+                          const item = displayItem.item;
+                          const itemStatus = item.status || 'pending';
+                          const isPending = itemStatus === 'pending';
+                          const isCompleted = itemStatus === 'completed';
+                          const isCancelled = itemStatus === 'cancelled';
 
-                              {(isCompleted || isCancelled) && (
-                                <div className="flex justify-end">
-                                  <button
-                                    onClick={() => undoAction([item], groupId)}
-                                    disabled={processingIds.has(item.id)}
-                                    className="px-3 py-1.5 bg-gray-100 text-gray-600 rounded hover:bg-gray-200 disabled:opacity-50 text-xs font-medium border border-gray-200 shadow-sm flex items-center"
-                                  >
-                                    <Clock className="w-3 h-3 mr-1" /> Desfazer
-                                  </button>
+                          const reason = returnReasonByProduct[item.id] || '';
+                          const obs = returnObservationsByProduct[item.id] || '';
+
+                          return (
+                            <div key={item.id} className="border-b border-gray-200 last:border-0 pb-3 last:pb-0">
+                              <div className="flex justify-between items-start mb-2">
+                                <div className="flex-1 pr-2">
+                                  <div className="font-medium text-gray-700">{item.product_name}</div>
+                                  <div className="text-xs text-gray-500">SKU: {item.product_sku}</div>
+                                  {item.observations && (
+                                    <div className="text-yellow-600 text-xs mt-0.5">Note: {item.observations}</div>
+                                  )}
+                                </div>
+
+                                {/* Badge de Status Individual */}
+                                <span className={`px-2 py-1 rounded-full text-xs font-bold uppercase tracking-wider ${isCompleted ? 'bg-green-100 text-green-700' :
+                                  isCancelled ? 'bg-red-100 text-red-700' :
+                                    'bg-yellow-100 text-yellow-700'
+                                  }`}>
+                                  {isCompleted ? 'Montado' : isCancelled ? 'Retornado' : 'Pendente'}
+                                </span>
+                              </div>
+
+                              {/* Ações por Produto */}
+                              {routeStatus !== 'completed' && (
+                                <div className="mt-2 space-y-2">
+                                  {isPending && (
+                                    <div className="flex gap-2">
+                                      <button
+                                        onClick={() => handleMarkAsCompleted([item])}
+                                        disabled={processingIds.has(item.id)}
+                                        className="flex-1 flex items-center justify-center py-2 bg-green-600 text-white rounded hover:bg-green-700 disabled:opacity-50 text-xs font-bold shadow-sm"
+                                      >
+                                        <CheckCircle className="h-4 w-4 mr-1" />
+                                        MONTAR
+                                      </button>
+
+                                      <button
+                                        onClick={() => {
+                                          if (reason) {
+                                            markAsReturned([item]);
+                                          } else {
+                                            toast.error('Selecione o motivo do retorno abaixo');
+                                          }
+                                        }}
+                                        disabled={!reason || processingIds.has(item.id)}
+                                        className="flex-1 flex items-center justify-center py-2 bg-red-100 text-red-700 rounded hover:bg-red-200 disabled:opacity-50 text-xs font-bold shadow-sm"
+                                      >
+                                        <XCircle className="h-4 w-4 mr-1" />
+                                        RETORNAR
+                                      </button>
+                                    </div>
+                                  )}
+
+                                  {isPending && (
+                                    <div className="bg-white p-2 rounded border border-gray-200 text-xs space-y-2">
+                                      <p className="font-semibold text-gray-500">Motivo (se retornar):</p>
+                                      <select
+                                        value={reason}
+                                        onChange={(e) => setReturnReasonByProduct(prev => ({ ...prev, [item.id]: e.target.value }))}
+                                        className="w-full px-2 py-1.5 border border-gray-300 rounded text-xs"
+                                      >
+                                        <option value="">Selecione...</option>
+                                        {returnReasons.map((r: any) => (
+                                          <option key={r.id || r.reason} value={r.reason || r.id}>{r.reason || r.reason_text}</option>
+                                        ))}
+                                      </select>
+                                      {(reason === 'Outro' || reason === '99' || reason === 'other') && (
+                                        <input
+                                          type="text"
+                                          placeholder="Descreva o motivo..."
+                                          value={obs}
+                                          onChange={(e) => setReturnObservationsByProduct(prev => ({ ...prev, [item.id]: e.target.value }))}
+                                          className="w-full px-2 py-1.5 border border-gray-300 rounded text-xs"
+                                        />
+                                      )}
+                                    </div>
+                                  )}
+
+                                  {(isCompleted || isCancelled) && (
+                                    <div className="flex justify-end">
+                                      <button
+                                        onClick={() => undoAction([item], groupId)}
+                                        disabled={processingIds.has(item.id)}
+                                        className="px-3 py-1.5 bg-gray-100 text-gray-600 rounded hover:bg-gray-200 disabled:opacity-50 text-xs font-medium border border-gray-200 shadow-sm flex items-center"
+                                      >
+                                        <Clock className="w-3 h-3 mr-1" /> Desfazer
+                                      </button>
+                                    </div>
+                                  )}
                                 </div>
                               )}
                             </div>
-                          )}
-                        </div>
-                      );
-                    })}
+                          );
+                        }
+                      });
+                    })()}
                   </div>
                 </div>
               </div>

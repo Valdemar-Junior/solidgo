@@ -324,7 +324,7 @@ export default function UsersTeams() {
               <div>
                 <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
                   <Users className="h-6 w-6 text-blue-600" />
-                  Usuários e Equipes
+                  Cadastros
                 </h1>
                 <p className="text-sm text-gray-500">Gerencie o acesso ao sistema, equipes de entrega e frota</p>
               </div>
