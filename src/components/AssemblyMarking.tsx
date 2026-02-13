@@ -706,7 +706,7 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
               customer_phone: item.customer_phone,
               installation_address: item.installation_address,
               status: 'pending',
-              observations: item.observations,
+              observations: null,
               assembly_route_id: null,
               was_returned: true
             };

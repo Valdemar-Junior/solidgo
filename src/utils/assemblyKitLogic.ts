@@ -128,12 +128,12 @@ export const calculateAssemblyStats = (products: AssemblyProductWithDetails[]): 
         // Kit is RETURNED if ANY item is RETURNED?
 
         const allCompleted = items.every(i => i.status === 'completed');
-        const anyReturned = items.some(i => i.status === 'cancelled' || i.was_returned);
+        const anyCancelled = items.some(i => i.status === 'cancelled');
 
         let derivedStatus: 'pending' | 'completed' | 'returned' | 'cancelled' | 'in_progress' = 'pending';
 
-        if (anyReturned) derivedStatus = 'returned';
-        else if (allCompleted) derivedStatus = 'completed';
+        if (allCompleted) derivedStatus = 'completed';
+        else if (anyCancelled) derivedStatus = 'returned';
         else if (items.some(i => i.status === 'in_progress')) derivedStatus = 'in_progress';
         else derivedStatus = 'pending';
 
