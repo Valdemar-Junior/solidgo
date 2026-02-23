@@ -602,8 +602,10 @@ function RouteCreationContent() {
       if (error) throw error;
       await loadData(false);
 
+      // OTIMIZAÇÃO: Excluindo campos pesados (danfe_base64, return_danfe_base64, xml_documento, raw_json, return_nfe_xml)
+      const ORDERS_SAFE_COLS = 'id,order_id_erp,customer_name,phone,address_json,items_json,status,created_at,updated_at,filial_venda,data_venda,previsao_entrega,tem_frete_full,observacoes_publicas,observacoes_internas,customer_cpf,vendedor_nome,return_flag,last_return_reason,last_return_notes,brand,department,service_type,erp_status,blocked_at,blocked_reason,requires_pickup,pickup_created_at,return_nfe_number,return_nfe_key,return_date,return_type,import_source,previsao_montagem,product_group,product_subgroup,danfe_gerada_em,has_assembly';
       const { data: refreshed } = await supabase.from('routes')
-        .select(`*, driver:drivers!driver_id(*, user:users!user_id(*)), vehicle:vehicles!vehicle_id(*), route_orders(*, order:orders!order_id(*))`)
+        .select(`*, driver:drivers!driver_id(*, user:users!user_id(*)), vehicle:vehicles!vehicle_id(*), route_orders(*, order:orders!order_id(${ORDERS_SAFE_COLS}))`)
         .eq('id', selectedRoute.id)
         .single();
       if (refreshed) setSelectedRoute(refreshed as any);
@@ -956,9 +958,11 @@ function RouteCreationContent() {
       localStorage.removeItem('rc_showRouteModal');
 
       // Fetch route details to populate modal
+      // OTIMIZAÇÃO: Excluindo danfe_base64 e campos pesados
+      const ORDERS_SAFE_COLS_AO = 'id,order_id_erp,customer_name,phone,address_json,items_json,status,created_at,updated_at,filial_venda,data_venda,previsao_entrega,tem_frete_full,observacoes_publicas,observacoes_internas,customer_cpf,vendedor_nome,return_flag,last_return_reason,last_return_notes,brand,department,service_type,erp_status,blocked_at,blocked_reason,requires_pickup,pickup_created_at,return_nfe_number,return_nfe_key,return_date,return_type,import_source,previsao_montagem,product_group,product_subgroup,danfe_gerada_em,has_assembly';
       supabase
         .from('routes')
-        .select(`*, driver:drivers!driver_id(*, user:users!user_id(*)), vehicle:vehicles!vehicle_id(*), route_orders(*, order:orders!order_id(*))`)
+        .select(`*, driver:drivers!driver_id(*, user:users!user_id(*)), vehicle:vehicles!vehicle_id(*), route_orders(*, order:orders!order_id(${ORDERS_SAFE_COLS_AO}))`)
         .eq('id', autoOpenId)
         .single()
         .then(({ data, error }) => {
@@ -4806,7 +4810,7 @@ function RouteCreationContent() {
                       disabled={nfLoading}
                       className="flex items-center justify-center px-4 py-2 bg-gray-50 text-gray-700 hover:bg-gray-100 rounded-lg font-medium text-sm transition-colors border border-gray-200 disabled:opacity-50"
                     >
-                      <FileSpreadsheet className="h-4 w-4 mr-2" /> {nfLoading ? '...' : ((selectedRoute?.route_orders || []).every((ro: any) => !!ro.order?.danfe_base64) ? 'Imprimir Notas' : 'Gerar Notas')}
+                      <FileSpreadsheet className="h-4 w-4 mr-2" /> {nfLoading ? '...' : ((selectedRoute?.route_orders || []).every((ro: any) => !!(ro.order?.danfe_gerada_em)) ? 'Imprimir Notas' : 'Gerar Notas')}
                     </button>
 
                     {/* Relatório de Fechamento Button */}
@@ -5258,13 +5262,16 @@ function RouteCreationContent() {
                                 <FileSpreadsheet className="h-4 w-4" />
                               </button>
 
-                              {ro.order?.danfe_base64 ? (
+                              {ro.order?.danfe_gerada_em ? (
                                 <button
                                   className="p-1 text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded transition-colors"
                                   title="Imprimir DANFE"
                                   onClick={async () => {
                                     try {
-                                      const b64 = String(ro.order?.danfe_base64);
+                                      // Fetch on-demand: busca somente danfe_base64 deste pedido
+                                      const { data: orderData } = await supabase.from('orders').select('danfe_base64').eq('id', ro.order_id).single();
+                                      const b64 = String(orderData?.danfe_base64 || '');
+                                      if (!b64.startsWith('JVBER')) { toast.error('DANFE não encontrada no banco'); return; }
                                       const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
                                       const doc = await PDFDocument.load(bytes);
                                       const merged = await PDFDocument.create();
