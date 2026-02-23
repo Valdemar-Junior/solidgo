@@ -947,40 +947,8 @@ function AssemblyManagementContent() {
     }
   }, [showCreateModal]);
 
-  useEffect(() => {
-    // Realtime Subscription
-    const channel = supabase
-      .channel('assembly-management-changes')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'assembly_routes' },
-        (payload) => {
-          console.log('[Realtime] Assembly Routes changed');
-          // If routes change, we must re-fetch routes first
-          if (fetchRoutesRef.current) {
-            fetchRoutesRef.current(true).then((newRoutes: any[]) => {
-              if (loadDataRef.current) loadDataRef.current(true, newRoutes);
-            });
-          }
-        }
-      )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'assembly_products' },
-        (payload) => {
-          console.log('[Realtime] Assembly Products changed');
-          // If products change, we can just reload data (using current routes)
-          if (loadDataRef.current) {
-            loadDataRef.current(true, assemblyRoutesRef.current);
-          }
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, []);
+  // Realtime removido: assinaturas sem filtro em assembly_routes/assembly_products
+  // sobrecarregavam o pool de conexões do Supabase durante operações em lote.
 
   useEffect(() => {
     // This effect runs on mount and when filters change

@@ -34,15 +34,7 @@ export default function AuditDashboard() {
 
     useEffect(() => {
         runChecks(true);
-
-        const channel = supabase
-            .channel('audit-dashboard-changes')
-            .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => { runChecks(false); })
-            .on('postgres_changes', { event: '*', schema: 'public', table: 'route_orders' }, () => { runChecks(false); })
-            .on('postgres_changes', { event: '*', schema: 'public', table: 'routes' }, () => { runChecks(false); })
-            .subscribe();
-
-        return () => { supabase.removeChannel(channel); };
+        // Realtime removido: assinaturas sem filtro sobrecarregavam o pool de conexões.
     }, []);
 
     const runChecks = async (isInitial = false) => {

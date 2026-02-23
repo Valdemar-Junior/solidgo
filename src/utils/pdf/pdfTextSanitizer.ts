@@ -113,12 +113,15 @@ export function sanitizePdfText(text: string | null | undefined): string {
         result = result.split(char).join(replacement);
     }
 
+    // Replace tabs with spaces (tabs cause WinAnsi encoding errors)
+    result = result.replace(/\t/g, ' ');
+
     // Remove any remaining non-Latin1 characters
     // WinAnsi encoding supports:
     // - ASCII printable characters (0x20-0x7E)
     // - Extended Latin-1 characters (0xA0-0xFF)
     // This regex removes everything else
-    result = result.replace(/[^\x20-\x7E\xA0-\xFF\n\t]/g, '');
+    result = result.replace(/[^\x20-\x7E\xA0-\xFF\n]/g, '');
 
     // Clean up multiple spaces and trim
     result = result.replace(/  +/g, ' ');

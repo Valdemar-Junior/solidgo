@@ -1637,9 +1637,10 @@ function RouteCreationContent() {
         pickupPendingRes,
       ] = await Promise.all([
         // Orders (pending or returned OR assigned) - EXCLUINDO BLOQUEADOS
+        // OTIMIZAÇÃO: Excluindo colunas pesadas (danfe_base64=88MB, xml_documento, raw_json, return_nfe_xml, return_danfe_base64)
         supabase
           .from('orders')
-          .select('*')
+          .select('id, order_id_erp, customer_name, phone, address_json, items_json, status, created_at, updated_at, filial_venda, data_venda, previsao_entrega, tem_frete_full, observacoes_publicas, observacoes_internas, customer_cpf, vendedor_nome, return_flag, last_return_reason, last_return_notes, brand, department, service_type, erp_status, blocked_at, blocked_reason, requires_pickup, pickup_created_at, return_nfe_number, return_nfe_key, return_date, return_type, import_source, previsao_montagem, product_group, product_subgroup, danfe_gerada_em')
           .in('status', ['pending', 'returned', 'assigned'])
           .is('blocked_at', null)  // Só pedidos NÃO bloqueados
           .order('created_at', { ascending: false }),
@@ -1685,18 +1686,18 @@ function RouteCreationContent() {
           .select('order_id, route:routes!inner(status)')
           .neq('route.status', 'completed'),
 
-        // Pedidos bloqueados (para aba "Bloqueados")
+        // Pedidos bloqueados (para aba "Bloqueados") — sem colunas pesadas
         supabase
           .from('orders')
-          .select('*')
+          .select('id, order_id_erp, customer_name, phone, address_json, items_json, status, created_at, updated_at, filial_venda, data_venda, previsao_entrega, tem_frete_full, observacoes_publicas, observacoes_internas, customer_cpf, vendedor_nome, return_flag, last_return_reason, last_return_notes, brand, department, service_type, erp_status, blocked_at, blocked_reason, requires_pickup, pickup_created_at, return_nfe_number, return_nfe_key, return_date, return_type, import_source, previsao_montagem, product_group, product_subgroup, danfe_gerada_em')
           .not('blocked_at', 'is', null)
           .order('blocked_at', { ascending: false })
           .limit(100),
 
-        // Pedidos que precisam de coleta (para aba "Coletas Pendentes")
+        // Pedidos que precisam de coleta (para aba "Coletas Pendentes") — sem colunas pesadas
         supabase
           .from('orders')
-          .select('*')
+          .select('id, order_id_erp, customer_name, phone, address_json, items_json, status, created_at, updated_at, filial_venda, data_venda, previsao_entrega, tem_frete_full, observacoes_publicas, observacoes_internas, customer_cpf, vendedor_nome, return_flag, last_return_reason, last_return_notes, brand, department, service_type, erp_status, blocked_at, blocked_reason, requires_pickup, pickup_created_at, return_nfe_number, return_nfe_key, return_date, return_type, import_source, previsao_montagem, product_group, product_subgroup, danfe_gerada_em')
           .eq('requires_pickup', true)
           .is('pickup_created_at', null)
           .order('blocked_at', { ascending: false })
@@ -1877,48 +1878,12 @@ function RouteCreationContent() {
     }
   };
 
-  // --- REALTIME SETUP ---
-  // Ensure refs always point to latest function versions (avoid stale closures)
+  // Refs always point to latest function versions (avoid stale closures)
   fetchRoutesRef.current = fetchRoutes;
   loadDataRef.current = loadData;
 
-  useEffect(() => {
-    // Realtime Subscription
-    const channel = supabase
-      .channel('route-creation-changes')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'orders' },
-        (payload) => {
-          console.log('[Realtime] Orders changed');
-          if (loadDataRef.current) loadDataRef.current(true);
-        }
-      )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'route_orders' },
-        (payload) => {
-          console.log('[Realtime] Route Orders changed');
-          if (loadDataRef.current) loadDataRef.current(true);
-          if (fetchRoutesRef.current) fetchRoutesRef.current(true); // Reset to page 0
-        }
-      )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'routes' },
-        (payload) => {
-          console.log('[Realtime] Routes changed');
-          if (fetchRoutesRef.current) fetchRoutesRef.current(true);
-          if (loadDataRef.current) loadDataRef.current(true);
-          fetchAllPendingRoutes();
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, []);
+  // Realtime removido: assinaturas sem filtro em orders/route_orders/routes
+  // sobrecarregavam o pool de conexões do Supabase durante operações em lote.
 
   const toggleOrderSelection = (orderId: string) => {
     const newSelected = new Set(selectedOrders);

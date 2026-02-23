@@ -87,8 +87,8 @@ export class AssemblyReportGenerator {
         }
 
         // Header Right - Route ID and Name
-        const routeName = data.route.name || '-';
-        const routeCode = (data.route as any).route_code || `#${data.route.id.slice(0, 6)}`;
+        const routeName = sanitizePdfText(data.route.name || '-');
+        const routeCode = sanitizePdfText((data.route as any).route_code || `#${data.route.id.slice(0, 6)}`);
         const dateStr = new Date(data.generatedAt).toLocaleDateString('pt-BR');
 
         // ID do Romaneio (route_code)
@@ -193,9 +193,9 @@ export class AssemblyReportGenerator {
         const drawDetail = (label: string, value: string, idx: number) => {
             const colW = (width - margin * 2) / 4; // Changed to 4 columns
             const x = margin + (idx * colW);
-            page.drawText(label, { x, y: y, size: 7, font: fontBold, color: rgb(0.6, 0.6, 0.6) });
+            page.drawText(sanitizePdfText(label), { x, y: y, size: 7, font: fontBold, color: rgb(0.6, 0.6, 0.6) });
             // Truncate value if too long
-            let safeValue = value;
+            let safeValue = sanitizePdfText(value);
             if (fontBold.widthOfTextAtSize(safeValue, 9) > colW - 10) {
                 while (safeValue.length > 0 && fontBold.widthOfTextAtSize(safeValue + '...', 9) > colW - 10) {
                     safeValue = safeValue.slice(0, -1);
@@ -235,7 +235,7 @@ export class AssemblyReportGenerator {
 
                 if (!map.has(oid)) {
                     const addr = firstOrig.order?.address_json;
-                    const addrStr = `${addr?.street || ''}${addr?.neighborhood ? `, ${addr.neighborhood}` : ''}${addr?.city ? `, ${addr.city}` : ''}`;
+                    const addrStr = sanitizePdfText(`${addr?.street || ''}${addr?.neighborhood ? `, ${addr.neighborhood}` : ''}${addr?.city ? `, ${addr.city}` : ''}`);
                     // Capturar data do pedido (data_venda ou previsao_entrega)
                     const rawDate = firstOrig.order?.data_venda || firstOrig.order?.previsao_entrega || (firstOrig.order?.raw_json as any)?.data_venda || null;
                     let dateRaw: Date | null = null;
@@ -251,7 +251,7 @@ export class AssemblyReportGenerator {
                     map.set(oid, {
                         orderId: oid,
                         orderRef: firstOrig.order?.order_id_erp || oid.slice(0, 6),
-                        customerName: firstOrig.order?.customer_name || 'Cliente Desconhecido',
+                        customerName: sanitizePdfText(firstOrig.order?.customer_name || 'Cliente Desconhecido'),
                         address: addrStr,
                         phone: firstOrig.order?.phone || '',
                         date: dateFormatted,
@@ -338,7 +338,7 @@ export class AssemblyReportGenerator {
                         x: margin + 8, y: y - 20, width: width - margin * 2 - 8, height: 20, color: rgb(0.97, 0.97, 0.98)
                     });
 
-                    const headerText = `Pedido: ${group.orderRef} • ${group.customerName} • ${group.address}`;
+                    const headerText = sanitizePdfText(`Pedido: ${group.orderRef} - ${group.customerName} - ${group.address}`);
                     page.drawText(headerText, {
                         x: margin + 16, y: y - 13, size: 9, font: fontBold, color: rgb(0.3, 0.3, 0.4)
                     });
@@ -379,7 +379,7 @@ export class AssemblyReportGenerator {
                         let rowX = margin + 16;
 
                         // Col 1: Product
-                        const prodName = `${item.name} (${item.sku || '-'})`;
+                        const prodName = sanitizePdfText(`${item.name} (${item.sku || '-'})`);
                         let cleanProdName = prodName;
                         if (font.widthOfTextAtSize(cleanProdName, 9) > colWs[0] - 10) {
                             while (cleanProdName.length > 0 && font.widthOfTextAtSize(cleanProdName + '...', 9) > colWs[0] - 10) cleanProdName = cleanProdName.slice(0, -1);
@@ -403,7 +403,7 @@ export class AssemblyReportGenerator {
                         rowX += colWs[2];
 
                         // Col 4: Obs
-                        let obs = item.observations || (item.originalItems[0]?.technical_notes) || '-';
+                        let obs = sanitizePdfText(item.observations || (item.originalItems[0]?.technical_notes) || '-');
                         if (font.widthOfTextAtSize(obs, 8) > colWs[3] - 10) {
                             obs = obs.substring(0, 15) + '...';
                         }

@@ -33,7 +33,7 @@ export const supabase = envOk ? createClient(supabaseUrl, supabaseAnonKey, {
   },
   realtime: {
     params: {
-      eventsPerSecond: 10,
+      eventsPerSecond: 5,
     },
   },
   global: {
