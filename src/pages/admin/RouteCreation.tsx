@@ -603,7 +603,7 @@ function RouteCreationContent() {
       await loadData(false);
 
       // OTIMIZAÇÃO: Excluindo campos pesados (danfe_base64, return_danfe_base64, xml_documento, raw_json, return_nfe_xml)
-      const ORDERS_SAFE_COLS = 'id,order_id_erp,customer_name,phone,address_json,items_json,status,created_at,updated_at,filial_venda,data_venda,previsao_entrega,tem_frete_full,observacoes_publicas,observacoes_internas,customer_cpf,vendedor_nome,return_flag,last_return_reason,last_return_notes,brand,department,service_type,erp_status,blocked_at,blocked_reason,requires_pickup,pickup_created_at,return_nfe_number,return_nfe_key,return_date,return_type,import_source,previsao_montagem,product_group,product_subgroup,danfe_gerada_em,has_assembly';
+      const ORDERS_SAFE_COLS = 'id,order_id_erp,customer_name,phone,address_json,items_json,status,created_at,updated_at,filial_venda,data_venda,previsao_entrega,tem_frete_full,observacoes_publicas,observacoes_internas,customer_cpf,vendedor_nome,return_flag,last_return_reason,last_return_notes,brand,department,service_type,erp_status,blocked_at,blocked_reason,requires_pickup,pickup_created_at,return_nfe_number,return_nfe_key,return_date,return_type,import_source,previsao_montagem,product_group,product_subgroup,danfe_gerada_em';
       const { data: refreshed } = await supabase.from('routes')
         .select(`*, driver:drivers!driver_id(*, user:users!user_id(*)), vehicle:vehicles!vehicle_id(*), route_orders(*, order:orders!order_id(${ORDERS_SAFE_COLS}))`)
         .eq('id', selectedRoute.id)
@@ -959,7 +959,7 @@ function RouteCreationContent() {
 
       // Fetch route details to populate modal
       // OTIMIZAÇÃO: Excluindo danfe_base64 e campos pesados
-      const ORDERS_SAFE_COLS_AO = 'id,order_id_erp,customer_name,phone,address_json,items_json,status,created_at,updated_at,filial_venda,data_venda,previsao_entrega,tem_frete_full,observacoes_publicas,observacoes_internas,customer_cpf,vendedor_nome,return_flag,last_return_reason,last_return_notes,brand,department,service_type,erp_status,blocked_at,blocked_reason,requires_pickup,pickup_created_at,return_nfe_number,return_nfe_key,return_date,return_type,import_source,previsao_montagem,product_group,product_subgroup,danfe_gerada_em,has_assembly';
+      const ORDERS_SAFE_COLS_AO = 'id,order_id_erp,customer_name,phone,address_json,items_json,status,created_at,updated_at,filial_venda,data_venda,previsao_entrega,tem_frete_full,observacoes_publicas,observacoes_internas,customer_cpf,vendedor_nome,return_flag,last_return_reason,last_return_notes,brand,department,service_type,erp_status,blocked_at,blocked_reason,requires_pickup,pickup_created_at,return_nfe_number,return_nfe_key,return_date,return_type,import_source,previsao_montagem,product_group,product_subgroup,danfe_gerada_em';
       supabase
         .from('routes')
         .select(`*, driver:drivers!driver_id(*, user:users!user_id(*)), vehicle:vehicles!vehicle_id(*), route_orders(*, order:orders!order_id(${ORDERS_SAFE_COLS_AO}))`)
