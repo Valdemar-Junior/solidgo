@@ -1644,7 +1644,7 @@ function RouteCreationContent() {
         // OTIMIZAÇÃO: Excluindo colunas pesadas (danfe_base64=88MB, xml_documento, raw_json, return_nfe_xml, return_danfe_base64)
         supabase
           .from('orders')
-          .select('id, order_id_erp, customer_name, phone, address_json, items_json, status, created_at, updated_at, filial_venda, data_venda, previsao_entrega, tem_frete_full, observacoes_publicas, observacoes_internas, customer_cpf, vendedor_nome, return_flag, last_return_reason, last_return_notes, brand, department, service_type, erp_status, blocked_at, blocked_reason, requires_pickup, pickup_created_at, return_nfe_number, return_nfe_key, return_date, return_type, import_source, previsao_montagem, product_group, product_subgroup, danfe_gerada_em')
+          .select('id, order_id_erp, customer_name, phone, address_json, items_json, status, created_at, updated_at, filial_venda, data_venda, previsao_entrega, tem_frete_full, observacoes_publicas, observacoes_internas, customer_cpf, vendedor_nome, return_flag, last_return_reason, last_return_notes, brand, department, service_type, erp_status, blocked_at, blocked_reason, requires_pickup, pickup_created_at, return_nfe_number, return_nfe_key, return_date, return_type, import_source, previsao_montagem, product_group, product_subgroup, danfe_gerada_em, raw_operacoes:raw_json->>operacoes, raw_lancamento_venda:raw_json->>lancamento_venda')
           .in('status', ['pending', 'returned', 'assigned'])
           .is('blocked_at', null)  // Só pedidos NÃO bloqueados
           .order('created_at', { ascending: false }),
@@ -1693,7 +1693,7 @@ function RouteCreationContent() {
         // Pedidos bloqueados (para aba "Bloqueados") — sem colunas pesadas
         supabase
           .from('orders')
-          .select('id, order_id_erp, customer_name, phone, address_json, items_json, status, created_at, updated_at, filial_venda, data_venda, previsao_entrega, tem_frete_full, observacoes_publicas, observacoes_internas, customer_cpf, vendedor_nome, return_flag, last_return_reason, last_return_notes, brand, department, service_type, erp_status, blocked_at, blocked_reason, requires_pickup, pickup_created_at, return_nfe_number, return_nfe_key, return_date, return_type, import_source, previsao_montagem, product_group, product_subgroup, danfe_gerada_em')
+          .select('id, order_id_erp, customer_name, phone, address_json, items_json, status, created_at, updated_at, filial_venda, data_venda, previsao_entrega, tem_frete_full, observacoes_publicas, observacoes_internas, customer_cpf, vendedor_nome, return_flag, last_return_reason, last_return_notes, brand, department, service_type, erp_status, blocked_at, blocked_reason, requires_pickup, pickup_created_at, return_nfe_number, return_nfe_key, return_date, return_type, import_source, previsao_montagem, product_group, product_subgroup, danfe_gerada_em, raw_operacoes:raw_json->>operacoes, raw_lancamento_venda:raw_json->>lancamento_venda')
           .not('blocked_at', 'is', null)
           .order('blocked_at', { ascending: false })
           .limit(100),
@@ -1701,7 +1701,7 @@ function RouteCreationContent() {
         // Pedidos que precisam de coleta (para aba "Coletas Pendentes") — sem colunas pesadas
         supabase
           .from('orders')
-          .select('id, order_id_erp, customer_name, phone, address_json, items_json, status, created_at, updated_at, filial_venda, data_venda, previsao_entrega, tem_frete_full, observacoes_publicas, observacoes_internas, customer_cpf, vendedor_nome, return_flag, last_return_reason, last_return_notes, brand, department, service_type, erp_status, blocked_at, blocked_reason, requires_pickup, pickup_created_at, return_nfe_number, return_nfe_key, return_date, return_type, import_source, previsao_montagem, product_group, product_subgroup, danfe_gerada_em')
+          .select('id, order_id_erp, customer_name, phone, address_json, items_json, status, created_at, updated_at, filial_venda, data_venda, previsao_entrega, tem_frete_full, observacoes_publicas, observacoes_internas, customer_cpf, vendedor_nome, return_flag, last_return_reason, last_return_notes, brand, department, service_type, erp_status, blocked_at, blocked_reason, requires_pickup, pickup_created_at, return_nfe_number, return_nfe_key, return_date, return_type, import_source, previsao_montagem, product_group, product_subgroup, danfe_gerada_em, raw_operacoes:raw_json->>operacoes, raw_lancamento_venda:raw_json->>lancamento_venda')
           .eq('requires_pickup', true)
           .is('pickup_created_at', null)
           .order('blocked_at', { ascending: false })
@@ -1724,6 +1724,11 @@ function RouteCreationContent() {
           .filter(o => !lockedOrderIds.has(o.id)) // SAFETY FILTER
           .map((o: any) => {
             let updated = { ...o };
+            // Reconstrói parcialmente o raw_json para a interface visual sem o payload de 88MB
+            updated.raw_json = {
+              operacoes: o.raw_operacoes,
+              lancamento_venda: o.raw_lancamento_venda
+            };
             // Normalização de flags de retorno e auto-repair visual
             // Se tiver last_return_reason, deveríamos considerar como retornado para fins de UI
             if ((String(o.status) === 'returned' && !o.return_flag) || (o.last_return_reason && !o.return_flag)) {
@@ -1758,12 +1763,18 @@ function RouteCreationContent() {
 
       // Processar pedidos bloqueados
       if (blockedOrdersRes.data) {
-        setBlockedOrders(blockedOrdersRes.data as Order[]);
+        setBlockedOrders(blockedOrdersRes.data.map((o: any) => ({
+          ...o,
+          raw_json: { operacoes: o.raw_operacoes, lancamento_venda: o.raw_lancamento_venda }
+        })) as Order[]);
       }
 
       // Processar pedidos que precisam de coleta
       if (pickupPendingRes.data) {
-        setPickupPendingOrders(pickupPendingRes.data as Order[]);
+        setPickupPendingOrders(pickupPendingRes.data.map((o: any) => ({
+          ...o,
+          raw_json: { operacoes: o.raw_operacoes, lancamento_venda: o.raw_lancamento_venda }
+        })) as Order[]);
       }
 
       // Conference setting
