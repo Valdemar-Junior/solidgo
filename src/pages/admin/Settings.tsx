@@ -231,29 +231,7 @@ export default function Settings() {
   ];
 
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col">
-      {/* Header */}
-      <div className="bg-white border-b border-gray-200 sticky top-0 z-20 shadow-sm flex-none">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => navigate(-1)}
-              className="p-2 -ml-2 hover:bg-gray-100 rounded-lg text-gray-600 transition-colors"
-              title="Voltar"
-            >
-              <ArrowLeft className="h-6 w-6" />
-            </button>
-            <div className="p-2 bg-blue-50 rounded-lg">
-              <SettingsIcon className="h-6 w-6 text-blue-600" />
-            </div>
-            <div>
-              <h1 className="text-2xl font-bold text-gray-900">Configurações</h1>
-              <p className="text-sm text-gray-500">Gerencie as integrações, logística e parâmetros do sistema</p>
-            </div>
-          </div>
-        </div>
-      </div>
-
+    <div className="w-full pb-20">
       <div className="flex flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-8 gap-8 items-start">
 
         {/* Sidebar Navigation */}

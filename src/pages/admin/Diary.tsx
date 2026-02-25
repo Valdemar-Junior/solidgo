@@ -260,34 +260,15 @@ export default function Diary() {
         <div className="min-h-screen bg-gray-50/50 p-6">
             <div className="max-w-5xl mx-auto space-y-6">
 
-                {/* Header & Date Navigation */}
-                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white p-4 rounded-2xl shadow-sm border border-gray-100">
-                    <div className="flex items-center gap-4">
-                        <button
-                            onClick={() => navigate(-1)}
-                            className="p-2 -ml-2 hover:bg-gray-100 rounded-lg text-gray-600 transition-colors"
-                            title="Voltar"
-                        >
-                            <ArrowLeft className="h-6 w-6" />
-                        </button>
-                        <div className="bg-gradient-to-br from-emerald-500 to-teal-600 p-3 rounded-xl shadow-sm">
-                            <Calendar className="h-6 w-6 text-white" />
-                        </div>
-                        <div>
-                            <h1 className="text-2xl font-bold text-gray-900">Diário de Bordo</h1>
-                            <p className="text-sm text-gray-500">Registro operacional diário</p>
-                        </div>
-                    </div>
-
-                    <div className="flex gap-2">
-                        <button
-                            onClick={openNewModal}
-                            className="flex items-center gap-2 bg-gray-900 text-white px-5 py-2.5 rounded-xl hover:bg-gray-800 transition-colors shadow-lg shadow-gray-200"
-                        >
-                            <Plus className="h-5 w-5" />
-                            Nova Anotação
-                        </button>
-                    </div>
+                {/* Ações Rápidas - Botão Nova Anotação */}
+                <div className="flex justify-end mb-4">
+                    <button
+                        onClick={openNewModal}
+                        className="flex items-center gap-2 bg-gray-900 text-white px-5 py-2.5 rounded-xl hover:bg-gray-800 transition-colors shadow-lg shadow-gray-200"
+                    >
+                        <Plus className="h-5 w-5" />
+                        Nova Anotação
+                    </button>
                 </div>
 
                 <div className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 space-y-3">
@@ -373,34 +354,34 @@ export default function Diary() {
                     </div>
 
                     <div className="flex flex-wrap gap-2 md:justify-end">
-                            <button
-                                type="button"
-                                onClick={() => applyLastDays(7)}
-                                className="px-3 py-2 text-sm font-medium rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 transition-colors"
-                            >
-                                Últimos 7 dias
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() => applyLastDays(30)}
-                                className="px-3 py-2 text-sm font-medium rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 transition-colors"
-                            >
-                                Últimos 30 dias
-                            </button>
-                            <button
-                                type="button"
-                                onClick={applyCurrentMonth}
-                                className="px-3 py-2 text-sm font-medium rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 transition-colors"
-                            >
-                                Este mês
-                            </button>
-                            <button
-                                type="button"
-                                onClick={setTodayPeriod}
-                                className="px-3 py-2 text-sm font-medium rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-700 transition-colors"
-                            >
-                                Hoje
-                            </button>
+                        <button
+                            type="button"
+                            onClick={() => applyLastDays(7)}
+                            className="px-3 py-2 text-sm font-medium rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 transition-colors"
+                        >
+                            Últimos 7 dias
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => applyLastDays(30)}
+                            className="px-3 py-2 text-sm font-medium rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 transition-colors"
+                        >
+                            Últimos 30 dias
+                        </button>
+                        <button
+                            type="button"
+                            onClick={applyCurrentMonth}
+                            className="px-3 py-2 text-sm font-medium rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 transition-colors"
+                        >
+                            Este mês
+                        </button>
+                        <button
+                            type="button"
+                            onClick={setTodayPeriod}
+                            className="px-3 py-2 text-sm font-medium rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-700 transition-colors"
+                        >
+                            Hoje
+                        </button>
                     </div>
 
                     <div className="text-sm text-gray-500">

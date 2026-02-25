@@ -55,32 +55,24 @@ export default function Reports() {
     ];
 
     return (
-        <div className="min-h-screen bg-gray-50/50 pb-10">
-            {/* Header */}
-            <header className="bg-white border-b border-gray-200 sticky top-0 z-10">
-                <div className="w-full px-4 sm:px-6 lg:px-8">
-                    <div className="flex justify-between items-center h-20">
-                        <div className="flex items-center gap-4">
-                            <div className="bg-gradient-to-br from-orange-500 to-orange-600 p-2 rounded-lg">
-                                <TrendingUp className="h-6 w-6 text-white" />
-                            </div>
-                            <div>
-                                <h1 className="text-xl font-bold text-gray-900 leading-tight">Relatórios & Inteligência</h1>
-                                <p className="text-sm text-gray-500">Visão geral do mês</p>
-                            </div>
-                        </div>
-                        <button
-                            onClick={fetchReports}
-                            className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                            title="Atualizar dados"
-                        >
-                            <Clock className="h-5 w-5" />
-                        </button>
-                    </div>
-                </div>
-            </header>
+        <div className="w-full pb-10">
+            <main className="w-full p-4 sm:p-6 lg:p-8 space-y-8">
 
-            <main className="w-full px-4 sm:px-6 lg:px-8 py-8 space-y-8">
+                {/* Título de Página e Botão Atualizar */}
+                <div className="flex justify-between items-center mb-6">
+                    <div>
+                        <h1 className="text-2xl font-bold text-gray-900 leading-tight">Relatórios & Inteligência</h1>
+                        <p className="text-sm text-gray-500 mt-1">Visão geral do mês</p>
+                    </div>
+                    <button
+                        onClick={fetchReports}
+                        className="flex items-center gap-2 px-4 py-2 bg-white text-gray-600 border border-gray-200 hover:text-blue-600 hover:border-blue-200 hover:bg-blue-50 rounded-lg shadow-sm transition-all text-sm font-medium"
+                        title="Atualizar dados"
+                    >
+                        <Clock className="h-4 w-4" />
+                        <span className="hidden sm:inline">Atualizar</span>
+                    </button>
+                </div>
 
                 {/* KPI Row */}
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-4">

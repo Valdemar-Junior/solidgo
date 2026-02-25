@@ -681,32 +681,8 @@ export default function OrderLookup() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <header className="bg-white border-b border-gray-200 sticky top-0 z-10">
-        <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex items-center gap-3">
-          {!isConsultor && (
-            <button onClick={() => navigate(-1)} className="p-2 hover:bg-gray-100 rounded-lg text-gray-600">
-              <ArrowLeft className="h-5 w-5" />
-            </button>
-          )}
-          <div className="flex-1">
-            <h1 className="text-xl font-bold text-gray-900 flex items-center gap-2">
-              <Search className="h-5 w-5 text-blue-600" /> Consulta de Pedido
-            </h1>
-          </div>
-          {isConsultor && (
-            <button
-              onClick={handleLogout}
-              className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-            >
-              <LogOut className="h-4 w-4" />
-              Sair
-            </button>
-          )}
-        </div>
-      </header>
-
-      <main className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
+    <div className="w-full">
+      <main className="w-full p-4 sm:p-6 lg:p-8 space-y-6">
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5 flex flex-col gap-4">
           <div className="flex flex-col md:flex-row gap-3 md:items-end">
             <div className="flex-1">

@@ -563,42 +563,8 @@ export default function OrdersImport() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 pb-12">
-      {/* Header */}
-      <div className="bg-white border-b border-gray-200 shadow-sm sticky top-0 z-10">
-        <div className="w-full px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center py-4">
-            <div className="flex items-center space-x-4">
-              <button
-                onClick={() => navigate(-1)}
-                className="p-2 -ml-2 hover:bg-gray-100 rounded-lg text-gray-600 transition-colors"
-                title="Voltar"
-              >
-                <ArrowLeft className="h-6 w-6" />
-              </button>
-              <div>
-                <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
-                  <UploadCloud className="h-6 w-6 text-blue-600" />
-                  Importar Pedidos
-                </h1>
-                <p className="text-sm text-gray-500">
-                  Sincronize pedidos do ERP via Webhook
-                </p>
-              </div>
-            </div>
-            <div className="flex items-center space-x-3">
-              <button onClick={() => navigate('/admin')} className="inline-flex items-center px-4 py-2 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50 text-sm font-medium transition-colors">
-                <LayoutGrid className="h-4 w-4 mr-2" /> Dashboard
-              </button>
-              <button onClick={() => navigate('/admin/routes')} className="inline-flex items-center px-4 py-2 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50 text-sm font-medium transition-colors">
-                <TruckIcon className="h-4 w-4 mr-2" /> Entregas
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div className="w-full px-4 sm:px-6 lg:px-8 py-8">
+    <div className="w-full pb-12">
+      <div className="w-full p-4 sm:p-6 lg:p-8 py-8 space-y-6">
 
         {/* Quick Stats */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
@@ -632,7 +598,7 @@ export default function OrdersImport() {
         </div>
 
         {/* Import Action Area */}
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-8 mb-8 text-center relative overflow-hidden group">
+        < div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-8 mb-8 text-center relative overflow-hidden group" >
           <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-blue-500 to-purple-500"></div>
 
           <div className="max-w-xl mx-auto relative z-10">
@@ -688,11 +654,11 @@ export default function OrdersImport() {
               </p>
             )}
           </div>
-        </div>
+        </div >
 
 
         {/* Orders Table */}
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+        < div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden" >
           <div className="px-6 py-4 border-b border-gray-200 flex justify-between items-center bg-gray-50">
             <h3 className="text-lg font-bold text-gray-900 flex items-center gap-2">
               <Package className="h-5 w-5 text-gray-500" />
@@ -703,79 +669,81 @@ export default function OrdersImport() {
             </span>
           </div>
 
-          {dbOrders.length > 0 ? (
-            <div className="overflow-x-auto">
-              <table className="min-w-full divide-y divide-gray-200">
-                <thead className="bg-gray-50">
-                  <tr>
-                    <th className="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Pedido / Cliente</th>
-                    <th className="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Datas</th>
-                    <th className="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Localização</th>
-                    <th className="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Status</th>
-                    <th className="px-6 py-3 text-right text-xs font-semibold text-gray-500 uppercase tracking-wider">Ações</th>
-                  </tr>
-                </thead>
-                <tbody className="bg-white divide-y divide-gray-200">
-                  {dbOrders.map((o) => {
-                    const city = o.address_json?.city ?? '-';
-                    const statusLabel = statusPT(o.status);
-                    const raw = o.raw_json || {};
-                    const docNum = String(o.order_id_erp ?? raw.lancamento_venda ?? '-');
-                    const dataVenda = formatDateBR(raw.data_venda);
-                    const previsao = formatDateBR(raw.previsao_entrega);
+          {
+            dbOrders.length > 0 ? (
+              <div className="overflow-x-auto">
+                <table className="min-w-full divide-y divide-gray-200">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Pedido / Cliente</th>
+                      <th className="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Datas</th>
+                      <th className="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Localização</th>
+                      <th className="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Status</th>
+                      <th className="px-6 py-3 text-right text-xs font-semibold text-gray-500 uppercase tracking-wider">Ações</th>
+                    </tr>
+                  </thead>
+                  <tbody className="bg-white divide-y divide-gray-200">
+                    {dbOrders.map((o) => {
+                      const city = o.address_json?.city ?? '-';
+                      const statusLabel = statusPT(o.status);
+                      const raw = o.raw_json || {};
+                      const docNum = String(o.order_id_erp ?? raw.lancamento_venda ?? '-');
+                      const dataVenda = formatDateBR(raw.data_venda);
+                      const previsao = formatDateBR(raw.previsao_entrega);
 
-                    const statusColor = o.status === 'delivered' ? 'bg-green-100 text-green-800' :
-                      o.status === 'returned' ? 'bg-red-100 text-red-800' :
-                        o.status === 'assigned' ? 'bg-blue-100 text-blue-800' :
-                          'bg-gray-100 text-gray-800';
+                      const statusColor = o.status === 'delivered' ? 'bg-green-100 text-green-800' :
+                        o.status === 'returned' ? 'bg-red-100 text-red-800' :
+                          o.status === 'assigned' ? 'bg-blue-100 text-blue-800' :
+                            'bg-gray-100 text-gray-800';
 
-                    return (
-                      <tr key={o.id} className="hover:bg-gray-50 transition-colors">
-                        <td className="px-6 py-4">
-                          <div className="flex flex-col">
-                            <span className="text-sm font-bold text-gray-900">#{docNum}</span>
-                            <span className="text-sm text-gray-500">{o.customer_name}</span>
-                          </div>
-                        </td>
-                        <td className="px-6 py-4 text-sm text-gray-500">
-                          <div className="flex flex-col">
-                            <span>Venda: {dataVenda}</span>
-                            <span className="text-xs text-gray-400">Prev: {previsao}</span>
-                          </div>
-                        </td>
-                        <td className="px-6 py-4 text-sm text-gray-700">
-                          <div className="flex items-center gap-1">
-                            <TruckIcon className="h-3 w-3 text-gray-400" />
-                            {city}
-                          </div>
-                        </td>
-                        <td className="px-6 py-4">
-                          <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${statusColor}`}>
-                            {statusLabel}
-                          </span>
-                        </td>
-                        <td className="px-6 py-4 text-right">
-                          <button
-                            onClick={() => { setSelectedOrder(o); selectedOrderIdRef.current = String(o.id); localStorage.setItem('oi_selectedOrderId', String(o.id)); showModalRef.current = true; localStorage.setItem('oi_showModal', '1'); setShowModal(true); }}
-                            className="text-blue-600 hover:text-blue-900 font-medium text-sm inline-flex items-center transition-colors p-2 hover:bg-blue-50 rounded-lg"
-                          >
-                            <Eye className="h-4 w-4 mr-1" /> Detalhes
-                          </button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          ) : (
-            <div className="p-12 text-center">
-              <Package className="h-12 w-12 text-gray-300 mx-auto mb-4" />
-              <h3 className="text-lg font-medium text-gray-900">Nenhum pedido encontrado</h3>
-              <p className="text-gray-500">Clique em importar para sincronizar os dados.</p>
-            </div>
-          )}
-        </div>
+                      return (
+                        <tr key={o.id} className="hover:bg-gray-50 transition-colors">
+                          <td className="px-6 py-4">
+                            <div className="flex flex-col">
+                              <span className="text-sm font-bold text-gray-900">#{docNum}</span>
+                              <span className="text-sm text-gray-500">{o.customer_name}</span>
+                            </div>
+                          </td>
+                          <td className="px-6 py-4 text-sm text-gray-500">
+                            <div className="flex flex-col">
+                              <span>Venda: {dataVenda}</span>
+                              <span className="text-xs text-gray-400">Prev: {previsao}</span>
+                            </div>
+                          </td>
+                          <td className="px-6 py-4 text-sm text-gray-700">
+                            <div className="flex items-center gap-1">
+                              <TruckIcon className="h-3 w-3 text-gray-400" />
+                              {city}
+                            </div>
+                          </td>
+                          <td className="px-6 py-4">
+                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${statusColor}`}>
+                              {statusLabel}
+                            </span>
+                          </td>
+                          <td className="px-6 py-4 text-right">
+                            <button
+                              onClick={() => { setSelectedOrder(o); selectedOrderIdRef.current = String(o.id); localStorage.setItem('oi_selectedOrderId', String(o.id)); showModalRef.current = true; localStorage.setItem('oi_showModal', '1'); setShowModal(true); }}
+                              className="text-blue-600 hover:text-blue-900 font-medium text-sm inline-flex items-center transition-colors p-2 hover:bg-blue-50 rounded-lg"
+                            >
+                              <Eye className="h-4 w-4 mr-1" /> Detalhes
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="p-12 text-center">
+                <Package className="h-12 w-12 text-gray-300 mx-auto mb-4" />
+                <h3 className="text-lg font-medium text-gray-900">Nenhum pedido encontrado</h3>
+                <p className="text-gray-500">Clique em importar para sincronizar os dados.</p>
+              </div>
+            )
+          }
+        </div >
       </div >
 
       {/* Modal de detalhes */}
@@ -914,18 +882,9 @@ export default function OrdersImport() {
                 })()}
               </div>
 
-              <div className="p-4 bg-gray-50 border-t border-gray-200 flex justify-end">
-                <button
-                  className="px-4 py-2 bg-white border border-gray-300 text-gray-700 font-medium rounded-lg hover:bg-gray-50 transition-colors"
-                  onClick={() => { showModalRef.current = false; localStorage.removeItem('oi_showModal'); localStorage.removeItem('oi_selectedOrderId'); setShowModal(false); }}
-                >
-                  Fechar
-                </button>
-              </div>
             </div>
           </div>
-        )
-      }
-    </div >
+        )}
+    </div>
   );
 }

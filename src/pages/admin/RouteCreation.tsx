@@ -2413,7 +2413,7 @@ function RouteCreationContent() {
   // --- RENDER ---
 
   return (
-    <div className="min-h-screen bg-gray-50 pb-20">
+    <div className="w-full pb-20">
       {loading && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-white/70">
           <div className="flex flex-col items-center">
@@ -2423,44 +2423,11 @@ function RouteCreationContent() {
         </div>
       )}
 
-      {/* Header */}
-      <div className="bg-white border-b border-gray-200 sticky top-0 z-20 shadow-sm">
-        <div className="w-full px-4 sm:px-6 lg:px-8 py-4">
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-            <div className="flex items-center gap-4">
-              <button
-                onClick={() => navigate(-1)}
-                className="p-2 -ml-2 hover:bg-gray-100 rounded-lg text-gray-600 transition-colors"
-                title="Voltar"
-              >
-                <ArrowLeft className="h-6 w-6" />
-              </button>
-              <div>
-                <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
-                  <MapPin className="h-6 w-6 text-blue-600" />
-                  Gestão de Entrega
-                </h1>
-                <p className="text-sm text-gray-500">Crie, monitore e gerencie entregas e romaneios</p>
-              </div>
-            </div>
-            <div className="flex items-center gap-3">
-              <button
-                onClick={() => setShowFilters(!showFilters)}
-                className={`inline-flex items-center px-4 py-2 rounded-lg border text-sm font-medium transition-colors ${showFilters ? 'bg-blue-50 border-blue-200 text-blue-700' : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'}`}
-              >
-                <Filter className="h-4 w-4 mr-2" />
-                Filtros
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div className="w-full px-4 sm:px-6 lg:px-8 py-6 space-y-6">
+      <div className="w-full px-4 sm:px-6 lg:px-8 pb-6 pt-2 space-y-6">
 
         {/* Quick navigation */}
-        <div className="sticky top-[72px] z-10">
-          <div className="bg-white/90 backdrop-blur shadow-sm border border-gray-200 rounded-xl px-4 py-3 flex items-center justify-between gap-3">
+        <div className="mb-2">
+          <div className="bg-white shadow-sm border border-gray-200 rounded-xl px-4 py-3 flex items-center justify-between gap-3">
             <div className="flex items-center gap-2 text-sm text-gray-700">
               <MapPin className="h-4 w-4 text-blue-500" />
               Acesso rápido

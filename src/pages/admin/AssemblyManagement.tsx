@@ -110,7 +110,6 @@ class AssemblyManagementErrorBoundary extends React.Component<
         </div>
       );
     }
-
     return this.props.children;
   }
 }
@@ -1869,73 +1868,24 @@ function AssemblyManagementContent() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 pb-20">
-
-      {/* Header */}
-      <div className="bg-white border-b border-gray-200 sticky top-0 z-20 shadow-sm">
-        <div className="w-full px-4 sm:px-6 lg:px-8 py-4">
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-            <div className="flex items-center gap-4">
-              <button
-                onClick={() => navigate(-1)}
-                className="p-2 -ml-2 hover:bg-gray-100 rounded-lg text-gray-600 transition-colors"
-                title="Voltar"
-              >
-                <ArrowLeft className="h-6 w-6" />
-              </button>
-              <div>
-                <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
-                  <Hammer className="h-6 w-6 text-blue-600" />
-                  Gestão de Montagem
-                </h1>
-                <p className="text-sm text-gray-500">Crie, monitore e gerencie montagens e rotas de montagem</p>
-              </div>
-            </div>
-            <div className="flex items-center gap-3">
-              <button
-                onClick={() => setShowFilters(!showFilters)}
-                className={`inline-flex items-center px-4 py-2 rounded-lg border text-sm font-medium transition-colors ${showFilters ? 'bg-blue-50 border-blue-200 text-blue-700' : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'}`}
-              >
-                <Filter className="h-4 w-4 mr-2" />
-                Filtros
-              </button>
-              <button
-                onClick={() => setShowLaunchModal(true)}
-                className="inline-flex items-center px-4 py-2 rounded-lg border text-sm font-medium transition-colors bg-orange-50 border-orange-200 text-orange-700 hover:bg-orange-100"
-                title="Lançar Troca ou Assistência Avulsa"
-              >
-                <FilePlus className="h-4 w-4 mr-2" />
-                Lançamento Avulso
-              </button>
-              <button
-                onClick={() => loadData(false)}
-                disabled={loading}
-                className="inline-flex items-center px-4 py-2 rounded-lg border text-sm font-medium transition-colors bg-white border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50"
-              >
-                <RefreshCcw className={`h-4 w-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
-                Recarregar
-              </button>
-              <button
-                onClick={() => { try { localStorage.setItem('am_showCreateModal', '1'); } catch { } setShowCreateModal(true); }}
-                disabled={selectedOrders.size === 0}
-                className="inline-flex items-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm transition-all transform active:scale-95"
-              >
-                <Plus className="h-4 w-4 mr-2" />
-                Criar Rota de Montagem ({selectedOrders.size})
-              </button>
-            </div>
+    <div className="w-full pb-20">
+      {loading && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-white/70">
+          <div className="flex flex-col items-center">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mb-4"></div>
+            <span className="text-gray-700 font-medium">Carregando painel de montagem...</span>
           </div>
         </div>
-      </div>
+      )}
 
-      <div className="w-full px-4 sm:px-6 lg:px-8 py-6 space-y-6">
+      <div className="w-full px-4 sm:px-6 lg:px-8 pb-6 pt-2 space-y-6">
 
         {!loading && (
           <>
 
             {/* Quick navigation */}
-            <div className="sticky top-[72px] z-10">
-              <div className="bg-white/90 backdrop-blur shadow-sm border border-gray-200 rounded-xl px-4 py-3 flex items-center justify-between gap-3">
+            <div className="mb-2">
+              <div className="bg-white shadow-sm border border-gray-200 rounded-xl px-4 py-3 flex items-center justify-between gap-3">
                 <div className="flex items-center gap-2 text-sm text-gray-700">
                   <MapPin className="h-4 w-4 text-blue-500" />
                   Acesso rápido
@@ -1958,246 +1908,274 @@ function AssemblyManagementContent() {
             </div>
 
             {/* Filters Panel */}
-            {showFilters && (
-              <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5 animate-in slide-in-from-top-2 duration-200">
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5 animate-in slide-in-from-top-2 duration-200">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
 
-                  {/* Row 1 */}
-                  <div className="space-y-1">
-                    <label className="text-xs font-semibold text-gray-500 uppercase">Pedido</label>
-                    <input
-                      type="text"
-                      value={filterOrder}
-                      onChange={(e) => setFilterOrder(e.target.value)}
-                      placeholder="Nº Pedido"
-                      className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all placeholder:text-gray-400"
-                    />
-                  </div>
-
-                  <div className="space-y-1">
-                    <label className="text-xs font-semibold text-gray-500 uppercase">Cliente</label>
-                    <input
-                      type="text"
-                      value={filterClient}
-                      onChange={(e) => setFilterClient(e.target.value)}
-                      placeholder="Nome do cliente"
-                      className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all placeholder:text-gray-400"
-                    />
-                  </div>
-
-                  <div className="space-y-1">
-                    <label className="text-xs font-semibold text-gray-500 uppercase">Cidade</label>
-                    <MultiSelect
-                      options={cityOptions}
-                      selected={filterCity}
-                      onChange={setFilterCity}
-                      placeholder="Todas"
-                    />
-                  </div>
-
-                  <div className="space-y-1">
-                    <label className="text-xs font-semibold text-gray-500 uppercase">Bairro</label>
-                    <MultiSelect
-                      options={neighborhoodOptions}
-                      selected={filterNeighborhood}
-                      onChange={setFilterNeighborhood}
-                      placeholder="Todos"
-                    />
-                  </div>
-
-                  {/* Row 2 */}
-                  <div className="space-y-1">
-                    <label className="text-xs font-semibold text-gray-500 uppercase">Data Venda (Período)</label>
-                    <div className="w-full">
-                      <DatePicker
-                        selectsRange={true}
-                        startDate={stringToDate(filterSaleDateStart)}
-                        endDate={stringToDate(filterSaleDateEnd)}
-                        onChange={(update) => {
-                          const [start, end] = update;
-                          setFilterSaleDateStart(dateToString(start));
-                          setFilterSaleDateEnd(dateToString(end));
-                        }}
-                        isClearable={true}
-                        locale="pt-BR"
-                        dateFormat="dd/MM/yyyy"
-                        placeholderText="Selecione o período"
-                        className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all text-gray-600 text-sm"
-                        wrapperClassName="w-full"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="space-y-1">
-                    <label className="text-xs font-semibold text-gray-500 uppercase">Data Entrega (Período)</label>
-                    <div className="w-full">
-                      <DatePicker
-                        selectsRange={true}
-                        startDate={stringToDate(filterDeliveryDateStart)}
-                        endDate={stringToDate(filterDeliveryDateEnd)}
-                        onChange={(update) => {
-                          const [start, end] = update;
-                          setFilterDeliveryDateStart(dateToString(start));
-                          setFilterDeliveryDateEnd(dateToString(end));
-                        }}
-                        isClearable={true}
-                        locale="pt-BR"
-                        dateFormat="dd/MM/yyyy"
-                        placeholderText="Selecione o período"
-                        className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all text-gray-600 text-sm"
-                        wrapperClassName="w-full"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="space-y-1">
-                    <label className="text-xs font-semibold text-gray-500 uppercase">Previsão Entrega (Período)</label>
-                    <div className="w-full">
-                      <DatePicker
-                        selectsRange={true}
-                        startDate={stringToDate(filterForecastDateStart)}
-                        endDate={stringToDate(filterForecastDateEnd)}
-                        onChange={(update) => {
-                          const [start, end] = update;
-                          setFilterForecastDateStart(dateToString(start));
-                          setFilterForecastDateEnd(dateToString(end));
-                        }}
-                        isClearable={true}
-                        locale="pt-BR"
-                        dateFormat="dd/MM/yyyy"
-                        placeholderText="Selecione o período"
-                        className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all text-gray-600 text-sm"
-                        wrapperClassName="w-full"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="space-y-1">
-                    <label className="text-xs font-semibold text-gray-500 uppercase">Status Prazo</label>
-                    <select value={filterDeadline} onChange={(e) => setFilterDeadline(e.target.value as any)} className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all">
-                      <option value="all">Todos</option>
-                      <option value="within">Dentro do prazo</option>
-                      <option value="out">Fora do prazo</option>
-                    </select>
-                  </div>
-
-                  {/* Row 3 - New Filters */}
-                  <div className="space-y-1">
-                    <label className="text-xs font-semibold text-gray-500 uppercase">Filial</label>
-                    <select value={filterFilialVenda} onChange={(e) => setFilterFilialVenda(e.target.value)} className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all">
-                      <option value="">Todas</option>
-                      {filialOptions.map((c) => (<option key={c} value={c}>{c}</option>))}
-                    </select>
-                  </div>
-
-                  {/* Vendedor, Operacao, FreteFull, Montagem, Retorno */}
-                  <div className="space-y-1">
-                    <label className="text-xs font-semibold text-gray-500 uppercase">Vendedor</label>
-                    <select value={filterSeller} onChange={(e) => setFilterSeller(e.target.value)} className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all">
-                      <option value="">Todos</option>
-                      {sellerOptions.map((c) => (<option key={c} value={c}>{c}</option>))}
-                    </select>
-                  </div>
-
-                  <div className="space-y-1">
-                    <label className="text-xs font-semibold text-gray-500 uppercase">Operação</label>
-                    <select value={filterOperation} onChange={(e) => setFilterOperation(e.target.value)} className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all">
-                      <option value="">Todas</option>
-                      {operationOptions.map((c) => (<option key={c} value={c}>{c}</option>))}
-                    </select>
-                  </div>
-
-                  <div className="space-y-1">
-                    <label className="text-xs font-semibold text-gray-500 uppercase">Departamento</label>
-                    <MultiSelect
-                      options={departmentOptions}
-                      selected={filterDepartment}
-                      onChange={setFilterDepartment}
-                      placeholder="Todos"
-                    />
-                  </div>
-
-                  <div className="space-y-1">
-                    <label className="text-xs font-semibold text-gray-500 uppercase">Subgrupo</label>
-                    <MultiSelect
-                      options={subgroupOptions}
-                      selected={filterSubgroup}
-                      onChange={setFilterSubgroup}
-                      placeholder="Todos"
-                    />
-                  </div>
-
-                  <div className="space-y-1">
-                    <label className="text-xs font-semibold text-gray-500 uppercase">Tipo Serviço</label>
-                    <select value={filterServiceType} onChange={(e) => setFilterServiceType(e.target.value)} className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all">
-                      <option value="">Todos</option>
-                      <option value="normal">Venda Normal</option>
-                      <option value="troca">Troca</option>
-                      <option value="assistencia">Assistência</option>
-                    </select>
-                  </div>
-
-                  <div className="space-y-1">
-                    <label className="text-xs font-semibold text-gray-500 uppercase">Retorno</label>
-                    <div className="flex items-center gap-2 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg">
-                      <input id="freturned" type="checkbox" className="h-4 w-4" checked={filterReturned} onChange={(e) => setFilterReturned(e.target.checked)} />
-                      <label htmlFor="freturned" className="text-sm text-gray-700">Apenas pedidos retornados</label>
-                    </div>
-                  </div>
-
-                  <div className="space-y-1">
-                    <label className="text-xs font-semibold text-gray-500 uppercase">Frete Full</label>
-                    <div className="flex items-center gap-2 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg">
-                      <input id="ffull" type="checkbox" className="h-4 w-4" checked={filterFull} onChange={(e) => setFilterFull(e.target.checked)} />
-                      <label htmlFor="ffull" className="text-sm text-gray-700">Apenas pedidos Full</label>
-                    </div>
-                  </div>
-
-                  <div className="space-y-1">
-                    <label className="text-xs font-semibold text-gray-500 uppercase">Tem Montagem</label>
-                    <div className="flex items-center gap-2 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg">
-                      <input id="fmont" type="checkbox" className="h-4 w-4" checked={filterHasAssembly} onChange={(e) => setFilterHasAssembly(e.target.checked)} />
-                      <label htmlFor="fmont" className="text-sm text-gray-700">Apenas produtos com Montagem</label>
-                    </div>
-                  </div>
-
+                {/* Row 1 */}
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-gray-500 uppercase">Pedido</label>
+                  <input
+                    type="text"
+                    value={filterOrder}
+                    onChange={(e) => setFilterOrder(e.target.value)}
+                    placeholder="Nº Pedido"
+                    className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all placeholder:text-gray-400"
+                  />
                 </div>
 
-                <div className="flex justify-end mt-4 pt-4 border-t border-gray-100">
-                  <button
-                    onClick={() => {
-                      setFilterCity([]);
-                      setFilterNeighborhood([]);
-                      setFilterDeadline('all');
-                      setFilterOrder('');
-                      setFilterClient('');
-                      setFilterSaleDateStart('');
-                      setFilterSaleDateEnd('');
-                      setFilterDeliveryDateStart('');
-                      setFilterDeliveryDateEnd('');
-                      setFilterForecastDateStart('');
-                      setFilterForecastDateEnd('');
-                      setFilterReturned(false);
-                      setFilterFull(false);
-                      setFilterServiceType('');
-                      setFilterDepartment([]);
-                      setFilterSubgroup([]);
-                      setFilterFilialVenda('');
-                      setFilterLocalEstocagem('');
-                      setFilterSeller('');
-                      setFilterOperation('');
-                      setFilterBrand('');
-                      setFilterFreightFull('');
-                      setFilterHasAssembly(false);
-                      setStrictLocal(false);
-                    }}
-                    className="text-sm text-red-600 hover:text-red-800 font-medium flex items-center"
-                  >
-                    <X className="h-3 w-3 mr-1" /> Limpar filtros
-                  </button>
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-gray-500 uppercase">Cliente</label>
+                  <input
+                    type="text"
+                    value={filterClient}
+                    onChange={(e) => setFilterClient(e.target.value)}
+                    placeholder="Nome do cliente"
+                    className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all placeholder:text-gray-400"
+                  />
                 </div>
+
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-gray-500 uppercase">Cidade</label>
+                  <MultiSelect
+                    options={cityOptions}
+                    selected={filterCity}
+                    onChange={setFilterCity}
+                    placeholder="Todas"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-gray-500 uppercase">Bairro</label>
+                  <MultiSelect
+                    options={neighborhoodOptions}
+                    selected={filterNeighborhood}
+                    onChange={setFilterNeighborhood}
+                    placeholder="Todos"
+                  />
+                </div>
+
+                {/* Row 2 */}
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-gray-500 uppercase">Data Venda (Período)</label>
+                  <div className="w-full">
+                    <DatePicker
+                      selectsRange={true}
+                      startDate={stringToDate(filterSaleDateStart)}
+                      endDate={stringToDate(filterSaleDateEnd)}
+                      onChange={(update) => {
+                        const [start, end] = update;
+                        setFilterSaleDateStart(dateToString(start));
+                        setFilterSaleDateEnd(dateToString(end));
+                      }}
+                      isClearable={true}
+                      locale="pt-BR"
+                      dateFormat="dd/MM/yyyy"
+                      placeholderText="Selecione o período"
+                      className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all text-gray-600 text-sm"
+                      wrapperClassName="w-full"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-gray-500 uppercase">Data Entrega (Período)</label>
+                  <div className="w-full">
+                    <DatePicker
+                      selectsRange={true}
+                      startDate={stringToDate(filterDeliveryDateStart)}
+                      endDate={stringToDate(filterDeliveryDateEnd)}
+                      onChange={(update) => {
+                        const [start, end] = update;
+                        setFilterDeliveryDateStart(dateToString(start));
+                        setFilterDeliveryDateEnd(dateToString(end));
+                      }}
+                      isClearable={true}
+                      locale="pt-BR"
+                      dateFormat="dd/MM/yyyy"
+                      placeholderText="Selecione o período"
+                      className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all text-gray-600 text-sm"
+                      wrapperClassName="w-full"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-gray-500 uppercase">Previsão Entrega (Período)</label>
+                  <div className="w-full">
+                    <DatePicker
+                      selectsRange={true}
+                      startDate={stringToDate(filterForecastDateStart)}
+                      endDate={stringToDate(filterForecastDateEnd)}
+                      onChange={(update) => {
+                        const [start, end] = update;
+                        setFilterForecastDateStart(dateToString(start));
+                        setFilterForecastDateEnd(dateToString(end));
+                      }}
+                      isClearable={true}
+                      locale="pt-BR"
+                      dateFormat="dd/MM/yyyy"
+                      placeholderText="Selecione o período"
+                      className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all text-gray-600 text-sm"
+                      wrapperClassName="w-full"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-gray-500 uppercase">Status Prazo</label>
+                  <select value={filterDeadline} onChange={(e) => setFilterDeadline(e.target.value as any)} className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all">
+                    <option value="all">Todos</option>
+                    <option value="within">Dentro do prazo</option>
+                    <option value="out">Fora do prazo</option>
+                  </select>
+                </div>
+
+                {/* Row 3 - New Filters */}
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-gray-500 uppercase">Filial</label>
+                  <select value={filterFilialVenda} onChange={(e) => setFilterFilialVenda(e.target.value)} className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all">
+                    <option value="">Todas</option>
+                    {filialOptions.map((c) => (<option key={c} value={c}>{c}</option>))}
+                  </select>
+                </div>
+
+                {/* Vendedor, Operacao, FreteFull, Montagem, Retorno */}
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-gray-500 uppercase">Vendedor</label>
+                  <select value={filterSeller} onChange={(e) => setFilterSeller(e.target.value)} className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all">
+                    <option value="">Todos</option>
+                    {sellerOptions.map((c) => (<option key={c} value={c}>{c}</option>))}
+                  </select>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-gray-500 uppercase">Operação</label>
+                  <select value={filterOperation} onChange={(e) => setFilterOperation(e.target.value)} className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all">
+                    <option value="">Todas</option>
+                    {operationOptions.map((c) => (<option key={c} value={c}>{c}</option>))}
+                  </select>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-gray-500 uppercase">Departamento</label>
+                  <MultiSelect
+                    options={departmentOptions}
+                    selected={filterDepartment}
+                    onChange={setFilterDepartment}
+                    placeholder="Todos"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-gray-500 uppercase">Subgrupo</label>
+                  <MultiSelect
+                    options={subgroupOptions}
+                    selected={filterSubgroup}
+                    onChange={setFilterSubgroup}
+                    placeholder="Todos"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-gray-500 uppercase">Tipo Serviço</label>
+                  <select value={filterServiceType} onChange={(e) => setFilterServiceType(e.target.value)} className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all">
+                    <option value="">Todos</option>
+                    <option value="normal">Venda Normal</option>
+                    <option value="troca">Troca</option>
+                    <option value="assistencia">Assistência</option>
+                  </select>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-gray-500 uppercase">Retorno</label>
+                  <div className="flex items-center gap-2 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg">
+                    <input id="freturned" type="checkbox" className="h-4 w-4" checked={filterReturned} onChange={(e) => setFilterReturned(e.target.checked)} />
+                    <label htmlFor="freturned" className="text-sm text-gray-700">Apenas pedidos retornados</label>
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-gray-500 uppercase">Frete Full</label>
+                  <div className="flex items-center gap-2 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg">
+                    <input id="ffull" type="checkbox" className="h-4 w-4" checked={filterFull} onChange={(e) => setFilterFull(e.target.checked)} />
+                    <label htmlFor="ffull" className="text-sm text-gray-700">Apenas pedidos Full</label>
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-gray-500 uppercase">Tem Montagem</label>
+                  <div className="flex items-center gap-2 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg">
+                    <input id="fmont" type="checkbox" className="h-4 w-4" checked={filterHasAssembly} onChange={(e) => setFilterHasAssembly(e.target.checked)} />
+                    <label htmlFor="fmont" className="text-sm text-gray-700">Apenas produtos com Montagem</label>
+                  </div>
+                </div>
+
               </div>
-            )}
+
+              <div className="flex justify-end mt-4 pt-4 border-t border-gray-100">
+                <button
+                  onClick={() => {
+                    setFilterCity([]);
+                    setFilterNeighborhood([]);
+                    setFilterDeadline('all');
+                    setFilterOrder('');
+                    setFilterClient('');
+                    setFilterSaleDateStart('');
+                    setFilterSaleDateEnd('');
+                    setFilterDeliveryDateStart('');
+                    setFilterDeliveryDateEnd('');
+                    setFilterForecastDateStart('');
+                    setFilterForecastDateEnd('');
+                    setFilterReturned(false);
+                    setFilterFull(false);
+                    setFilterServiceType('');
+                    setFilterDepartment([]);
+                    setFilterSubgroup([]);
+                    setFilterFilialVenda('');
+                    setFilterLocalEstocagem('');
+                    setFilterSeller('');
+                    setFilterOperation('');
+                    setFilterBrand('');
+                    setFilterFreightFull('');
+                    setFilterHasAssembly(false);
+                    setStrictLocal(false);
+                  }}
+                  className="text-sm text-red-600 hover:text-red-800 font-medium flex items-center"
+                >
+                  <X className="h-3 w-3 mr-1" /> Limpar filtros
+                </button>
+              </div>
+            </div>
+
+            {/* Action Bar */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              <button
+                onClick={() => setShowLaunchModal(true)}
+                className="flex items-center justify-center px-4 py-3 rounded-xl border border-orange-200 text-orange-700 bg-orange-50 hover:bg-orange-100 font-bold transition-all shadow-sm hover:shadow"
+                title="Lançar Troca ou Assistência Avulsa"
+              >
+                <FilePlus className="h-5 w-5 mr-2" />
+                Lançamento Avulso
+              </button>
+
+              <button
+                onClick={() => loadData(false)}
+                disabled={loading}
+                className="flex items-center justify-center px-4 py-3 rounded-xl border border-gray-200 text-gray-700 bg-white hover:bg-gray-50 font-bold transition-all shadow-sm hover:shadow disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                <RefreshCcw className={`h-5 w-5 mr-2 ${loading ? 'animate-spin' : ''}`} />
+                Recarregar Dados
+              </button>
+
+              <button
+                onClick={() => { try { localStorage.setItem('am_showCreateModal', '1'); } catch { } setShowCreateModal(true); }}
+                disabled={selectedOrders.size === 0}
+                className="flex items-center justify-center px-4 py-3 rounded-xl bg-blue-600 text-white hover:bg-blue-700 font-bold transition-all shadow-sm hover:shadow disabled:opacity-60 disabled:cursor-not-allowed disabled:shadow-none transform active:scale-95"
+              >
+                <Plus className="h-5 w-5 mr-2" />
+                Criar Rota ({selectedOrders.size})
+              </button>
+            </div>
 
             {/* Orders Selection Card */}
             <div ref={ordersSectionRef} className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
@@ -2700,7 +2678,6 @@ function AssemblyManagementContent() {
                 )}
               </div>
             </div>
-
           </>)}
       </div>
 
@@ -3182,9 +3159,9 @@ function AssemblyManagementContent() {
                           if (!webhookUrl) {
                             try {
                               const { data } = await supabase.from('webhook_settings').select('url').eq('key', 'envia_grupo').eq('active', true).single();
-                              webhookUrl = data?.url || 'https://n8n.lojaodosmoveis.shop/webhook/envia_grupo';
+                              webhookUrl = data?.url || 'https://n8n.lojaodosmoveis.shop/webhook-test/envia_grupo';
                             } catch {
-                              webhookUrl = 'https://n8n.lojaodosmoveis.shop/webhook/envia_grupo';
+                              webhookUrl = 'https://n8n.lojaodosmoveis.shop/webhook-test/envia_grupo';
                             }
                           }
                           // Envia o nome do montador no campo driver_name e route_code como route_id
@@ -3339,7 +3316,7 @@ function AssemblyManagementContent() {
                         {(() => {
                           const byOrder: Record<string, AssemblyProductWithDetails[]> = {};
 
-                          // Use products directly from the route object if available (e.g. from auto-open), 
+                          // Use products directly from the route object if available (e.g. from auto-open),
                           // otherwise fallback to filtering the global list.
                           const productsSource = ((selectedRoute as any).assembly_products && (selectedRoute as any).assembly_products.length > 0)
                             ? (selectedRoute as any).assembly_products
@@ -3750,177 +3727,178 @@ function AssemblyManagementContent() {
       }
 
       {/* Modal de Ordenação do PDF */}
-      {showPdfSortModal && selectedRoute && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 overflow-hidden">
-            <div className="bg-gradient-to-r from-blue-600 to-blue-700 px-6 py-4">
-              <h3 className="text-lg font-bold text-white">Gerar Rota de Montagem</h3>
-              <p className="text-blue-100 text-sm">Escolha a ordenação dos pedidos</p>
-            </div>
-            <div className="p-6 space-y-4">
-              <div className="space-y-3">
-                <label className="flex items-center p-3 border rounded-lg cursor-pointer hover:bg-gray-50 transition-colors">
-                  <input
-                    type="radio"
-                    name="pdfSort"
-                    value="data_venda"
-                    checked={pdfSortOption === 'data_venda'}
-                    onChange={() => setPdfSortOption('data_venda')}
-                    className="w-4 h-4 text-blue-600 border-gray-300 focus:ring-blue-500"
-                  />
-                  <div className="ml-3">
-                    <span className="font-medium text-gray-900">Por Data de Venda</span>
-                    <p className="text-sm text-gray-500">Da mais antiga para a mais recente</p>
-                  </div>
-                </label>
-                <label className="flex items-center p-3 border rounded-lg cursor-pointer hover:bg-gray-50 transition-colors">
-                  <input
-                    type="radio"
-                    name="pdfSort"
-                    value="cidade"
-                    checked={pdfSortOption === 'cidade'}
-                    onChange={() => setPdfSortOption('cidade')}
-                    className="w-4 h-4 text-blue-600 border-gray-300 focus:ring-blue-500"
-                  />
-                  <div className="ml-3">
-                    <span className="font-medium text-gray-900">Por Cidade</span>
-                    <p className="text-sm text-gray-500">Ordem alfabética (A-Z)</p>
-                  </div>
-                </label>
-                <label className="flex items-center p-3 border rounded-lg cursor-pointer hover:bg-gray-50 transition-colors">
-                  <input
-                    type="radio"
-                    name="pdfSort"
-                    value="previsao_montagem"
-                    checked={pdfSortOption === 'previsao_montagem'}
-                    onChange={() => setPdfSortOption('previsao_montagem')}
-                    className="w-4 h-4 text-blue-600 border-gray-300 focus:ring-blue-500"
-                  />
-                  <div className="ml-3">
-                    <span className="font-medium text-gray-900">Por Previsão de Montagem</span>
-                    <p className="text-sm text-gray-500">Da mais antiga para a mais recente</p>
-                  </div>
-                </label>
-                <label className="flex items-center p-3 border rounded-lg cursor-pointer hover:bg-gray-50 transition-colors">
-                  <input
-                    type="radio"
-                    name="pdfSort"
-                    value="cliente"
-                    checked={pdfSortOption === 'cliente'}
-                    onChange={() => setPdfSortOption('cliente')}
-                    className="w-4 h-4 text-blue-600 border-gray-300 focus:ring-blue-500"
-                  />
-                  <div className="ml-3">
-                    <span className="font-medium text-gray-900">Por Cliente</span>
-                    <p className="text-sm text-gray-500">Ordem alfabética (A-Z)</p>
-                  </div>
-                </label>
+      {
+        showPdfSortModal && selectedRoute && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 overflow-hidden">
+              <div className="bg-gradient-to-r from-blue-600 to-blue-700 px-6 py-4">
+                <h3 className="text-lg font-bold text-white">Gerar Rota de Montagem</h3>
+                <p className="text-blue-100 text-sm">Escolha a ordenação dos pedidos</p>
+              </div>
+              <div className="p-6 space-y-4">
+                <div className="space-y-3">
+                  <label className="flex items-center p-3 border rounded-lg cursor-pointer hover:bg-gray-50 transition-colors">
+                    <input
+                      type="radio"
+                      name="pdfSort"
+                      value="data_venda"
+                      checked={pdfSortOption === 'data_venda'}
+                      onChange={() => setPdfSortOption('data_venda')}
+                      className="w-4 h-4 text-blue-600 border-gray-300 focus:ring-blue-500"
+                    />
+                    <div className="ml-3">
+                      <span className="font-medium text-gray-900">Por Data de Venda</span>
+                      <p className="text-sm text-gray-500">Da mais antiga para a mais recente</p>
+                    </div>
+                  </label>
+                  <label className="flex items-center p-3 border rounded-lg cursor-pointer hover:bg-gray-50 transition-colors">
+                    <input
+                      type="radio"
+                      name="pdfSort"
+                      value="cidade"
+                      checked={pdfSortOption === 'cidade'}
+                      onChange={() => setPdfSortOption('cidade')}
+                      className="w-4 h-4 text-blue-600 border-gray-300 focus:ring-blue-500"
+                    />
+                    <div className="ml-3">
+                      <span className="font-medium text-gray-900">Por Cidade</span>
+                      <p className="text-sm text-gray-500">Ordem alfabética (A-Z)</p>
+                    </div>
+                  </label>
+                  <label className="flex items-center p-3 border rounded-lg cursor-pointer hover:bg-gray-50 transition-colors">
+                    <input
+                      type="radio"
+                      name="pdfSort"
+                      value="previsao_montagem"
+                      checked={pdfSortOption === 'previsao_montagem'}
+                      onChange={() => setPdfSortOption('previsao_montagem')}
+                      className="w-4 h-4 text-blue-600 border-gray-300 focus:ring-blue-500"
+                    />
+                    <div className="ml-3">
+                      <span className="font-medium text-gray-900">Por Previsão de Montagem</span>
+                      <p className="text-sm text-gray-500">Da mais antiga para a mais recente</p>
+                    </div>
+                  </label>
+                  <label className="flex items-center p-3 border rounded-lg cursor-pointer hover:bg-gray-50 transition-colors">
+                    <input
+                      type="radio"
+                      name="pdfSort"
+                      value="cliente"
+                      checked={pdfSortOption === 'cliente'}
+                      onChange={() => setPdfSortOption('cliente')}
+                      className="w-4 h-4 text-blue-600 border-gray-300 focus:ring-blue-500"
+                    />
+                    <div className="ml-3">
+                      <span className="font-medium text-gray-900">Por Cliente</span>
+                      <p className="text-sm text-gray-500">Ordem alfabética (A-Z)</p>
+                    </div>
+                  </label>
+                </div>
+              </div>
+              <div className="px-6 py-4 bg-gray-50 flex justify-end gap-3">
+                <button
+                  onClick={() => setShowPdfSortModal(false)}
+                  className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50"
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={async () => {
+                    try {
+                      if (!selectedRoute) return;
+                      const route = selectedRoute as any;
+                      const products = assemblyInRoutes.filter(ap => ap.assembly_route_id === route.id);
+                      let orders = products.map(p => p.order).filter(Boolean) as any[];
+
+                      // Ordenar pedidos conforme opção selecionada
+                      const parseDate = (d: any) => {
+                        if (!d) return new Date(0);
+                        try { return new Date(d); } catch { return new Date(0); }
+                      };
+
+                      if (pdfSortOption === 'data_venda') {
+                        orders.sort((a, b) => {
+                          const dateA = parseDate(a.data_venda || a.raw_json?.data_venda);
+                          const dateB = parseDate(b.data_venda || b.raw_json?.data_venda);
+                          return dateA.getTime() - dateB.getTime();
+                        });
+                      } else if (pdfSortOption === 'cidade') {
+                        orders.sort((a, b) => {
+                          const cityA = (a.address_json?.city || a.raw_json?.cidade || '').toLowerCase();
+                          const cityB = (b.address_json?.city || b.raw_json?.cidade || '').toLowerCase();
+                          return cityA.localeCompare(cityB);
+                        });
+                      } else if (pdfSortOption === 'previsao_montagem') {
+                        orders.sort((a, b) => {
+                          const dateA = parseDate(a.previsao_montagem || a.previsao_entrega || a.raw_json?.previsao_montagem || a.raw_json?.previsao_entrega);
+                          const dateB = parseDate(b.previsao_montagem || b.previsao_entrega || b.raw_json?.previsao_montagem || b.raw_json?.previsao_entrega);
+                          return dateA.getTime() - dateB.getTime();
+                        });
+                      } else if (pdfSortOption === 'cliente') {
+                        orders.sort((a, b) => {
+                          const clientA = (a.customer_name || a.raw_json?.nome_cliente || '').toLowerCase();
+                          const clientB = (b.customer_name || b.raw_json?.nome_cliente || '').toLowerCase();
+                          return clientA.localeCompare(clientB);
+                        });
+                      }
+
+                      // Criar routeOrders na ordem dos orders ordenados
+                      const routeOrders = orders.map((order, idx) => {
+                        const product = products.find(p => p.order_id === order.id);
+                        return {
+                          id: String(product?.id || ''),
+                          route_id: String(route.id),
+                          order_id: String(order.id),
+                          sequence: idx + 1,
+                          status: 'pending',
+                          created_at: route.created_at,
+                          updated_at: route.updated_at
+                        };
+                      }) as any[];
+
+                      const routeData: any = {
+                        id: route.id,
+                        name: route.name,
+                        driver_id: '',
+                        vehicle_id: '',
+                        conferente: '',
+                        observations: route.observations,
+                        status: route.status as any,
+                        created_at: route.created_at,
+                        updated_at: route.updated_at,
+                        route_code: (route as any).route_code
+                      };
+                      const m = montadores.find(m => m.id === (route as any).assembler_id);
+                      const v = vehicles.find(v => v.id === (route as any).vehicle_id);
+                      const data = {
+                        route: routeData,
+                        routeOrders,
+                        driver: { id: '', user_id: '', cpf: '', active: true, name: '—', user: { id: '', email: '', name: '—', role: 'driver', created_at: new Date().toISOString() } } as any,
+                        vehicle: undefined,
+                        orders: orders as any,
+                        generatedAt: new Date().toISOString(),
+                        assemblyInstallerName: m?.name || m?.email || '—',
+                        assemblyVehicleModel: v?.model || '',
+                        assemblyVehiclePlate: v?.plate || ''
+                      };
+                      const pdfBytes = await DeliverySheetGenerator.generateDeliverySheet(data, 'Rota de Montagem');
+                      DeliverySheetGenerator.openPDFInNewTab(pdfBytes);
+                      setShowPdfSortModal(false);
+                    } catch (e) {
+                      console.error(e);
+                      toast.error('Erro ao gerar PDF da rota de montagem');
+                    }
+                  }}
+                  className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700"
+                >
+                  Gerar PDF
+                </button>
               </div>
             </div>
-            <div className="px-6 py-4 bg-gray-50 flex justify-end gap-3">
-              <button
-                onClick={() => setShowPdfSortModal(false)}
-                className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50"
-              >
-                Cancelar
-              </button>
-              <button
-                onClick={async () => {
-                  try {
-                    if (!selectedRoute) return;
-                    const route = selectedRoute as any;
-                    const products = assemblyInRoutes.filter(ap => ap.assembly_route_id === route.id);
-                    let orders = products.map(p => p.order).filter(Boolean) as any[];
-
-                    // Ordenar pedidos conforme opção selecionada
-                    const parseDate = (d: any) => {
-                      if (!d) return new Date(0);
-                      try { return new Date(d); } catch { return new Date(0); }
-                    };
-
-                    if (pdfSortOption === 'data_venda') {
-                      orders.sort((a, b) => {
-                        const dateA = parseDate(a.data_venda || a.raw_json?.data_venda);
-                        const dateB = parseDate(b.data_venda || b.raw_json?.data_venda);
-                        return dateA.getTime() - dateB.getTime();
-                      });
-                    } else if (pdfSortOption === 'cidade') {
-                      orders.sort((a, b) => {
-                        const cityA = (a.address_json?.city || a.raw_json?.cidade || '').toLowerCase();
-                        const cityB = (b.address_json?.city || b.raw_json?.cidade || '').toLowerCase();
-                        return cityA.localeCompare(cityB);
-                      });
-                    } else if (pdfSortOption === 'previsao_montagem') {
-                      orders.sort((a, b) => {
-                        const dateA = parseDate(a.previsao_montagem || a.previsao_entrega || a.raw_json?.previsao_montagem || a.raw_json?.previsao_entrega);
-                        const dateB = parseDate(b.previsao_montagem || b.previsao_entrega || b.raw_json?.previsao_montagem || b.raw_json?.previsao_entrega);
-                        return dateA.getTime() - dateB.getTime();
-                      });
-                    } else if (pdfSortOption === 'cliente') {
-                      orders.sort((a, b) => {
-                        const clientA = (a.customer_name || a.raw_json?.nome_cliente || '').toLowerCase();
-                        const clientB = (b.customer_name || b.raw_json?.nome_cliente || '').toLowerCase();
-                        return clientA.localeCompare(clientB);
-                      });
-                    }
-
-                    // Criar routeOrders na ordem dos orders ordenados
-                    const routeOrders = orders.map((order, idx) => {
-                      const product = products.find(p => p.order_id === order.id);
-                      return {
-                        id: String(product?.id || ''),
-                        route_id: String(route.id),
-                        order_id: String(order.id),
-                        sequence: idx + 1,
-                        status: 'pending',
-                        created_at: route.created_at,
-                        updated_at: route.updated_at
-                      };
-                    }) as any[];
-
-                    const routeData: any = {
-                      id: route.id,
-                      name: route.name,
-                      driver_id: '',
-                      vehicle_id: '',
-                      conferente: '',
-                      observations: route.observations,
-                      status: route.status as any,
-                      created_at: route.created_at,
-                      updated_at: route.updated_at,
-                      route_code: (route as any).route_code
-                    };
-                    const m = montadores.find(m => m.id === (route as any).assembler_id);
-                    const v = vehicles.find(v => v.id === (route as any).vehicle_id);
-                    const data = {
-                      route: routeData,
-                      routeOrders,
-                      driver: { id: '', user_id: '', cpf: '', active: true, name: '—', user: { id: '', email: '', name: '—', role: 'driver', created_at: new Date().toISOString() } } as any,
-                      vehicle: undefined,
-                      orders: orders as any,
-                      generatedAt: new Date().toISOString(),
-                      assemblyInstallerName: m?.name || m?.email || '—',
-                      assemblyVehicleModel: v?.model || '',
-                      assemblyVehiclePlate: v?.plate || ''
-                    };
-                    const pdfBytes = await DeliverySheetGenerator.generateDeliverySheet(data, 'Rota de Montagem');
-                    DeliverySheetGenerator.openPDFInNewTab(pdfBytes);
-                    setShowPdfSortModal(false);
-                  } catch (e) {
-                    console.error(e);
-                    toast.error('Erro ao gerar PDF da rota de montagem');
-                  }
-                }}
-                className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700"
-              >
-                Gerar PDF
-              </button>
-            </div>
           </div>
-        </div>
-      )}
-
-    </div>
+        )
+      }
+    </div >
   );
 }
 

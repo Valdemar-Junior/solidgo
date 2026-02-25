@@ -390,23 +390,22 @@ export default function AuditDashboard() {
             </aside>
 
             {/* Main Content */}
-            <main className="flex-1 overflow-auto">
-                {/* Header */}
-                <header className="bg-white border-b border-gray-200 sticky top-0 z-10 px-6 py-4 flex items-center justify-between">
-                    <h2 className="text-xl font-bold text-gray-900">
-                        {activeSection === 'geral' ? 'Auditoria Geral' : 'Auditoria de Venda'}
+            <main className="flex-1 overflow-auto bg-gray-50/50">
+                <div className="px-6 py-4 flex items-center justify-between">
+                    <h2 className="text-xl font-bold text-gray-900 border-l-4 border-blue-500 pl-3">
+                        {activeSection === 'geral' ? 'Auditoria Geral' : 'Auditoria de Venda (Edição de Status)'}
                     </h2>
                     {activeSection === 'geral' && (
                         <button
                             onClick={() => runChecks(false)}
-                            className="flex items-center gap-2 px-4 py-2 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 transition-colors font-medium text-sm"
+                            className="flex items-center gap-2 px-4 py-2 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 transition-colors font-medium text-sm border border-blue-200"
                             disabled={isRefreshing}
                         >
                             <RefreshCw className={isRefreshing ? "animate-spin h-4 w-4" : "h-4 w-4"} />
                             Atualizar
                         </button>
                     )}
-                </header>
+                </div>
 
                 <div className="p-6">
                     {/* AUDITORIA GERAL */}

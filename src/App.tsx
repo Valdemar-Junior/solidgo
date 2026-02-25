@@ -28,6 +28,7 @@ import DiagnosticoOrders from './pages/diagnostico-orders';
 import VerificarColunasOrders from './pages/verificar-colunas';
 import AuditDashboard from './pages/admin/AuditDashboard';
 import Diary from './pages/admin/Diary';
+import AdminLayout from './layouts/AdminLayout';
 
 import ProtectedRoute from './components/ProtectedRoute';
 import { Toaster } from 'sonner';
@@ -77,7 +78,9 @@ function App() {
             path="/admin"
             element={
               <ProtectedRoute allowedRoles={['admin']}>
-                <AdminDashboard />
+                <AdminLayout>
+                  <AdminDashboard />
+                </AdminLayout>
               </ProtectedRoute>
             }
           />
@@ -85,7 +88,9 @@ function App() {
             path="/admin/orders"
             element={
               <ProtectedRoute allowedRoles={['admin']}>
-                <OrdersImport />
+                <AdminLayout>
+                  <OrdersImport />
+                </AdminLayout>
               </ProtectedRoute>
             }
           />
@@ -93,7 +98,9 @@ function App() {
             path="/admin/routes"
             element={
               <ProtectedRoute allowedRoles={['admin']}>
-                <RouteCreation />
+                <AdminLayout>
+                  <RouteCreation />
+                </AdminLayout>
               </ProtectedRoute>
             }
           />
@@ -101,7 +108,9 @@ function App() {
             path="/admin/settings"
             element={
               <ProtectedRoute allowedRoles={['admin']}>
-                <Settings />
+                <AdminLayout>
+                  <Settings />
+                </AdminLayout>
               </ProtectedRoute>
             }
           />
@@ -109,7 +118,9 @@ function App() {
             path="/admin/users-teams"
             element={
               <ProtectedRoute allowedRoles={['admin']}>
-                <UsersTeams />
+                <AdminLayout>
+                  <UsersTeams />
+                </AdminLayout>
               </ProtectedRoute>
             }
           />
@@ -117,7 +128,9 @@ function App() {
             path="/admin/assembly"
             element={
               <ProtectedRoute allowedRoles={['admin']}>
-                <AssemblyManagement />
+                <AdminLayout>
+                  <AssemblyManagement />
+                </AdminLayout>
               </ProtectedRoute>
             }
           />
@@ -125,7 +138,9 @@ function App() {
             path="/admin/order-lookup"
             element={
               <ProtectedRoute allowedRoles={['admin']}>
-                <OrderLookup />
+                <AdminLayout>
+                  <OrderLookup />
+                </AdminLayout>
               </ProtectedRoute>
             }
           />
@@ -133,7 +148,9 @@ function App() {
             path="/admin/reports"
             element={
               <ProtectedRoute allowedRoles={['admin']}>
-                <Reports />
+                <AdminLayout>
+                  <Reports />
+                </AdminLayout>
               </ProtectedRoute>
             }
           />
@@ -141,7 +158,9 @@ function App() {
             path="/admin/audit"
             element={
               <ProtectedRoute allowedRoles={['admin']}>
-                <AuditDashboard />
+                <AdminLayout>
+                  <AuditDashboard />
+                </AdminLayout>
               </ProtectedRoute>
             }
           />
@@ -149,7 +168,9 @@ function App() {
             path="/admin/diary"
             element={
               <ProtectedRoute allowedRoles={['admin']}>
-                <Diary />
+                <AdminLayout>
+                  <Diary />
+                </AdminLayout>
               </ProtectedRoute>
             }
           />

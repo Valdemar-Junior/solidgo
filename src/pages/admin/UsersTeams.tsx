@@ -308,58 +308,36 @@ export default function UsersTeams() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 pb-20">
-      {/* Header */}
-      <div className="bg-white border-b border-gray-200 sticky top-0 z-20 shadow-sm">
-        <div className="w-full px-4 sm:px-6 lg:px-8 py-4">
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-            <div className="flex items-center gap-4">
-              <button
-                onClick={() => navigate(-1)}
-                className="p-2 -ml-2 hover:bg-gray-100 rounded-lg text-gray-600 transition-colors"
-                title="Voltar"
-              >
-                <ArrowLeft className="h-6 w-6" />
-              </button>
-              <div>
-                <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
-                  <Users className="h-6 w-6 text-blue-600" />
-                  Cadastros
-                </h1>
-                <p className="text-sm text-gray-500">Gerencie o acesso ao sistema, equipes de entrega e frota</p>
-              </div>
-            </div>
-            <div className="flex items-center gap-3 bg-gray-100 p-1 rounded-lg">
-              <button
-                onClick={() => setActiveTab('users')}
-                className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${activeTab === 'users' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
-              >
-                Usuários
-              </button>
-              <button
-                onClick={() => setActiveTab('teams')}
-                className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${activeTab === 'teams' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
-              >
-                Equipes
-              </button>
-              <button
-                onClick={() => setActiveTab('vehicles')}
-                className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${activeTab === 'vehicles' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
-              >
-                Veículos
-              </button>
-              <button
-                onClick={() => setActiveTab('routes')}
-                className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${activeTab === 'routes' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
-              >
-                Rotas
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
+    <div className="w-full pb-20">
+      <div className="w-full p-4 sm:p-6 lg:p-8 space-y-6">
 
-      <div className="w-full px-4 sm:px-6 lg:px-8 py-6 space-y-6">
+        {/* Tab Navigation */}
+        <div className="flex overflow-x-auto items-center gap-3 bg-white p-2 rounded-xl shadow-sm border border-gray-200">
+          <button
+            onClick={() => setActiveTab('users')}
+            className={`px-4 py-2 whitespace-nowrap rounded-md text-sm font-medium transition-all ${activeTab === 'users' ? 'bg-blue-50 text-blue-700 shadow-sm border border-blue-100' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}
+          >
+            Usuários
+          </button>
+          <button
+            onClick={() => setActiveTab('teams')}
+            className={`px-4 py-2 whitespace-nowrap rounded-md text-sm font-medium transition-all ${activeTab === 'teams' ? 'bg-blue-50 text-blue-700 shadow-sm border border-blue-100' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}
+          >
+            Equipes
+          </button>
+          <button
+            onClick={() => setActiveTab('vehicles')}
+            className={`px-4 py-2 whitespace-nowrap rounded-md text-sm font-medium transition-all ${activeTab === 'vehicles' ? 'bg-blue-50 text-blue-700 shadow-sm border border-blue-100' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}
+          >
+            Veículos
+          </button>
+          <button
+            onClick={() => setActiveTab('routes')}
+            className={`px-4 py-2 whitespace-nowrap rounded-md text-sm font-medium transition-all ${activeTab === 'routes' ? 'bg-blue-50 text-blue-700 shadow-sm border border-blue-100' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}
+          >
+            Rotas Padrão
+          </button>
+        </div>
 
         {/* Controls */}
         <div className="flex flex-col sm:flex-row justify-between items-center gap-4 bg-white p-4 rounded-xl shadow-sm border border-gray-200">
