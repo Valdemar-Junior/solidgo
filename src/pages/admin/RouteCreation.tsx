@@ -412,7 +412,7 @@ function RouteCreationContent() {
         v['bairro'] = (addr as any)?.neighborhood || raw?.destinatario_bairro || '-';
         v['sku'] = (it as any)?.sku || '-';
         v['produto'] = (it as any)?.name || (it as any)?.descricao || '-';
-        v['quantidade'] = (it as any)?.quantity || 1;
+        v['quantidade'] = (it as any)?.purchased_quantity;
         v['department'] = (it as any)?.department || '-';
         v['brand'] = (it as any)?.brand || '-';
         v['localEstocagem'] = (it as any)?.location || '-';
