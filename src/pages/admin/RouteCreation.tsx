@@ -2410,11 +2410,12 @@ function RouteCreationContent() {
       loadData(false);
 
     } catch (error: any) {
-      console.error('Error creating route:', error);
+      console.error('Error creating route (detailed):', JSON.stringify(error, null, 2));
+      console.error('Original error object:', error);
       if (error?.code === '23505' || error?.status === 409) {
         toast.error('Já existe uma rota com este nome. Por favor, escolha outro.');
       } else {
-        toast.error('Erro ao criar rota: ' + (error?.message || 'Erro desconhecido'));
+        toast.error('Erro ao criar rota: ' + (error?.message || error?.details || 'Erro desconhecido'));
       }
     } finally {
       setSaving(false);
