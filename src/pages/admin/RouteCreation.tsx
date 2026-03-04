@@ -2318,9 +2318,13 @@ function RouteCreationContent() {
         // Generate unique route code
         const routeCode = await generateRouteCode('delivery');
 
-        const { data: routeData, error: routeError } = await supabase
+        // Pre-generate UUID to avoid .select().single() which can cause 404
+        const newRouteId = crypto.randomUUID();
+
+        const { error: routeError } = await supabase
           .from('routes')
           .insert({
+            id: newRouteId,
             name: selectedCatalogRouteName,
             driver_id: selectedDriver,
             vehicle_id: selectedVehicle || null,
@@ -2335,11 +2339,9 @@ function RouteCreationContent() {
             helper_id: selectedHelper || null,
             status: 'pending',
             route_code: routeCode,
-          })
-          .select()
-          .single();
+          });
         if (routeError) throw routeError;
-        targetRouteId = routeData.id;
+        targetRouteId = newRouteId;
       }
       // If adding to existing route, persist assignments if provided
       if (selectedExistingRouteId) {
