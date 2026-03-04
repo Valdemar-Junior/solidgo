@@ -29,17 +29,14 @@ export default function Register() {
     setStatus('Criando sua conta...');
 
     try {
-      const { data, error: signUpError } = await supabase.auth.signUp({
-        email,
-        password,
-        options: {
-          emailRedirectTo: `${window.location.origin}/login`,
-          data: {
-            name,
-            role,
-            phone,
-          },
-        },
+      const { data, error: signUpError } = await supabase.functions.invoke('create-user', {
+        body: {
+          email,
+          password,
+          name,
+          role,
+          phone,
+        }
       });
 
       if (signUpError) {

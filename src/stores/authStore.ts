@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
+import { persist, createJSONStorage } from 'zustand/middleware';
 import { supabase } from '../supabase/client';
 import { toLoginEmailFromName } from '../lib/utils';
 import type { User } from '../types/database';
@@ -119,15 +119,20 @@ export const useAuthStore = create<AuthState>()(
       logout: async () => {
         set({ isLoading: true });
         try {
-          try { localStorage.setItem('auth_lock', '1'); } catch { }
+          try { sessionStorage.setItem('auth_lock', '1'); } catch { }
           await supabase.auth.signOut({ scope: 'local' });
         } catch (error: any) {
           console.warn('Logout warning:', error?.message || error);
         } finally {
           set({ user: null, isAuthenticated: false, isLoading: false, error: null });
+          try { sessionStorage.removeItem('auth-storage'); } catch { }
+          try { sessionStorage.removeItem('sb-auth-token'); } catch { }
+          try { sessionStorage.removeItem('auth_lock'); } catch { }
+
+          // Fallback legacy localstorage cleanup just in case
           try { localStorage.removeItem('auth-storage'); } catch { }
           try { localStorage.removeItem('delivery-app-auth-token'); } catch { }
-          try { localStorage.removeItem('sb-' + 'auth-token'); } catch { }
+          try { localStorage.removeItem('sb-[YOUR_PROJECT_ID]-auth-token'); } catch { }
           try { localStorage.removeItem('auth_lock'); } catch { }
         }
       },
@@ -245,6 +250,7 @@ export const useAuthStore = create<AuthState>()(
     }),
     {
       name: 'auth-storage',
+      storage: typeof window !== 'undefined' ? createJSONStorage(() => sessionStorage) : undefined,
       partialize: (state) => ({
         user: state.user,
         isAuthenticated: state.isAuthenticated,

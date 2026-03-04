@@ -25,11 +25,12 @@ const createDummyClient = () => {
 
 export const supabase = envOk ? createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
+    flowType: 'pkce',
     persistSession: true,
     autoRefreshToken: true,
     detectSessionInUrl: true,
-    storage: localStorage,
-    storageKey: 'delivery-app-auth-token',
+    storage: window.sessionStorage,
+    storageKey: 'sb-auth-token',
   },
   realtime: {
     params: {

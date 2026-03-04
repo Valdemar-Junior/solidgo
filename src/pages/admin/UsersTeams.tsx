@@ -107,67 +107,33 @@ export default function UsersTeams() {
     try {
       const pwd = uPassword.trim() ? uPassword.trim() : genPassword();
       setGeneratedPassword(pwd);
+
       let pseudoEmail = toLoginEmailFromName(uName);
       const { data: existsUserEmail } = await supabase.from('users').select('id').eq('email', pseudoEmail).maybeSingle();
       if (existsUserEmail?.id) {
         const base = slugifyName(uName);
         pseudoEmail = `${base}.${String(Date.now()).slice(-4)}@solidgo.local`;
       }
-      const { data: prev } = await supabase.auth.getSession();
-      localStorage.setItem('auth_lock', '1');
-      let uid = '';
-      let signRes = await supabase.auth.signUp({ email: pseudoEmail, password: pwd });
-      if (signRes.error) {
-        const msg = String(signRes.error.message || '').toLowerCase();
-        if (msg.includes('already registered') || msg.includes('user already exists') || signRes.error.status === 422) {
-          const altEmail = `${slugifyName(uName)}.${String(Date.now()).slice(-6)}@solidgo.local`;
-          const altSignup = await supabase.auth.signUp({ email: altEmail, password: pwd });
-          if (altSignup.error) throw altSignup.error;
-          uid = altSignup.data.user?.id || '';
-          pseudoEmail = altEmail;
-        } else {
-          throw signRes.error;
+
+      const { data: resData, error: invokeErr } = await supabase.functions.invoke('create-user', {
+        body: {
+          email: pseudoEmail,
+          password: pwd,
+          name: uName.trim(),
+          role: uRole
         }
-      } else {
-        uid = signRes.data.user?.id || '';
-      }
-      if (!uid) throw new Error('Falha ao obter id do usuário');
+      });
 
-      if (prev?.session?.access_token && prev?.session?.refresh_token) {
-        await supabase.auth.setSession({ access_token: prev.session.access_token, refresh_token: prev.session.refresh_token });
-      }
+      if (invokeErr) throw invokeErr;
+      if (resData?.error) throw new Error(resData.error);
 
-      const { error: insErr } = await supabase.from('users').upsert({
-        id: uid,
-        email: pseudoEmail,
-        name: uName.trim(),
-        role: uRole,
-        must_change_password: true,
-      }, { onConflict: 'id' });
-      if (insErr) throw insErr;
-
-      if (uRole === 'driver') {
-        try {
-          const { data: drvExists } = await supabase.from('drivers').select('id').eq('user_id', uid).maybeSingle();
-          if (!drvExists?.id) {
-            await supabase.from('drivers').insert({ user_id: uid, active: true });
-          }
-        } catch (error) {
-          try {
-            await supabase.from('drivers').upsert({ user_id: uid, active: true }, { onConflict: 'user_id' });
-          } catch { }
-        }
-      }
       toast.success('Usuário criado com sucesso!');
       setUName(''); setUPassword(''); setURole('driver');
       await loadAll();
-      // Keep modal open to show password, or close it?
-      // Better to keep it open if showing password, but maybe design a success state in modal
     } catch (e: any) {
       console.error(e);
       toast.error(String(e.message || 'Falha ao criar usuário'));
     } finally {
-      localStorage.removeItem('auth_lock');
       setIsCreatingUser(false);
     }
   };
