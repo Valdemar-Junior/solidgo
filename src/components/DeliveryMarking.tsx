@@ -575,83 +575,8 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
           clearDeliveryProofState(order.id);
         }
 
-        // Verificar se o pedido tem produtos com montagem
-        try {
-          const { data: orderData, error: orderError } = await supabase
-            .from('orders')
-            .select('id, items_json, customer_name, phone, address_json, order_id_erp')
-            .eq('id', order.order_id)
-            .single();
-
-          if (orderError) {
-            console.error('Erro ao buscar pedido para montagem:', orderError);
-          } else if (orderData && orderData.items_json) {
-            console.log('[DeliveryMarking] Verificando montagem para pedido:', orderData.id, 'items:', orderData.items_json.length);
-
-            const produtosComMontagem = orderData.items_json.filter((item: any) =>
-              // Check multiple variations of has_assembly value (case variations + boolean)
-              ['SIM', 'sim', 'Sim', 'true', '1', 'yes', 'YES', 'Yes'].includes(String(item.has_assembly)) ||
-              item.possui_montagem === true || item.possui_montagem === 'true'
-            );
-
-            console.log('[DeliveryMarking] Produtos com montagem encontrados:', produtosComMontagem.length);
-
-            if (produtosComMontagem.length > 0) {
-              // Verificar se já existem registros PARA ESTE PEDIDO (order_id é único)
-              const { data: existing } = await supabase
-                .from('assembly_products')
-                .select('id')
-                .eq('order_id', orderData.id);
-
-              console.log('[DeliveryMarking] Já existentes para este pedido:', (existing || []).length);
-
-              // Só insere se NÃO existir nenhum registro para este pedido
-              if (!existing || existing.length === 0) {
-                // Criar registro de montagem pendente
-                const assemblyProducts = produtosComMontagem.map((item: any) => ({
-                  order_id: orderData.id,
-                  product_name: item.name,
-                  product_sku: item.sku,
-                  customer_name: orderData.customer_name,
-                  customer_phone: orderData.phone,
-                  installation_address: orderData.address_json,
-                  status: 'pending',
-                  created_at: new Date().toISOString(),
-                  updated_at: new Date().toISOString()
-                }));
-
-                // Inserir produtos para montagem (sem assembly_route_id ainda)
-                const { error: insertError } = await supabase.from('assembly_products').insert(assemblyProducts);
-
-                if (insertError) {
-                  console.error('[DeliveryMarking] Erro ao inserir assembly_products:', insertError);
-                } else {
-                  console.log('[DeliveryMarking] Inseridos', assemblyProducts.length, 'produtos de montagem com sucesso');
-
-                  // Auditoria: pedido passou a requerer montagem
-                  try {
-                    const userId = (await supabase.auth.getUser()).data.user?.id || '';
-                    await supabase.from('audit_logs').insert({
-                      entity_type: 'order',
-                      entity_id: orderData.id,
-                      action: 'assembly_required',
-                      details: { count: produtosComMontagem.length },
-                      user_id: userId,
-                      timestamp: new Date().toISOString(),
-                    });
-                  } catch { }
-
-                  toast.info(`Pedido ${orderData.order_id_erp || order.order.order_id_erp} tem ${produtosComMontagem.length} produto(s) com montagem!`);
-                }
-              } else {
-                console.log('[DeliveryMarking] Pedido já possui produtos de montagem, ignorando criação');
-              }
-            }
-          }
-        } catch (error) {
-          console.error('Erro ao verificar montagem:', error);
-        }
-
+        // NOTA: Montagem NÃO é criada aqui. Só é gerada na finalização da rota (handleFinalizeRoute),
+        // quando os status são definitivos e o motorista não pode mais alterar.
 
         if (onUpdated) onUpdated();
       } else {
@@ -1041,6 +966,53 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
             .in('id', deliveredIds)
             // Apenas atualiza se NÃO estiver delivered (opcional, mas o update direto é seguro)
             .neq('status', 'delivered');
+        }
+
+        // 4. Gerar tarefas de montagem para pedidos ENTREGUES (substitui o trigger removido)
+        try {
+          const deliveredRouteOrders = routeOrders.filter(r => r.status === 'delivered');
+          for (const ro of deliveredRouteOrders) {
+            const orderData = ro.order;
+            if (!orderData || !orderData.items_json) continue;
+
+            const items = Array.isArray(orderData.items_json) ? orderData.items_json as any[] : [];
+            const produtosComMontagem = items.filter((item: any) =>
+              ['SIM', 'sim', 'Sim', 'true', '1', 'yes', 'YES', 'Yes'].includes(String(item.has_assembly)) ||
+              item.possui_montagem === true || item.possui_montagem === 'true'
+            );
+
+            if (produtosComMontagem.length > 0) {
+              // Verificar se já existe registro de montagem para evitar duplicidade
+              const { count } = await supabase
+                .from('assembly_products')
+                .select('id', { count: 'exact', head: true })
+                .eq('order_id', ro.order_id);
+
+              if (!count || count === 0) {
+                const assemblyProducts = produtosComMontagem.map((item: any) => ({
+                  order_id: ro.order_id,
+                  product_name: item.name || 'Produto sem nome',
+                  product_sku: item.sku || 'SKU-INDEF',
+                  customer_name: orderData.customer_name,
+                  customer_phone: orderData.phone,
+                  installation_address: orderData.address_json,
+                  status: 'pending',
+                  created_at: new Date().toISOString(),
+                  updated_at: new Date().toISOString()
+                }));
+
+                const { error: insertError } = await supabase.from('assembly_products').insert(assemblyProducts);
+                if (insertError) {
+                  console.error('[FinalizeRoute] Erro ao inserir assembly_products:', insertError);
+                } else {
+                  console.log(`[FinalizeRoute] Criados ${assemblyProducts.length} produtos de montagem para pedido ${orderData.order_id_erp}`);
+                }
+              }
+            }
+          }
+        } catch (assemblyError) {
+          console.error('[FinalizeRoute] Erro ao gerar tarefas de montagem:', assemblyError);
+          // Não falha a finalização por erro de montagem
         }
 
         toast.success('Rota finalizada com sucesso!');
