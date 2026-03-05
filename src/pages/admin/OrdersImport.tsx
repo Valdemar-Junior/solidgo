@@ -13,7 +13,10 @@ import {
   AlertTriangle,
   Clock,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  ChevronLeft,
+  ChevronRight,
+  Search
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
@@ -25,6 +28,9 @@ export default function OrdersImport() {
   const [webhookStatus, setWebhookStatus] = useState<string | null>(null);
   const [dbOrders, setDbOrders] = useState<any[]>([]);
   const [expandedManifests, setExpandedManifests] = useState<Record<string, boolean>>({});
+  const [manifestPage, setManifestPage] = useState(0);
+  const [searchManifest, setSearchManifest] = useState('');
+  const MANIFESTS_PER_PAGE = 10;
 
   const toggleManifest = (manifestId: string) => {
     setExpandedManifests(prev => ({ ...prev, [manifestId]: !prev[manifestId] }));
@@ -59,7 +65,7 @@ export default function OrdersImport() {
       .from('orders')
       .select('id, created_at, status, customer_name, order_id_erp, manifest_id, address_json', { count: 'exact' })
       .order('created_at', { ascending: false })
-      .limit(1000);
+      .limit(500);
 
     if (error) {
       console.error('Erro ao carregar pedidos do banco:', error);
@@ -488,6 +494,7 @@ export default function OrdersImport() {
       });
 
       await fetchImportedOrders();
+      setManifestPage(0);
       setLastImport(new Date());
       setLoading(false); // Libera a UI
 
@@ -511,7 +518,7 @@ export default function OrdersImport() {
     if (!value) return '-';
     const d = new Date(value);
     if (isNaN(d.getTime())) return '-';
-    return d.toLocaleDateString('pt-BR');
+    return d.toLocaleDateString('pt-BR') + ' às ' + d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
   };
 
   const statusPT = (s: string | null | undefined) => {
@@ -635,14 +642,26 @@ export default function OrdersImport() {
 
         {/* Orders Table */}
         < div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden" >
-          <div className="px-6 py-4 border-b border-gray-200 flex justify-between items-center bg-gray-50">
+          <div className="px-6 py-4 border-b border-gray-200 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 bg-gray-50">
             <h3 className="text-lg font-bold text-gray-900 flex items-center gap-2">
               <Package className="h-5 w-5 text-gray-500" />
               Histórico de Importação
             </h3>
-            <span className="text-xs font-medium text-gray-500 bg-white px-2 py-1 rounded border border-gray-200">
-              Últimos 200
-            </span>
+            <div className="flex items-center gap-3 w-full sm:w-auto">
+              <div className="relative flex-1 sm:flex-none">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+                <input
+                  type="text"
+                  placeholder="Buscar romaneio..."
+                  value={searchManifest}
+                  onChange={(e) => { setSearchManifest(e.target.value); setManifestPage(0); }}
+                  className="pl-9 pr-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-200 focus:border-blue-400 outline-none w-full sm:w-48 transition-colors"
+                />
+              </div>
+              <span className="text-xs font-medium text-gray-500 bg-white px-2 py-1 rounded border border-gray-200 whitespace-nowrap">
+                {stats.total} pedidos
+              </span>
+            </div>
           </div>
 
           {
@@ -664,11 +683,30 @@ export default function OrdersImport() {
                 groupedOrders[key].push(o);
               });
 
-              const manifestKeys = Object.keys(groupedOrders).sort((a, b) => {
+              const allManifestKeys = Object.keys(groupedOrders).sort((a, b) => {
                 if (a === 'avulsos') return 1;
                 if (b === 'avulsos') return -1;
-                return b.localeCompare(a); // sort by descending
+                return b.localeCompare(a);
               });
+
+              const filteredManifestKeys = searchManifest.trim()
+                ? allManifestKeys.filter(k => k.toLowerCase().includes(searchManifest.trim().toLowerCase()))
+                : allManifestKeys;
+
+              const totalManifestPages = Math.ceil(filteredManifestKeys.length / MANIFESTS_PER_PAGE);
+              const manifestKeys = filteredManifestKeys.slice(
+                manifestPage * MANIFESTS_PER_PAGE,
+                (manifestPage + 1) * MANIFESTS_PER_PAGE
+              );
+
+              if (filteredManifestKeys.length === 0 && searchManifest.trim()) {
+                return (
+                  <div className="p-8 text-center">
+                    <Search className="h-10 w-10 text-gray-300 mx-auto mb-3" />
+                    <p className="text-gray-500">Nenhum romaneio encontrado para "{searchManifest}"</p>
+                  </div>
+                );
+              }
 
               return (
                 <div className="overflow-x-auto p-4 space-y-4">
@@ -692,7 +730,7 @@ export default function OrdersImport() {
                             </div>
                             <div className="text-left">
                               <span className="font-bold text-gray-900 block">{title}</span>
-                              <span className="text-gray-500 text-xs mt-0.5 block">{totalItems} pedidos • Importado aprox. {groupDate}</span>
+                              <span className="text-gray-500 text-xs mt-0.5 block">{totalItems} pedidos • Importado em {groupDate}</span>
                             </div>
                           </div>
                           <div className="text-gray-400">
@@ -750,6 +788,30 @@ export default function OrdersImport() {
                       </div>
                     );
                   })}
+                  {/* Paginação */}
+                  {totalManifestPages > 1 && (
+                    <div className="flex items-center justify-between mt-6 px-2">
+                      <button
+                        onClick={() => setManifestPage(p => Math.max(0, p - 1))}
+                        disabled={manifestPage === 0}
+                        className="flex items-center gap-1 px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                      >
+                        <ChevronLeft className="h-4 w-4" />
+                        Anterior
+                      </button>
+                      <span className="text-sm text-gray-500">
+                        Página {manifestPage + 1} de {totalManifestPages} ({filteredManifestKeys.length} romaneios)
+                      </span>
+                      <button
+                        onClick={() => setManifestPage(p => Math.min(totalManifestPages - 1, p + 1))}
+                        disabled={manifestPage >= totalManifestPages - 1}
+                        className="flex items-center gap-1 px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                      >
+                        Próxima
+                        <ChevronRight className="h-4 w-4" />
+                      </button>
+                    </div>
+                  )}
                 </div>
               );
             })()
