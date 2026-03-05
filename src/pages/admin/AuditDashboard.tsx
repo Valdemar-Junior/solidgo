@@ -72,7 +72,7 @@ export default function AuditDashboard() {
         setActiveCheck('stuck');
         const { data } = await supabase
             .from('orders')
-            .select('*, route_orders!inner(route_id, status, route:routes(name, status))')
+            .select('id, order_id_erp, customer_name, status, route_orders!inner(route_id, status, route:routes(name, status))')
             .eq('status', 'assigned')
             .eq('route_orders.route.status', 'completed');
         setDetails(data || []);
@@ -193,7 +193,7 @@ export default function AuditDashboard() {
         try {
             const { data, error } = await supabase
                 .from('orders')
-                .select('*')
+                .select('id, order_id_erp, customer_name, phone, address_json, items_json, status, tem_frete_full, observacoes_publicas, observacoes_internas, customer_cpf, raw_json')
                 .eq('order_id_erp', searchOrderId.trim())
                 .single();
 
