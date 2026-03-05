@@ -1,4 +1,4 @@
-﻿import { useState, useEffect } from 'react';
+﻿import { useState, useEffect, useRef } from 'react';
 import { supabase } from '../supabase/client';
 import { OfflineStorage, SyncQueue, NetworkStatus } from '../utils/offline/storage';
 import { backgroundSync } from '../utils/offline/backgroundSync';
@@ -90,65 +90,65 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
     };
   }, [routeId]);
 
+  // Sync silencioso com debounce ao voltar online — NÃO recarrega a tela
+  const syncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
-    const run = async () => {
-      if (isOnline) {
-        await backgroundSync.forceSync();
-        await loadRouteOrders();
-        await loadRouteDetails();
-      } else {
-        await loadRouteOrders();
+    // Limpar timer anterior para evitar múltiplas execuções
+    if (syncTimerRef.current) {
+      clearTimeout(syncTimerRef.current);
+      syncTimerRef.current = null;
+    }
+
+    if (isOnline) {
+      // Esperar 3 segundos para garantir que a conexão estabilizou
+      syncTimerRef.current = setTimeout(async () => {
+        try {
+          await backgroundSync.forceSync(true); // sync silencioso, sem toast
+        } catch (e) {
+          console.warn('[DeliveryMarking] Silent sync failed, will retry later:', e);
+        }
+      }, 3000);
+    }
+
+    return () => {
+      if (syncTimerRef.current) {
+        clearTimeout(syncTimerRef.current);
       }
     };
-    run();
   }, [isOnline]);
 
   const loadRouteOrders = async () => {
     try {
       setLoading(true);
 
-      // Load from Supabase if online
-      if (isOnline) {
-        // OTIMIZAÇÃO: Excluindo campos pesados (danfe_base64, return_danfe_base64, xml_documento, return_nfe_xml)
-        const DRIVER_SAFE_COLS = 'id,order_id_erp,customer_name,phone,address_json,items_json,status,created_at,updated_at,raw_json,danfe_gerada_em,filial_venda,data_venda,previsao_entrega,tem_frete_full,observacoes_publicas,observacoes_internas,customer_cpf,vendedor_nome,return_flag,last_return_reason,last_return_notes,brand,department,service_type,erp_status,blocked_at,blocked_reason,requires_pickup,pickup_created_at,return_nfe_number,return_nfe_key,return_date,return_type,import_source,previsao_montagem,product_group,product_subgroup';
-        const { data, error } = await supabase
-          .from('route_orders')
-          .select(`
-            *,
-            order:orders!order_id(${DRIVER_SAFE_COLS})
-          `)
-          .eq('route_id', routeId)
-          .order('sequence', { ascending: true });
+      // Tenta carregar do servidor se online
+      if (NetworkStatus.isOnline()) {
+        try {
+          const DRIVER_SAFE_COLS = 'id,order_id_erp,customer_name,phone,address_json,items_json,status,created_at,updated_at,raw_json,danfe_gerada_em,filial_venda,data_venda,previsao_entrega,tem_frete_full,observacoes_publicas,observacoes_internas,customer_cpf,vendedor_nome,return_flag,last_return_reason,last_return_notes,brand,department,service_type,erp_status,blocked_at,blocked_reason,requires_pickup,pickup_created_at,return_nfe_number,return_nfe_key,return_date,return_type,import_source,previsao_montagem,product_group,product_subgroup';
+          const { data, error } = await supabase
+            .from('route_orders')
+            .select(`
+              *,
+              order:orders!order_id(${DRIVER_SAFE_COLS})
+            `)
+            .eq('route_id', routeId)
+            .order('sequence', { ascending: true });
 
-        if (error) throw error;
-        if (data) {
-          setRouteOrders(data as RouteOrderWithDetails[]);
-          // Cache offline
-          await OfflineStorage.setItem(`route_orders_${routeId}`, data);
-          try {
-            /* 
-            Removido auto-geocoding no load para evitar lentidÃ£o e redundÃ¢ncia.
-            As coordenadas devem vir da importaÃ§Ã£o ou serem buscadas sob demanda.
-            
-            const missing = (data as any[]).filter(r => {
-              const a = typeof r.order?.address_json === 'string' ? JSON.parse(r.order.address_json) : (r.order?.address_json || {})
-              return !(typeof a.lat === 'number' && typeof a.lng === 'number')
-            }).length
-            if (missing > 0) {
-              toast.info('Ajustando coordenadas da rota...')
-              const svc = await fetch('/api/geocode-route', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ routeId, debug: true, limit: 15 }) })
-              if (svc.ok) {
-                const js = await svc.json();
-                if (js?.ok) toast.success(`Coordenadas atualizadas: ${js.updated}/${js.processed}`)
-                await backgroundSync.forceSync();
-                await loadRouteOrders();
-              }
-            }
-            */
-          } catch { }
+          if (error) throw error;
+          if (data) {
+            setRouteOrders(data as RouteOrderWithDetails[]);
+            await OfflineStorage.setItem(`route_orders_${routeId}`, data);
+          }
+        } catch (onlineError) {
+          // FALLBACK: Se falhar online, carrega do cache sem mostrar erro
+          console.warn('[DeliveryMarking] Online fetch failed, falling back to cache:', onlineError);
+          const cached = await OfflineStorage.getItem(`route_orders_${routeId}`);
+          if (cached) {
+            setRouteOrders(cached);
+          }
         }
       } else {
-        // Load from offline storage
+        // Offline: carrega do cache
         const cached = await OfflineStorage.getItem(`route_orders_${routeId}`);
         if (cached) {
           setRouteOrders(cached);
@@ -156,7 +156,6 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
       }
     } catch (error) {
       console.error('Error loading route orders:', error);
-      toast.error('Erro ao carregar pedidos da rota');
     } finally {
       setLoading(false);
     }
@@ -534,51 +533,61 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
       };
 
       if (isOnline) {
-        const { error } = await supabase
-          .from('route_orders')
-          .update({
-            status: 'delivered',
-            delivered_at: confirmation.local_timestamp,
-          })
-          .eq('id', order.id);
-        if (error) throw error;
+        try {
+          const { error } = await supabase
+            .from('route_orders')
+            .update({
+              status: 'delivered',
+              delivered_at: confirmation.local_timestamp,
+            })
+            .eq('id', order.id);
+          if (error) throw error;
 
-        // ATUALIZAÇÃO NO MOMENTO DA ENTREGA (ONLINE)
-        // Garante que o pedido saia da lista de disponíveis imediatamente
-        const { error: orderError } = await supabase
-          .from('orders')
-          .update({
-            status: 'delivered',
-            // delivery_date removido pois não existe na tabela orders
-            return_flag: false,
-            last_return_reason: null,
-            last_return_notes: null
-          })
-          .eq('id', order.order_id);
+          // ATUALIZAÇÃO NO MOMENTO DA ENTREGA (ONLINE)
+          const { error: orderError } = await supabase
+            .from('orders')
+            .update({
+              status: 'delivered',
+              return_flag: false,
+              last_return_reason: null,
+              last_return_notes: null
+            })
+            .eq('id', order.order_id);
 
-        if (orderError) console.warn('[DeliveryMarking] Falha ao atualizar status do pedido principal:', orderError);
+          if (orderError) console.warn('[DeliveryMarking] Falha ao atualizar status do pedido principal:', orderError);
 
-        toast.success('Pedido marcado como entregue!');
-        setRouteOrders(prev => prev.map(ro => ro.id === order.id ? { ...ro, status: 'delivered', delivered_at: confirmation.local_timestamp } : ro));
+          toast.success('Pedido marcado como entregue!');
+          setRouteOrders(prev => prev.map(ro => ro.id === order.id ? { ...ro, status: 'delivered', delivered_at: confirmation.local_timestamp } : ro));
 
-        if (deliveryProofConfig.enabled) {
-          // Modo sombra: grava comprovante digital em paralelo sem bloquear o fluxo atual.
-          void saveDeliveryReceiptShadow(order, confirmation.user_id, confirmation.local_timestamp, {
-            recipientName: confirmation.recipient_name,
-            recipientRelation: confirmation.recipient_relation,
-            recipientNotes: confirmation.recipient_notes || '',
-            gpsData,
-            gpsFailureReason: confirmation.gps_failure_reason,
-            gpsStatus: confirmation.gps_status,
-          });
+          if (deliveryProofConfig.enabled) {
+            void saveDeliveryReceiptShadow(order, confirmation.user_id, confirmation.local_timestamp, {
+              recipientName: confirmation.recipient_name,
+              recipientRelation: confirmation.recipient_relation,
+              recipientNotes: confirmation.recipient_notes || '',
+              gpsData,
+              gpsFailureReason: confirmation.gps_failure_reason,
+              gpsStatus: confirmation.gps_status,
+            });
 
-          clearDeliveryProofState(order.id);
+            clearDeliveryProofState(order.id);
+          }
+
+          // NOTA: Montagem NÃO é criada aqui. Só é gerada na finalização da rota (handleFinalizeRoute),
+          // quando os status são definitivos e o motorista não pode mais alterar.
+
+          if (onUpdated) onUpdated();
+        } catch (onlineError) {
+          // FALLBACK: Internet caiu durante request → enfileira offline
+          console.warn('[DeliveryMarking] Online delivery failed, falling back to offline queue:', onlineError);
+          await SyncQueue.addItem({ type: 'delivery_confirmation', data: confirmation });
+          const updated = routeOrders.map(ro => ro.id === order.id ? { ...ro, status: 'delivered' as const, delivered_at: confirmation.local_timestamp } : ro);
+          setRouteOrders(updated);
+          await OfflineStorage.setItem(`route_orders_${routeId}`, updated);
+          toast.success('Pedido marcado como entregue (será sincronizado)!');
+          if (deliveryProofConfig.enabled) {
+            clearDeliveryProofState(order.id);
+          }
         }
-
-        // NOTA: Montagem NÃO é criada aqui. Só é gerada na finalização da rota (handleFinalizeRoute),
-        // quando os status são definitivos e o motorista não pode mais alterar.
-
-        if (onUpdated) onUpdated();
       } else {
         await SyncQueue.addItem({ type: 'delivery_confirmation', data: confirmation });
         const updated = routeOrders.map(ro => ro.id === order.id ? { ...ro, status: 'delivered' as const, delivered_at: confirmation.local_timestamp } : ro);
@@ -635,41 +644,56 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
       };
 
       if (isOnline) {
-        const { error } = await supabase
-          .from('route_orders')
-          .update({
-            status: 'returned',
-            returned_at: confirmation.local_timestamp,
-            return_reason: confirmation.return_reason,
-            return_notes: confirmation.observations || null,
-          })
-          .eq('id', order.id);
+        try {
+          const { error } = await supabase
+            .from('route_orders')
+            .update({
+              status: 'returned',
+              returned_at: confirmation.local_timestamp,
+              return_reason: confirmation.return_reason,
+              return_notes: confirmation.observations || null,
+            })
+            .eq('id', order.id);
 
-        if (error) throw error;
+          if (error) throw error;
 
-        // Deixar o pedido roteirizavel novamente, sinalizado como retornado
-        // Apenas marcar flag de retorno para visibilidade, MAS MANTER status='assigned'
-        // A liberação para 'pending' só ocorre ao FINALIZAR A ROTA.
-        const { error: orderUpdateError } = await supabase
-          .from('orders')
-          .update({
-            // status: 'pending', // <--- REMOVIDO: Só libera no Finalizar Rota
+          const { error: orderUpdateError } = await supabase
+            .from('orders')
+            .update({
+              return_flag: true,
+              last_return_reason: confirmation.return_reason,
+              last_return_notes: confirmation.observations || null,
+            })
+            .eq('id', order.order_id);
+
+          if (orderUpdateError) {
+            console.error('[DeliveryMarking] Falha ao atualizar return_flag na tabela orders:', orderUpdateError);
+            toast.warning('Retorno registrado na rota, mas flag de retorno pode não ter sido salva.');
+          }
+
+          toast.success('Pedido marcado como retornado!');
+          setRouteOrders(prev => prev.map(ro => ro.id === order.id ? { ...ro, status: 'returned', returned_at: confirmation.local_timestamp, return_reason: { reason: reasonValue } as any, return_notes: currentObs } : ro));
+
+          if (onUpdated) onUpdated();
+        } catch (onlineError) {
+          // FALLBACK: Internet caiu durante request → enfileira offline
+          console.warn('[DeliveryMarking] Online return failed, falling back to offline queue:', onlineError);
+          await SyncQueue.addItem({ type: 'delivery_confirmation', data: confirmation });
+          await OfflineStorage.setItem(`order_return_${order.order_id}`, {
             return_flag: true,
             last_return_reason: confirmation.return_reason,
             last_return_notes: confirmation.observations || null,
-          })
-          .eq('id', order.order_id);
-
-        if (orderUpdateError) {
-          console.error('[DeliveryMarking] Falha ao atualizar return_flag na tabela orders:', orderUpdateError);
-          // Não falhar completamente, mas avisar
-          toast.warning('Retorno registrado na rota, mas flag de retorno pode não ter sido salva.');
+          });
+          const returnReasonObj = returnReasons.find(r => r.reason === currentReason || r.reason === reasonValue);
+          const updatedOrders = routeOrders.map(ro =>
+            ro.id === order.id
+              ? { ...ro, status: 'returned' as const, returned_at: confirmation.local_timestamp, return_reason: returnReasonObj || null, return_notes: currentObs }
+              : ro
+          );
+          setRouteOrders(updatedOrders);
+          await OfflineStorage.setItem(`route_orders_${routeId}`, updatedOrders);
+          toast.success('Pedido marcado como retornado (será sincronizado)!');
         }
-
-        toast.success('Pedido marcado como retornado!');
-        setRouteOrders(prev => prev.map(ro => ro.id === order.id ? { ...ro, status: 'returned', returned_at: confirmation.local_timestamp, return_reason: { reason: reasonValue } as any, return_notes: currentObs } : ro));
-
-        if (onUpdated) onUpdated();
       } else {
         // Queue for offline sync
         await SyncQueue.addItem({
@@ -677,10 +701,7 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
           data: confirmation,
         });
 
-        // Também marcar pedido como pendente/retornado para roteirização quando offline
-        // queue logic handled above
         await OfflineStorage.setItem(`order_return_${order.order_id}`, {
-          // status: 'pending', // <--- REMOVIDO
           return_flag: true,
           last_return_reason: confirmation.return_reason,
           last_return_notes: confirmation.observations || null,

@@ -20,28 +20,8 @@ export default function DriverRouteDetails() {
   const [isOnline, setIsOnline] = useState(navigator.onLine);
 
   useEffect(() => {
-    let subscription: any = null;
-
     if (routeId) {
       loadRouteDetails();
-
-      // Setup Realtime subscription
-      subscription = supabase
-        .channel(`route_orders:${routeId}`)
-        .on(
-          'postgres_changes',
-          {
-            event: '*',
-            schema: 'public',
-            table: 'route_orders',
-            filter: `route_id=eq.${routeId}`,
-          },
-          (payload) => {
-            console.log('Route order updated:', payload);
-            loadRouteDetails();
-          }
-        )
-        .subscribe();
     }
 
     // Monitor network status
@@ -57,10 +37,6 @@ export default function DriverRouteDetails() {
     return () => {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
-      // Cleanup Realtime subscription
-      if (subscription) {
-        supabase.removeChannel(subscription);
-      }
     };
   }, [routeId]);
 

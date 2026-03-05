@@ -34,7 +34,7 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
   const [returnReasons, setReturnReasons] = useState<ReturnReason[]>([]);
   const [loading, setLoading] = useState(true);
   const [isOnline, setIsOnline] = useState(NetworkStatus.isOnline());
-  const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'completed' | 'error'>('idle');
+
   const [processingIds, setProcessingIds] = useState<Set<string>>(new Set());
   const [returnReasonByProduct, setReturnReasonByProduct] = useState<Record<string, string>>({});
   const [returnObservationsByProduct, setReturnObservationsByProduct] = useState<Record<string, string>>({});
@@ -46,9 +46,6 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
   const [pendingPhotoItems, setPendingPhotoItems] = useState<any[]>([]);
   const [requirePhotos, setRequirePhotos] = useState(false);
 
-  // Realtime Ref
-  const loadItemsRef = useRef<any>(null); // To access latest load function
-  useEffect(() => { loadItemsRef.current = loadRouteItems; }); // Always keep ref updated
 
   useEffect(() => {
     loadRouteItems();
@@ -77,62 +74,35 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
     };
     loadPhotoConfig();
 
-    // Realtime Subscription
-    const channel = supabase
-      .channel(`assembly-marking-${routeId}`)
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'assembly_products', filter: `assembly_route_id=eq.${routeId}` },
-        (payload) => {
-          console.log('[Realtime] Assembly Items changed for route', routeId);
-          if (loadItemsRef.current) loadItemsRef.current();
-        }
-      )
-      .subscribe();
-
     return () => {
       NetworkStatus.removeListener(listener);
-      supabase.removeChannel(channel);
     };
   }, [routeId]);
 
+  // Sync silencioso com debounce ao voltar online — NÃO recarrega a tela
+  const syncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
-    const run = async () => {
-      if (isOnline) {
-        setSyncStatus('syncing');
+    if (syncTimerRef.current) {
+      clearTimeout(syncTimerRef.current);
+      syncTimerRef.current = null;
+    }
+
+    if (isOnline) {
+      // Esperar 3 segundos para garantir que a conexão estabilizou
+      syncTimerRef.current = setTimeout(async () => {
         try {
-          await backgroundSync.forceSync(true); // Silent sync
-          // Atualizar dados antes de verificar estado
-          await loadRouteItems();
-
-          // VERIFICAR SE O SYNC REALMENTE FUNCIONOU
-          // Se ainda houver itens na fila, significa que falharam
-          const pendingItems = await SyncQueue.getPendingItems();
-          const hasFailures = pendingItems.some(p => String(p.data?.route_id) === String(routeId));
-
-          if (hasFailures) {
-            setSyncStatus('error');
-            // Mantém erro visível por um tempo
-            setTimeout(() => {
-              setSyncStatus('idle');
-            }, 3000);
-          } else {
-            setSyncStatus('completed');
-            setTimeout(() => {
-              setSyncStatus('idle');
-            }, 700);
-          }
+          await backgroundSync.forceSync(true);
         } catch (e) {
-          console.error(e);
-          setSyncStatus('error');
-          setTimeout(() => setSyncStatus('idle'), 3000);
-          await loadRouteItems();
+          console.warn('[AssemblyMarking] Silent sync failed, will retry later:', e);
         }
-      } else {
-        await loadRouteItems();
+      }, 3000);
+    }
+
+    return () => {
+      if (syncTimerRef.current) {
+        clearTimeout(syncTimerRef.current);
       }
     };
-    run();
   }, [isOnline]);
 
   const loadRouteItems = async () => {
@@ -142,35 +112,43 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
       let data: any[] | null = null;
       let status: string | null = null;
 
-      if (isOnline) {
-        const { data: serverData, error } = await supabase
-          .from('assembly_products')
-          .select(`
-            *,
-            order:order_id(*)
-          `)
-          .eq('assembly_route_id', routeId)
-          .order('created_at', { ascending: true });
+      if (NetworkStatus.isOnline()) {
+        try {
+          const { data: serverData, error } = await supabase
+            .from('assembly_products')
+            .select(`
+              *,
+              order:order_id(id,order_id_erp,address_json,phone,items_json,raw_json)
+            `)
+            .eq('assembly_route_id', routeId)
+            .order('created_at', { ascending: true });
 
-        if (error) throw error;
-        data = serverData;
+          if (error) throw error;
+          data = serverData;
 
-        // Fetch route status
-        const { data: routeData, error: routeError } = await supabase
-          .from('assembly_routes')
-          .select('status')
-          .eq('id', routeId)
-          .single();
+          // Fetch route status
+          const { data: routeData, error: routeError } = await supabase
+            .from('assembly_routes')
+            .select('status')
+            .eq('id', routeId)
+            .single();
 
-        if (!routeError && routeData) {
-          status = routeData.status;
+          if (!routeError && routeData) {
+            status = routeData.status;
+          }
+        } catch (onlineError) {
+          // FALLBACK: Se falhar online, carrega do cache sem mostrar erro
+          console.warn('[AssemblyMarking] Online fetch failed, falling back to cache:', onlineError);
+          const cached = await OfflineStorage.getItem(`assembly_items_${routeId}`);
+          if (cached) data = cached;
+          const cachedStatus = await OfflineStorage.getItem(`assembly_route_status_${routeId}`);
+          if (cachedStatus) status = cachedStatus;
         }
       } else {
         const cached = await OfflineStorage.getItem(`assembly_items_${routeId}`);
         if (cached) {
           data = cached;
         }
-        // Load cached route status for offline
         const cachedStatus = await OfflineStorage.getItem(`assembly_route_status_${routeId}`);
         if (cachedStatus) {
           status = cachedStatus;
@@ -179,21 +157,16 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
 
       if (data) {
         // MERGE LOCAL PENDING ACTIONS
-        // Sempre aplicar merge se houver itens na fila (pendentes ou falhos),
-        // garantindo que a UI mostre a intenção do usuário mesmo se o sync falhar.
         try {
           const pendingSync = await SyncQueue.getPendingItems();
 
-          // Apply pending actions to data
           data = data.map(item => {
-            // Find pending update for this item - STRICT CHECK
             const itemActions = pendingSync.filter(p =>
               (p.type === 'assembly_confirmation' || p.type === 'assembly_return' || p.type === 'assembly_undo') &&
               p.data?.item_id === item.id &&
-              String(p.data?.route_id) === String(routeId) // Ensure action belongs to this route
+              String(p.data?.route_id) === String(routeId)
             );
 
-            // Apply them in order
             let tempItem = { ...item };
             for (const action of itemActions) {
               if (action.type === 'assembly_confirmation') {
@@ -214,7 +187,6 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
             return tempItem;
           });
 
-          // Also check for pending route completion (ONLY OFFLINE)
           const pendingCompletion = pendingSync.find(p =>
             (p.type === 'route_completion' || p.type === 'assembly_route_completion') &&
             p.data?.route_id === routeId
@@ -237,7 +209,6 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
 
     } catch (error) {
       console.error('Error loading assembly items:', error);
-      toast.error('Erro ao carregar itens de montagem');
     } finally {
       setLoading(false);
     }
@@ -770,33 +741,7 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
 
   return (
     <div className="space-y-4 relative">
-      {/* Overlay de Sincronização */}
-      {syncStatus !== 'idle' && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-xl p-6 shadow-2xl flex flex-col items-center min-w-[200px]">
-            {syncStatus === 'syncing' ? (
-              <>
-                <div className="animate-spin rounded-full h-12 w-12 border-4 border-blue-600 border-t-transparent mb-4"></div>
-                <span className="text-lg font-semibold text-gray-800">Sincronizando...</span>
-                <span className="text-sm text-gray-500 mt-1">Enviando dados...</span>
-              </>
-            ) : syncStatus === 'completed' ? (
-              <>
-                <CheckCircle className="h-12 w-12 text-green-500 mb-4 animate-bounce" />
-                <span className="text-lg font-bold text-gray-800">Sincronizado!</span>
-                <span className="text-sm text-gray-500 mt-1">Tudo atualizado</span>
-              </>
-            ) : (
-              <>
-                <XCircle className="h-12 w-12 text-red-500 mb-4 animate-pulse" />
-                <span className="text-lg font-bold text-gray-800">Erro no Sync</span>
-                <span className="text-sm text-gray-500 mt-1">Alguns itens não foram enviados.</span>
-                <span className="text-xs text-red-400 mt-1">Ainda visíveis localmente.</span>
-              </>
-            )}
-          </div>
-        </div>
-      )}
+
       <div className={`p-3 rounded-lg flex items-center justify-between ${isOnline ? 'bg-green-50 text-green-800' : 'bg-yellow-50 text-yellow-800'}`}>
         <div className="flex items-center">
           <div className={`w-2 h-2 rounded-full mr-2 ${isOnline ? 'bg-green-500' : 'bg-yellow-500'}`}></div>
