@@ -992,41 +992,63 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
         // 4. Gerar tarefas de montagem para pedidos ENTREGUES (substitui o trigger removido)
         try {
           const deliveredRouteOrders = routeOrders.filter(r => r.status === 'delivered');
+
           for (const ro of deliveredRouteOrders) {
             const orderData = ro.order;
             if (!orderData || !orderData.items_json) continue;
 
-            const items = Array.isArray(orderData.items_json) ? orderData.items_json as any[] : [];
+            const items: any[] = Array.isArray(orderData.items_json) ? orderData.items_json : [];
+
+            // Filtra itens que possuem montagem 'SIM'
             const produtosComMontagem = items.filter((item: any) =>
               ['SIM', 'sim', 'Sim', 'true', '1', 'yes', 'YES', 'Yes'].includes(String(item.has_assembly)) ||
               item.possui_montagem === true || item.possui_montagem === 'true'
             );
 
             if (produtosComMontagem.length > 0) {
-              // Verificar se já existe registro de montagem para evitar duplicidade
-              const { count } = await supabase
-                .from('assembly_products')
-                .select('id', { count: 'exact', head: true })
-                .eq('order_id', ro.order_id);
 
-              if (!count || count === 0) {
-                const assemblyProducts = produtosComMontagem.map((item: any) => ({
-                  order_id: ro.order_id,
-                  product_name: item.name || 'Produto sem nome',
-                  product_sku: item.sku || 'SKU-INDEF',
-                  customer_name: orderData.customer_name,
-                  customer_phone: orderData.phone,
-                  installation_address: orderData.address_json,
-                  status: 'pending',
-                  created_at: new Date().toISOString(),
-                  updated_at: new Date().toISOString()
-                }));
+              // Gerar array final de produtos de montagem, respeitando purchased_quantity
+              const assemblyProductsToInsert: any[] = [];
 
-                const { error: insertError } = await supabase.from('assembly_products').insert(assemblyProducts);
+              for (const item of produtosComMontagem) {
+                // Calcula a quantidade (qty)
+                const qtyStr = item.purchased_quantity || item.quantity;
+                const qty = Math.max(1, parseInt(String(qtyStr)) || 1);
+
+                // Verificar se JÁ existe registro(s) de montagem para este pedido e SKU
+                const cleanSku = item.sku || 'SKU-INDEF';
+                const { count: currentCount } = await supabase
+                  .from('assembly_products')
+                  .select('*', { count: 'exact', head: true })
+                  .eq('order_id', ro.order_id)
+                  .eq('product_sku', cleanSku);
+
+                const existingCount = currentCount || 0;
+
+                // Só insere o que faltar
+                const itemsToGenerate = qty - existingCount;
+
+                for (let i = 0; i < itemsToGenerate; i++) {
+                  assemblyProductsToInsert.push({
+                    order_id: ro.order_id,
+                    product_name: item.name || 'Produto sem nome',
+                    product_sku: cleanSku,
+                    customer_name: orderData.customer_name,
+                    customer_phone: orderData.phone,
+                    installation_address: orderData.address_json,
+                    status: 'pending',
+                    created_at: new Date().toISOString(),
+                    updated_at: new Date().toISOString()
+                  });
+                }
+              }
+
+              if (assemblyProductsToInsert.length > 0) {
+                const { error: insertError } = await supabase.from('assembly_products').insert(assemblyProductsToInsert);
                 if (insertError) {
                   console.error('[FinalizeRoute] Erro ao inserir assembly_products:', insertError);
                 } else {
-                  console.log(`[FinalizeRoute] Criados ${assemblyProducts.length} produtos de montagem para pedido ${orderData.order_id_erp}`);
+                  console.log(`[FinalizeRoute] Criados ${assemblyProductsToInsert.length} produtos de montagem para pedido ${orderData.order_id_erp}`);
                 }
               }
             }

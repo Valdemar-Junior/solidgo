@@ -12,7 +12,7 @@ export default function DiagnosticoOrders() {
     try {
       // 1. Verificar constraints da tabela
       setResultado(prev => prev + '1. Verificando constraints da tabela orders...\n');
-      
+
       const { data: constraints, error: constraintsError } = await supabase
         .rpc('get_table_constraints', { table_name: 'orders' });
 
@@ -27,7 +27,7 @@ export default function DiagnosticoOrders() {
 
       // 2. Verificar índices únicos
       setResultado(prev => prev + '\n2. Verificando índices únicos...\n');
-      
+
       const { data: indexes, error: indexesError } = await supabase
         .from('information_schema.table_constraints')
         .select(`
@@ -49,7 +49,7 @@ export default function DiagnosticoOrders() {
 
       // 3. Verificar se há dados duplicados por lancamento_venda
       setResultado(prev => prev + '\n3. Verificando duplicados por lancamento_venda...\n');
-      
+
       const { data: duplicadosLancamento, error: dupLancError } = await supabase
         .from('orders')
         .select('lancamento_venda, count(*)')
@@ -67,7 +67,7 @@ export default function DiagnosticoOrders() {
 
       // 4. Verificar se há dados duplicados por id_unico_integracao
       setResultado(prev => prev + '\n4. Verificando duplicados por id_unico_integracao...\n');
-      
+
       const { data: duplicadosIdUnico, error: dupIdError } = await supabase
         .from('orders')
         .select('id_unico_integracao, count(*)')
@@ -85,7 +85,7 @@ export default function DiagnosticoOrders() {
 
       // 5. Testar inserção real
       setResultado(prev => prev + '\n5. Testando inserção de pedido de teste...\n');
-      
+
       const testOrder = {
         id_unico_integracao: 999999,
         operacoes: "Venda com Entrega",
@@ -116,14 +116,14 @@ export default function DiagnosticoOrders() {
         setResultado(prev => prev + `❌ ERRO AO INSERIR: ${insertError.message}\n`);
         setResultado(prev => prev + `Código do erro: ${insertError.code}\n`);
         setResultado(prev => prev + `Detalhes: ${JSON.stringify(insertError, null, 2)}\n`);
-        
+
         if (insertError.code === '23505') {
           setResultado(prev => prev + `\n🎯 ISSO CONFIRMA: É um erro de constraint única!\n`);
           setResultado(prev => prev + `A constraint está impedindo a inserção.\n`);
         }
       } else {
         setResultado(prev => prev + `✓ Pedido de teste inserido com sucesso!\n`);
-        
+
         // Limpar
         await supabase.from('orders').delete().eq('id_unico_integracao', 999999);
         setResultado(prev => prev + `✓ Pedido de teste removido\n`);
@@ -142,42 +142,160 @@ export default function DiagnosticoOrders() {
     }
   };
 
+  const corrigirMontagensPresas = async () => {
+    setCarregando(true);
+    setResultado('=== BUSCANDO PEDIDOS ENTREGUES COM MONTAGEM FALTANTE ===\n\n');
+
+    try {
+      // 1. Buscar pedidos Entregues ('delivered')
+      const { data: deliveredOrders, error: ordersError } = await supabase
+        .from('orders')
+        .select('*')
+        .eq('status', 'delivered');
+
+      if (ordersError) throw ordersError;
+
+      if (!deliveredOrders || deliveredOrders.length === 0) {
+        setResultado(prev => prev + 'Nenhum pedido entregue encontrado no banco.\n');
+        setCarregando(false);
+        return;
+      }
+
+      setResultado(prev => prev + `Analisando ${deliveredOrders.length} pedidos entregues...\n`);
+
+      let totalCorrigidos = 0;
+      let totalProdutosInjetados = 0;
+
+      for (const order of deliveredOrders) {
+        // Obter os itens do pedido
+        const items: any[] = Array.isArray(order.items_json) ? order.items_json : [];
+
+        // Filtrar produtos com montagem no items_json
+        const produtosComMontagem = items.filter((item: any) =>
+          ['SIM', 'sim', 'Sim', 'true', '1', 'yes', 'YES', 'Yes'].includes(String(item.has_assembly)) ||
+          item.possui_montagem === true || item.possui_montagem === 'true'
+        );
+
+        if (produtosComMontagem.length === 0) continue;
+
+        // Verificar se já existe a quantidade certa em assembly_products
+        const assemblyProductsToInsert: any[] = [];
+        let missingForThisOrder = false;
+
+        for (const item of produtosComMontagem) {
+          const qtyStr = item.purchased_quantity || item.quantity;
+          const qty = Math.max(1, parseInt(String(qtyStr)) || 1);
+          const cleanSku = item.sku || 'SKU-INDEF';
+
+          const { count: currentCount, error: countError } = await supabase
+            .from('assembly_products')
+            .select('*', { count: 'exact', head: true })
+            .eq('order_id', order.id)
+            .eq('product_sku', cleanSku);
+
+          if (countError) {
+            console.error('Erro ao verificar count:', countError);
+            continue;
+          }
+
+          const existingCount = currentCount || 0;
+          const itemsToGenerate = qty - existingCount;
+
+          if (itemsToGenerate > 0) {
+            missingForThisOrder = true;
+            for (let i = 0; i < itemsToGenerate; i++) {
+              assemblyProductsToInsert.push({
+                order_id: order.id,
+                product_name: item.name || 'Produto sem nome',
+                product_sku: cleanSku,
+                customer_name: order.customer_name,
+                customer_phone: order.phone,
+                installation_address: order.address_json,
+                status: 'pending',
+                created_at: new Date().toISOString(),
+                updated_at: new Date().toISOString()
+              });
+            }
+          }
+        }
+
+        if (missingForThisOrder && assemblyProductsToInsert.length > 0) {
+          totalCorrigidos++;
+          setResultado(prev => prev + `-> Pedido ${order.order_id_erp || order.id} precisa gerar ${assemblyProductsToInsert.length} montagem(ns).\n`);
+
+          const { error: insertError } = await supabase
+            .from('assembly_products')
+            .insert(assemblyProductsToInsert);
+
+          if (insertError) {
+            setResultado(prev => prev + `  ❌ ERRO AO INSERIR NO PEDIDO ${order.order_id_erp}: ${insertError.message}\n`);
+          } else {
+            setResultado(prev => prev + `  ✅ ${assemblyProductsToInsert.length} registro(s) criado(s) com sucesso!\n`);
+            totalProdutosInjetados += assemblyProductsToInsert.length;
+          }
+        }
+      }
+
+      setResultado(prev => prev + '\n=== FIM DA CORREÇÃO ===\n');
+      setResultado(prev => prev + `Pedidos que precisavam de correção: ${totalCorrigidos}\n`);
+      setResultado(prev => prev + `Total de montagens (produtos) inseridas: ${totalProdutosInjetados}\n`);
+
+    } catch (error: any) {
+      setResultado(prev => prev + `\n❌ ERRO GERAL: ${error.message || error}\n`);
+    } finally {
+      setCarregando(false);
+    }
+  };
+
   return (
-    <div className="p-8 max-w-4xl mx-auto">
-      <h1 className="text-2xl font-bold mb-6">Diagnóstico Completo - Tabela Orders</h1>
-      
-      <div className="bg-red-50 border border-red-200 p-4 rounded-lg mb-6">
-        <h2 className="font-semibold text-red-800 mb-2">Problema: 1350 pedidos com erro de duplicados</h2>
-        <p className="text-sm text-red-700">
-          Este diagnóstico vai identificar exatamente qual constraint está causando o erro.
+    <div className="p-8 max-w-4xl mx-auto space-y-6">
+      <h1 className="text-2xl font-bold">Ferramentas de Diagnóstico e Correção</h1>
+
+      {/* SEÇÃO 1: CORREÇÃO DE MONTAGENS */}
+      <div className="bg-purple-50 border border-purple-200 p-6 rounded-lg">
+        <h2 className="text-xl font-bold text-purple-800 mb-2">1. Corrigir Montagens Presas (Bug do Trigger)</h2>
+        <p className="text-sm text-purple-700 mb-4">
+          Este script procura por todos os pedidos que já foram marcados como "Entregues", que possuem produtos marcados para montagem, mas que não tiveram suas ordens geradas na tabela "assembly_products" (devido à remoção recente do trigger automático no banco).
         </p>
+        <button
+          onClick={corrigirMontagensPresas}
+          disabled={carregando}
+          className="bg-purple-600 text-white px-6 py-2 rounded-lg hover:bg-purple-700 disabled:opacity-50"
+        >
+          {carregando ? 'Executando...' : 'Buscar e Gerar Montagens Faltantes'}
+        </button>
       </div>
 
-      <button
-        onClick={executarDiagnostico}
-        disabled={carregando}
-        className="bg-red-500 text-white px-6 py-2 rounded-lg hover:bg-red-600 disabled:opacity-50 mb-6"
-      >
-        {carregando ? 'Diagnosticando...' : 'Executar Diagnóstico Completo'}
-      </button>
+      <hr className="my-8 border-gray-300" />
 
-      {resultado && (
-        <div className="bg-black text-green-400 p-4 rounded-lg font-mono text-sm whitespace-pre-line max-h-96 overflow-y-auto">
-          {resultado}
-        </div>
-      )}
-
-      <div className="mt-8 p-4 bg-blue-50 border border-blue-200 rounded-lg">
-        <h3 className="font-semibold text-blue-800">Script SQL para correção:</h3>
-        <pre className="text-xs bg-gray-800 text-green-400 p-3 rounded mt-2 overflow-x-auto">
-{`-- REMOVER CONSTRAINTS PROBLEMÁTICAS
-ALTER TABLE orders DROP CONSTRAINT IF EXISTS orders_lancamento_venda_key;
-ALTER TABLE orders DROP CONSTRAINT IF EXISTS orders_order_id_erp_key;
-
--- GARANTIR CONSTRAINT ÚNICA APENAS EM id_unico_integracao
-ALTER TABLE orders ADD CONSTRAINT orders_id_unico_integracao_unique UNIQUE (id_unico_integracao);`}
-        </pre>
+      {/* SEÇÃO 2: DIAGNÓSTICO DE ORDINÁRIA */}
+      <div className="bg-red-50 border border-red-200 p-6 rounded-lg">
+        <h2 className="text-xl font-bold text-red-800 mb-2">2. Diagnóstico de Pedidos Duplicados (Antigo)</h2>
+        <p className="text-sm text-red-700 mb-4">
+          Este diagnóstico vai identificar se há constraints impedindo a inserção de pedidos.
+        </p>
+        <button
+          onClick={executarDiagnostico}
+          disabled={carregando}
+          className="bg-red-500 text-white px-6 py-2 rounded-lg hover:bg-red-600 disabled:opacity-50"
+        >
+          {carregando ? 'Diagnosticando...' : 'Executar Diagnóstico Completo'}
+        </button>
       </div>
+
+      <div className="mt-6">
+        <h3 className="font-bold mb-2">Logs de Execução:</h3>
+        {resultado ? (
+          <div className="bg-black text-green-400 p-4 rounded-lg font-mono text-sm whitespace-pre-line max-h-96 overflow-y-auto">
+            {resultado}
+          </div>
+        ) : (
+          <div className="bg-gray-100 p-4 rounded-lg text-gray-500 text-center border border-gray-200">
+            Nenhum script foi executado ainda. Os resultados aparecerão aqui.
+          </div>
+        )}
+      </div>
+
     </div>
   );
 }
