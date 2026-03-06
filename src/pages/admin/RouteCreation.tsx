@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { supabase } from '../../supabase/client';
 import type { DeliveryRouteCatalog, Order, DriverWithUser, Vehicle, RouteWithDetails } from '../../types/database';
 import {
@@ -124,6 +124,7 @@ class RouteCreationErrorBoundary extends React.Component<
 
 function RouteCreationContent() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { user: authUser } = useAuthStore();
 
   // --- LOCAL STATE ---
@@ -236,6 +237,34 @@ function RouteCreationContent() {
   // Sorting State
   const [sortColumn, setSortColumn] = useState<string>('');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
+
+  // --- AUTO OPEN ROUTE FROM STATE ---
+  useEffect(() => {
+    const autoOpenId = location.state?.openRouteId;
+    if (autoOpenId && isMountedRef.current) {
+      const openSpecificRoute = async () => {
+        try {
+          const ORDERS_SAFE_COLS = 'id,order_id_erp,customer_name,phone,address_json,items_json,status,created_at,updated_at,filial_venda,data_venda,previsao_entrega,tem_frete_full,observacoes_publicas,observacoes_internas,customer_cpf,vendedor_nome,return_flag,last_return_reason,last_return_notes,brand,department,service_type,erp_status,blocked_at,blocked_reason,requires_pickup,pickup_created_at,return_nfe_number,return_nfe_key,return_date,return_type,import_source,previsao_montagem,product_group,product_subgroup,danfe_gerada_em';
+          const { data, error } = await supabase.from('routes')
+            .select(`*, driver:drivers!driver_id(*, user:users!user_id(*)), vehicle:vehicles!vehicle_id(*), route_orders(*, order:orders!order_id(${ORDERS_SAFE_COLS}))`)
+            .eq('id', autoOpenId)
+            .single();
+
+          if (data && !error) {
+            setSelectedRoute(data as any);
+            setShowRouteModal(true);
+          }
+        } catch (err) {
+          console.error("Erro ao auto-abrir rota:", err);
+        } finally {
+          // Clear state so it doesn't fire again on refresh
+          window.history.replaceState({}, document.title);
+        }
+      };
+
+      openSpecificRoute();
+    }
+  }, [location.state?.openRouteId]);
 
   // --- DERIVED STATE (DATA PROCESSING) ---
 
@@ -1716,12 +1745,12 @@ function RouteCreationContent() {
         });
       }
 
-      // Process orders - normalize return flags and FILTER LOCKED ORDERS
       let processedOrders: Order[] = [];
       if (ordersRes.data) {
         const rawOrders = ordersRes.data as Order[];
         processedOrders = rawOrders
           .filter(o => !lockedOrderIds.has(o.id)) // SAFETY FILTER
+          .filter(o => String(o.status) !== 'assigned') // BLOCK VISIBILITY OF INCONSISTENT/STUCK ORDERS
           .map((o: any) => {
             let updated = { ...o };
             // Reconstrói parcialmente o raw_json para a interface visual sem o payload de 88MB

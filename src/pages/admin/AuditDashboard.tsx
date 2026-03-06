@@ -23,6 +23,7 @@ export default function AuditDashboard() {
 
     const [details, setDetails] = useState<any[] | null>(null);
     const [activeCheck, setActiveCheck] = useState<string | null>(null);
+    const [assemblyTab, setAssemblyTab] = useState<'lote' | 'avulso'>('lote');
 
     // States for Sales Audit
     const [searchOrderId, setSearchOrderId] = useState('');
@@ -42,20 +43,75 @@ export default function AuditDashboard() {
         else setIsRefreshing(true);
 
         try {
+            // 1. Pedidos Travados (Stuck Orders)
+            // Apenas pedidos "assigned" que não possuem nenhuma rota ativa associada.
             const { data: stuckData } = await supabase
                 .from('orders')
-                .select('id, route_orders!inner(route:routes(status))')
-                .eq('status', 'assigned')
-                .eq('route_orders.route.status', 'completed');
+                .select('id, order_id_erp, route_orders!inner(route_id, route:routes(status, name))')
+                .eq('status', 'assigned');
 
-            const { data: dupOrders } = await supabase.rpc('get_duplicate_orders');
-            const { data: dupRoutes } = await supabase.rpc('get_route_duplicates');
-            const { data: missingAssembly } = await supabase.rpc('get_missing_assembly_orders');
+            // Filtrar apenas os que não tem NENHUMA rota ativa (pending, in_progress, ready)
+            const realStuckOrders = (stuckData || []).filter(order => {
+                const routes = order.route_orders || [];
+                const hasActiveRoute = routes.some((ro: any) =>
+                    ['pending', 'in_progress', 'ready'].includes(ro.route?.status)
+                );
+                return !hasActiveRoute && routes.length > 0;
+            });
+
+            // 2. Duplicidades (Apenas o crítico real: mesmo pedido em > 1 rota ativa)
+            const { data: routeData } = await supabase
+                .from('route_orders')
+                .select('order_id, route:routes(status, name, created_at)');
+
+            let duplicateCount = 0;
+            const orderRouteCounts: Record<string, number> = {};
+            (routeData || []).forEach((ro: any) => {
+                if (['pending', 'in_progress', 'ready'].includes(ro.route?.status)) {
+                    orderRouteCounts[ro.order_id] = (orderRouteCounts[ro.order_id] || 0) + 1;
+                }
+            });
+            duplicateCount = Object.values(orderRouteCounts).filter(count => count > 1).length;
+
+            // 3. Montagem Pendente (Últimos 7 dias)
+            const seteDiasAtras = new Date();
+            seteDiasAtras.setDate(seteDiasAtras.getDate() - 7);
+            const { data: deliveredOrders } = await supabase
+                .from('orders')
+                .select('id, items_json')
+                .eq('status', 'delivered')
+                .gte('updated_at', seteDiasAtras.toISOString());
+
+            let missingAssemblyCount = 0;
+            if (deliveredOrders && deliveredOrders.length > 0) {
+                const deliveredIds = deliveredOrders.map(o => o.id);
+                const { data: existingAssemblies } = await supabase
+                    .from('assembly_products')
+                    .select('order_id, product_sku')
+                    .in('order_id', deliveredIds);
+
+                deliveredOrders.forEach(order => {
+                    const items = typeof order.items_json === 'string' ? JSON.parse(order.items_json) : (order.items_json || []);
+                    const existingForOrder = (existingAssemblies || []).filter(a => a.order_id === order.id);
+
+                    let needsAssembly = false;
+                    items.forEach((item: any) => {
+                        if (item.has_assembly === 'Sim' || item.produto_e_montavel === 'SIM') {
+                            const expectedQty = parseInt(item.purchased_quantity || item.quantity || 1);
+                            const currentQty = existingForOrder.filter(a => a.product_sku === item.sku).length;
+                            if (expectedQty > currentQty) {
+                                needsAssembly = true;
+                            }
+                        }
+                    });
+                    if (needsAssembly) missingAssemblyCount++;
+                });
+            }
 
             setCounts({
-                stuck_orders: stuckData ? stuckData.length : 0,
-                duplicates: (dupOrders?.length || 0) + (dupRoutes?.length || 0),
-                missing_assembly: missingAssembly ? missingAssembly.length : 0,
+                stuck_orders: realStuckOrders.length,
+                duplicates: duplicateCount,
+                missing_assembly: missingAssemblyCount,
                 ghost_routes: 0
             });
 
@@ -70,56 +126,120 @@ export default function AuditDashboard() {
 
     const showStuckOrders = async () => {
         setActiveCheck('stuck');
-        const { data } = await supabase
+        const { data: stuckData } = await supabase
             .from('orders')
             .select('id, order_id_erp, customer_name, status, route_orders!inner(route_id, status, route:routes(name, status))')
-            .eq('status', 'assigned')
-            .eq('route_orders.route.status', 'completed');
-        setDetails(data || []);
+            .eq('status', 'assigned');
+
+        // Filtrar no frontend para extrair apenas os perfeitamente "travados"
+        const realStuckOrders = (stuckData || []).filter(order => {
+            const routes = order.route_orders || [];
+            const hasActiveRoute = routes.some((ro: any) =>
+                ['pending', 'in_progress', 'ready'].includes(ro.route?.status)
+            );
+            return !hasActiveRoute && routes.length > 0;
+        });
+
+        // Adaptar payload para a tabela de detalhes
+        setDetails(realStuckOrders.map(o => ({
+            ...o,
+            client_name: o.customer_name,
+        })));
     };
 
     const showDuplicates = async () => {
         setActiveCheck('duplicate');
-        const { data: dupOrders } = await supabase.rpc('get_duplicate_orders');
-        const { data: dupRoutes } = await supabase.rpc('get_route_duplicates');
+        // Buscar pedidos que estão em mais de uma rota ativa simultaneamente
+        const { data: activeRouteOrders } = await supabase
+            .from('route_orders')
+            .select('order_id, route_id, route:routes(name, status, created_at), order:orders(order_id_erp, customer_name)')
+            .in('route.status', ['pending', 'in_progress', 'ready']);
+
+        const groupings: Record<string, any[]> = {};
+        (activeRouteOrders || []).forEach((ro: any) => {
+            // Apenas considerar se o join da rota não for nulo (filtro de .in)
+            if (ro.route) {
+                if (!groupings[ro.order_id]) groupings[ro.order_id] = [];
+                groupings[ro.order_id].push(ro);
+            }
+        });
+
         const combined: any[] = [];
-
-        if (dupOrders && dupOrders.length > 0) {
-            combined.push(...dupOrders.map((d: any) => ({
-                id: d.order_id_erp,
-                type: 'duplicate_erp',
-                title: `Pedido ${d.order_id_erp} (Duplicidade no Banco)`,
-                count: d.count,
-                ids: d.ids,
-                details: 'ID ERP aparece múltiplas vezes na tabela orders',
-                routes: []
-            })));
-        }
-
-        if (dupRoutes && dupRoutes.length > 0) {
-            combined.push(...dupRoutes.map((r: any) => {
-                const activeRoutes = r.routes_info.filter((rt: any) => ['pending', 'in_progress', 'ready'].includes(rt.status));
-                const isCritical = activeRoutes.length > 1;
-                return {
-                    id: r.order_id,
+        Object.entries(groupings).forEach(([orderId, routes]) => {
+            if (routes.length > 1) {
+                const first = routes[0];
+                combined.push({
+                    id: orderId,
                     type: 'duplicate_route',
-                    title: `Pedido ${r.order_id_erp || '???'} (Múltiplas Rotas)`,
-                    count: r.route_count,
-                    ids: r.routes_info.map((rt: any) => rt.id),
-                    client_name: r.client_name,
-                    details: isCritical ? 'CRÍTICO: Em mais de uma rota ativa!' : 'Inconsistência: Verifique histórico de rotas.',
-                    routes: r.routes_info
-                };
-            }));
-        }
+                    title: `Pedido ${first.order?.order_id_erp || '???'} (Aviso de Rota Dupla)`,
+                    count: routes.length,
+                    client_name: first.order?.customer_name,
+                    details: 'CRÍTICO: O mesmo pedido está locado em mais de uma rota logística ativa nesse instante.',
+                    routes: routes.map((r: any) => r.route)
+                });
+            }
+        });
 
         setDetails(combined);
     };
 
     const showMissingAssembly = async () => {
         setActiveCheck('assembly');
-        const { data } = await supabase.rpc('get_missing_assembly_orders');
-        setDetails(data || []);
+        const seteDiasAtras = new Date();
+        seteDiasAtras.setDate(seteDiasAtras.getDate() - 7);
+        const { data: deliveredOrders } = await supabase
+            .from('orders')
+            .select('id, order_id_erp, customer_name, address_json, items_json, import_source')
+            .eq('status', 'delivered')
+            .gte('updated_at', seteDiasAtras.toISOString());
+
+        if (!deliveredOrders || deliveredOrders.length === 0) {
+            setDetails([]);
+            return;
+        }
+
+        const deliveredIds = deliveredOrders.map(o => o.id);
+        const { data: existingAssemblies } = await supabase
+            .from('assembly_products')
+            .select('order_id, product_sku')
+            .in('order_id', deliveredIds);
+
+        const missingDetails: any[] = [];
+
+        deliveredOrders.forEach(order => {
+            const items = typeof order.items_json === 'string' ? JSON.parse(order.items_json) : (order.items_json || []);
+            const existingForOrder = (existingAssemblies || []).filter(a => a.order_id === order.id);
+
+            let missingQty = 0;
+            const itemsToAssemble: any[] = [];
+
+            items.forEach((item: any) => {
+                if (item.has_assembly === 'Sim' || item.produto_e_montavel === 'SIM') {
+                    const expectedQty = parseInt(item.purchased_quantity || item.quantity || 1);
+                    const currentQty = existingForOrder.filter(a => a.product_sku === item.sku).length;
+
+                    if (expectedQty > currentQty) {
+                        missingQty += (expectedQty - currentQty);
+                        itemsToAssemble.push(item);
+                    }
+                }
+            });
+
+            if (missingQty > 0) {
+                missingDetails.push({
+                    id: order.id,
+                    order_id_erp: order.order_id_erp,
+                    client_name: order.customer_name,
+                    delivery_date: 'Nos últimos 7 dias',
+                    // Passar os itens faltantes exatos para quando o usuário clicar em "Gerar"
+                    items_json: itemsToAssemble,
+                    details: `Faltam ${missingQty} item(ns) de montagem`,
+                    import_source: order.import_source
+                });
+            }
+        });
+
+        setDetails(missingDetails);
     };
 
     const resolveStuckOrder = async (orderId: string, resolution: 'delivered' | 'returned') => {
@@ -150,24 +270,48 @@ export default function AuditDashboard() {
 
     const generateAssembly = async (orderId: string, items: any) => {
         try {
-            const assemblyItems = items.filter((i: any) =>
-                i.produto_e_montavel === 'Sim' ||
-                i.categoria_do_produto?.toLowerCase().includes('montagem')
-            ).map((i: any) => ({
-                order_id: orderId,
-                product_id: i.id_produto || i.codigo_produto,
-                product_name: i.nome_do_produto || i.descricao_produto,
-                status: 'pending'
-            }));
+            const assemblyItems: any[] = [];
+
+            // Aqui 'items' já são os itens filtrados pelo showMissingAssembly que estão faltando!
+            items.forEach((i: any) => {
+                // Em showMissingAssembly nós já calculamos que ele falta.
+                // Mas para garantir que não vamos gerar 1 só se faltarem 3, precisamos gerar N cópias:
+                // Mas o showMissingAssembly enviou o objeto original. Como não passamos a qtd exata faltante no item,
+                // vamos re-validar rapidamente contra o banco para saber quantas faltam DESTE item:
+            });
+
+            // Para segurança máxima, recalcula no click:
+            const { data: existingAssemblies } = await supabase
+                .from('assembly_products')
+                .select('product_sku')
+                .eq('order_id', orderId);
+
+            items.forEach((i: any) => {
+                if (i.has_assembly === 'Sim' || i.produto_e_montavel === 'SIM') {
+                    const expected = parseInt(i.purchased_quantity || i.quantity || 1);
+                    const current = (existingAssemblies || []).filter(a => a.product_sku === i.sku).length;
+                    const missing = expected - current;
+
+                    for (let x = 0; x < missing; x++) {
+                        assemblyItems.push({
+                            order_id: orderId,
+                            product_sku: i.sku,
+                            product_name: i.nome_do_produto || i.name || i.descricao_produto,
+                            status: 'pending'
+                        });
+                    }
+                }
+            });
 
             if (assemblyItems.length === 0) {
-                toast.error("Nenhum item montável encontrado neste pedido.");
+                toast.error("Este pedido já possui todas as montagens no banco.");
                 return;
             }
 
             const { error } = await supabase.from('assembly_products').insert(assemblyItems);
             if (error) throw error;
-            toast.success("Montagem gerada com sucesso!");
+
+            toast.success(`${assemblyItems.length} montagem(ns) gerada(s) com sucesso!`);
             runChecks();
             if (activeCheck === 'assembly') showMissingAssembly();
 
@@ -498,6 +642,23 @@ export default function AuditDashboard() {
                                         <button onClick={() => setDetails(null)} className="text-gray-400 hover:text-gray-600 text-xl">×</button>
                                     </div>
 
+                                    {activeCheck === 'assembly' && (
+                                        <div className="border-b border-gray-200 bg-white px-6 flex gap-6">
+                                            <button
+                                                onClick={() => setAssemblyTab('lote')}
+                                                className={`py-3 px-1 border-b-2 font-medium text-sm transition-colors ${assemblyTab === 'lote' ? 'border-purple-500 text-purple-700' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}`}
+                                            >
+                                                Em Lote (Rotina Automática)
+                                            </button>
+                                            <button
+                                                onClick={() => setAssemblyTab('avulso')}
+                                                className={`py-3 px-1 border-b-2 font-medium text-sm transition-colors ${assemblyTab === 'avulso' ? 'border-purple-500 text-purple-700' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}`}
+                                            >
+                                                Lançamento Avulso (Manual)
+                                            </button>
+                                        </div>
+                                    )}
+
                                     <div className="overflow-x-auto">
                                         <table className="w-full text-left">
                                             <thead>
@@ -509,7 +670,13 @@ export default function AuditDashboard() {
                                                 </tr>
                                             </thead>
                                             <tbody className="divide-y divide-gray-50">
-                                                {details.map((item: any, idx) => (
+                                                {(activeCheck === 'assembly'
+                                                    ? details.filter(item => {
+                                                        const isAvulso = ['manual', 'avulso', 'avulsa'].includes(String(item.import_source || '').toLowerCase());
+                                                        return assemblyTab === 'avulso' ? isAvulso : !isAvulso;
+                                                    })
+                                                    : details
+                                                ).map((item: any, idx) => (
                                                     <tr key={item.id || idx} className="hover:bg-blue-50/50">
                                                         <td className="p-4 font-medium text-gray-900">
                                                             {activeCheck === 'duplicate' ? item.title : item.order_id_erp}
@@ -525,6 +692,14 @@ export default function AuditDashboard() {
                                                         <td className="p-4 text-right">
                                                             {activeCheck === 'stuck' && (
                                                                 <div className="flex justify-end gap-2">
+                                                                    {item.route_orders?.[0]?.route_id && (
+                                                                        <button
+                                                                            onClick={() => navigate('/admin/routes', { state: { openRouteId: item.route_orders[0].route_id } })}
+                                                                            className="px-3 py-1.5 bg-blue-50 text-blue-700 rounded-md hover:bg-blue-100 border border-blue-200 text-sm font-medium"
+                                                                        >
+                                                                            Ver Rota
+                                                                        </button>
+                                                                    )}
                                                                     <button
                                                                         onClick={() => resolveStuckOrder(item.id, 'delivered')}
                                                                         className="px-3 py-1.5 bg-green-50 text-green-700 rounded-md hover:bg-green-100 border border-green-200 text-sm font-medium"
