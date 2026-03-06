@@ -147,12 +147,16 @@ export default function DiagnosticoOrders() {
     setResultado('=== BUSCANDO PEDIDOS ENTREGUES COM MONTAGEM FALTANTE ===\n\n');
 
     try {
-      // 1. Otimização extrema: Buscar apenas entregues, sem filtro de data (causa scan total sem index),
-      // e trazendo APENAS as colunas estritamente necessárias para evitar carregar megabytes de memória.
+      // 1. Otimização: Buscar apenas as colunas necessárias dos pedidos entregues nos últimos 7 dias.
+      const seteDiasAtras = new Date();
+      seteDiasAtras.setDate(seteDiasAtras.getDate() - 7);
+      const dataIso = seteDiasAtras.toISOString();
+
       const { data: deliveredOrders, error: ordersError } = await supabase
         .from('orders')
         .select('id, items_json, customer_name, phone, address_json, order_id_erp')
-        .eq('status', 'delivered');
+        .eq('status', 'delivered')
+        .gte('updated_at', dataIso);
 
       if (ordersError) throw ordersError;
 
