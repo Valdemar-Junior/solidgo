@@ -274,6 +274,8 @@ export default function AuditDashboard() {
 
     const generateAssembly = async (orderId: string, items: any) => {
         try {
+            if (!window.confirm("Deseja realmente gerar as ordens de montagem para este pedido?")) return;
+
             const assemblyItems: any[] = [];
 
             // Buscar dados completos do pedido para preencher a montagem
@@ -674,72 +676,83 @@ export default function AuditDashboard() {
                                                 </tr>
                                             </thead>
                                             <tbody className="divide-y divide-gray-50">
-                                                {(activeCheck === 'assembly'
-                                                    ? details.filter(item => {
-                                                        const isAvulso = ['manual', 'avulso', 'avulsa'].includes(String(item.import_source || '').toLowerCase());
-                                                        return assemblyTab === 'avulso' ? isAvulso : !isAvulso;
-                                                    })
-                                                    : details
-                                                ).map((item: any, idx) => (
-                                                    <tr key={item.id || idx} className="hover:bg-blue-50/50">
-                                                        <td className="p-4 font-medium text-gray-900">
-                                                            {activeCheck === 'duplicate' ? item.title : item.order_id_erp}
-                                                        </td>
-                                                        <td className="p-4 text-gray-600">
-                                                            {activeCheck === 'duplicate' ? `${item.count} registros` : item.client_name}
-                                                        </td>
-                                                        <td className="p-4 text-sm text-gray-500">
-                                                            {activeCheck === 'duplicate' ? item.details :
-                                                                activeCheck === 'assembly' ? `Entrega: ${item.delivery_date}` :
-                                                                    item.route_orders?.[0]?.route?.name}
-                                                        </td>
-                                                        <td className="p-4 text-right">
-                                                            {activeCheck === 'stuck' && (
-                                                                <div className="flex justify-end gap-2">
-                                                                    {item.route_orders?.[0]?.route_id && (
+                                                {(() => {
+                                                    const filtered = activeCheck === 'assembly'
+                                                        ? details.filter(item => {
+                                                            const isAvulso = ['manual', 'avulso', 'avulsa'].includes(String(item.import_source || '').toLowerCase()) ||
+                                                                /-[AT]$/i.test(item.order_id_erp || '');
+                                                            return assemblyTab === 'avulso' ? isAvulso : !isAvulso;
+                                                        })
+                                                        : details;
+
+                                                    if (filtered.length === 0) {
+                                                        return (
+                                                            <tr>
+                                                                <td colSpan={4} className="p-12 text-center text-gray-500">
+                                                                    <CheckCircle2 className="h-10 w-10 text-green-500 mx-auto mb-3" />
+                                                                    <p className="font-medium text-gray-900">
+                                                                        {activeCheck === 'assembly'
+                                                                            ? (assemblyTab === 'lote' ? 'Nenhuma montagem em lote pendente' : 'Nenhuma montagem avulsa pendente')
+                                                                            : 'Nenhuma inconsistência'}
+                                                                    </p>
+                                                                </td>
+                                                            </tr>
+                                                        );
+                                                    }
+
+                                                    return filtered.map((item: any, idx: number) => (
+                                                        <tr key={item.id || idx} className="hover:bg-blue-50/50">
+                                                            <td className="p-4 font-medium text-gray-900">
+                                                                {activeCheck === 'duplicate' ? item.title : item.order_id_erp}
+                                                            </td>
+                                                            <td className="p-4 text-gray-600">
+                                                                {activeCheck === 'duplicate' ? `${item.count} registros` : item.client_name}
+                                                            </td>
+                                                            <td className="p-4 text-sm text-gray-500">
+                                                                {activeCheck === 'duplicate' ? item.details :
+                                                                    activeCheck === 'assembly' ? `Entrega: ${item.delivery_date}` :
+                                                                        item.route_orders?.[0]?.route?.name}
+                                                            </td>
+                                                            <td className="p-4 text-right">
+                                                                {activeCheck === 'stuck' && (
+                                                                    <div className="flex justify-end gap-2">
+                                                                        {item.route_orders?.[0]?.route_id && (
+                                                                            <button
+                                                                                onClick={() => navigate('/admin/routes', { state: { openRouteId: item.route_orders[0].route_id } })}
+                                                                                className="px-3 py-1.5 bg-blue-50 text-blue-700 rounded-md hover:bg-blue-100 border border-blue-200 text-sm font-medium"
+                                                                            >
+                                                                                Ver Rota
+                                                                            </button>
+                                                                        )}
                                                                         <button
-                                                                            onClick={() => navigate('/admin/routes', { state: { openRouteId: item.route_orders[0].route_id } })}
-                                                                            className="px-3 py-1.5 bg-blue-50 text-blue-700 rounded-md hover:bg-blue-100 border border-blue-200 text-sm font-medium"
+                                                                            onClick={() => resolveStuckOrder(item.id, 'delivered')}
+                                                                            className="px-3 py-1.5 bg-green-50 text-green-700 rounded-md hover:bg-green-100 border border-green-200 text-sm font-medium"
                                                                         >
-                                                                            Ver Rota
+                                                                            Confirmar Entrega
                                                                         </button>
-                                                                    )}
+                                                                        <button
+                                                                            onClick={() => resolveStuckOrder(item.id, 'returned')}
+                                                                            className="px-3 py-1.5 bg-amber-50 text-amber-700 rounded-md hover:bg-amber-100 border border-amber-200 text-sm font-medium"
+                                                                        >
+                                                                            Devolução
+                                                                        </button>
+                                                                    </div>
+                                                                )}
+                                                                {activeCheck === 'assembly' && (
                                                                     <button
-                                                                        onClick={() => resolveStuckOrder(item.id, 'delivered')}
-                                                                        className="px-3 py-1.5 bg-green-50 text-green-700 rounded-md hover:bg-green-100 border border-green-200 text-sm font-medium"
+                                                                        onClick={() => generateAssembly(item.id, item.items_json)}
+                                                                        className="px-3 py-1.5 bg-purple-50 text-purple-700 rounded-md hover:bg-purple-100 border border-purple-200 text-sm font-medium"
                                                                     >
-                                                                        Confirmar Entrega
+                                                                        Gerar Montagem
                                                                     </button>
-                                                                    <button
-                                                                        onClick={() => resolveStuckOrder(item.id, 'returned')}
-                                                                        className="px-3 py-1.5 bg-amber-50 text-amber-700 rounded-md hover:bg-amber-100 border border-amber-200 text-sm font-medium"
-                                                                    >
-                                                                        Devolução
-                                                                    </button>
-                                                                </div>
-                                                            )}
-                                                            {activeCheck === 'assembly' && (
-                                                                <button
-                                                                    onClick={() => generateAssembly(item.id, item.items_json)}
-                                                                    className="px-3 py-1.5 bg-purple-50 text-purple-700 rounded-md hover:bg-purple-100 border border-purple-200 text-sm font-medium"
-                                                                >
-                                                                    Gerar Montagem
-                                                                </button>
-                                                            )}
-                                                            {activeCheck === 'duplicate' && (
-                                                                <span className="text-xs text-amber-600 bg-amber-50 px-2 py-1 rounded">Manual</span>
-                                                            )}
-                                                        </td>
-                                                    </tr>
-                                                ))}
-                                                {details.length === 0 && (
-                                                    <tr>
-                                                        <td colSpan={4} className="p-12 text-center text-gray-500">
-                                                            <CheckCircle2 className="h-10 w-10 text-green-500 mx-auto mb-3" />
-                                                            <p className="font-medium text-gray-900">Nenhuma inconsistência</p>
-                                                        </td>
-                                                    </tr>
-                                                )}
+                                                                )}
+                                                                {activeCheck === 'duplicate' && (
+                                                                    <span className="text-xs text-amber-600 bg-amber-50 px-2 py-1 rounded">Manual</span>
+                                                                )}
+                                                            </td>
+                                                        </tr>
+                                                    ));
+                                                })()}
                                             </tbody>
                                         </table>
                                     </div>
