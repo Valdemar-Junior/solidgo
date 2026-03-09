@@ -73,22 +73,22 @@ export default function AuditDashboard() {
             });
             duplicateCount = Object.values(orderRouteCounts).filter(count => count > 1).length;
 
-            // 3. Montagem Pendente (Últimos 7 dias)
-            const seteDiasAtras = new Date();
-            seteDiasAtras.setDate(seteDiasAtras.getDate() - 7);
+            // 3. Montagem Pendente (Últimos 30 dias)
+            const trintaDiasAtras = new Date();
+            trintaDiasAtras.setDate(trintaDiasAtras.getDate() - 30);
             const { data: deliveredOrders } = await supabase
                 .from('orders')
                 .select('id, items_json')
                 .eq('status', 'delivered')
-                .gte('updated_at', seteDiasAtras.toISOString());
+                .gte('updated_at', trintaDiasAtras.toISOString())
+                .limit(5000);
 
             let missingAssemblyCount = 0;
             if (deliveredOrders && deliveredOrders.length > 0) {
-                const deliveredIds = deliveredOrders.map(o => o.id);
                 const { data: existingAssemblies } = await supabase
                     .from('assembly_products')
                     .select('order_id, product_sku')
-                    .in('order_id', deliveredIds);
+                    .gte('created_at', trintaDiasAtras.toISOString());
 
                 deliveredOrders.forEach(order => {
                     const items = typeof order.items_json === 'string' ? JSON.parse(order.items_json) : (order.items_json || []);
@@ -185,24 +185,26 @@ export default function AuditDashboard() {
 
     const showMissingAssembly = async () => {
         setActiveCheck('assembly');
-        const seteDiasAtras = new Date();
-        seteDiasAtras.setDate(seteDiasAtras.getDate() - 7);
+        const trintaDiasAtras = new Date();
+        trintaDiasAtras.setDate(trintaDiasAtras.getDate() - 30);
         const { data: deliveredOrders } = await supabase
             .from('orders')
             .select('id, order_id_erp, customer_name, phone, address_json, items_json, import_source')
             .eq('status', 'delivered')
-            .gte('updated_at', seteDiasAtras.toISOString());
+            .gte('updated_at', trintaDiasAtras.toISOString())
+            .limit(5000);
 
         if (!deliveredOrders || deliveredOrders.length === 0) {
             setDetails([]);
             return;
         }
 
-        const deliveredIds = deliveredOrders.map(o => o.id);
+        const quarentaDiasAtras = new Date();
+        quarentaDiasAtras.setDate(quarentaDiasAtras.getDate() - 40);
         const { data: existingAssemblies } = await supabase
             .from('assembly_products')
             .select('order_id, product_sku')
-            .in('order_id', deliveredIds);
+            .gte('created_at', quarentaDiasAtras.toISOString());
 
         const missingDetails: any[] = [];
 
@@ -230,7 +232,7 @@ export default function AuditDashboard() {
                     id: order.id,
                     order_id_erp: order.order_id_erp,
                     client_name: order.customer_name,
-                    delivery_date: 'Nos últimos 7 dias',
+                    delivery_date: 'Nos últimos 30 dias',
                     // Passar os itens faltantes exatos para quando o usuário clicar em "Gerar"
                     items_json: itemsToAssemble,
                     details: `Faltam ${missingQty} item(ns) de montagem`,
