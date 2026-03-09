@@ -189,7 +189,7 @@ export default function AuditDashboard() {
         seteDiasAtras.setDate(seteDiasAtras.getDate() - 7);
         const { data: deliveredOrders } = await supabase
             .from('orders')
-            .select('id, order_id_erp, customer_name, address_json, items_json, import_source')
+            .select('id, order_id_erp, customer_name, phone, address_json, items_json, import_source')
             .eq('status', 'delivered')
             .gte('updated_at', seteDiasAtras.toISOString());
 
@@ -234,7 +234,9 @@ export default function AuditDashboard() {
                     // Passar os itens faltantes exatos para quando o usuário clicar em "Gerar"
                     items_json: itemsToAssemble,
                     details: `Faltam ${missingQty} item(ns) de montagem`,
-                    import_source: order.import_source
+                    import_source: order.import_source,
+                    phone: order.phone,
+                    address_json: order.address_json
                 });
             }
         });
@@ -272,15 +274,11 @@ export default function AuditDashboard() {
         try {
             const assemblyItems: any[] = [];
 
-            // Aqui 'items' já são os itens filtrados pelo showMissingAssembly que estão faltando!
-            items.forEach((i: any) => {
-                // Em showMissingAssembly nós já calculamos que ele falta.
-                // Mas para garantir que não vamos gerar 1 só se faltarem 3, precisamos gerar N cópias:
-                // Mas o showMissingAssembly enviou o objeto original. Como não passamos a qtd exata faltante no item,
-                // vamos re-validar rapidamente contra o banco para saber quantas faltam DESTE item:
-            });
+            // Buscar dados completos do pedido para preencher a montagem
+            const orderDetail = details.find(d => d.id === orderId);
+            if (!orderDetail) throw new Error("Dados do pedido não encontrados nos detalhes locais.");
 
-            // Para segurança máxima, recalcula no click:
+            // Para segurança máxima, recalcula o que já existe no banco
             const { data: existingAssemblies } = await supabase
                 .from('assembly_products')
                 .select('product_sku')
@@ -296,7 +294,11 @@ export default function AuditDashboard() {
                         assemblyItems.push({
                             order_id: orderId,
                             product_sku: i.sku,
-                            product_name: i.nome_do_produto || i.name || i.descricao_produto,
+                            product_name: i.nome_do_produto || i.name || i.descricao_produto || 'Produto sem nome',
+                            customer_name: orderDetail.client_name,
+                            customer_phone: orderDetail.phone || null,
+                            installation_address: orderDetail.address_json || null,
+                            import_source: orderDetail.import_source || null,
                             status: 'pending'
                         });
                     }
