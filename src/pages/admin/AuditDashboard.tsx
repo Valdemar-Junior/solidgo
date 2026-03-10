@@ -81,14 +81,15 @@ export default function AuditDashboard() {
                 .select('id, items_json')
                 .eq('status', 'delivered')
                 .gte('updated_at', trintaDiasAtras.toISOString())
-                .limit(5000);
+                .limit(10000);
 
             let missingAssemblyCount = 0;
             if (deliveredOrders && deliveredOrders.length > 0) {
                 const { data: existingAssemblies } = await supabase
                     .from('assembly_products')
                     .select('order_id, product_sku')
-                    .gte('created_at', trintaDiasAtras.toISOString());
+                    .gte('created_at', trintaDiasAtras.toISOString())
+                    .limit(10000);
 
                 deliveredOrders.forEach(order => {
                     const items = typeof order.items_json === 'string' ? JSON.parse(order.items_json) : (order.items_json || []);
@@ -192,7 +193,7 @@ export default function AuditDashboard() {
             .select('id, order_id_erp, customer_name, phone, address_json, items_json, import_source')
             .eq('status', 'delivered')
             .gte('updated_at', trintaDiasAtras.toISOString())
-            .limit(5000);
+            .limit(10000);
 
         if (!deliveredOrders || deliveredOrders.length === 0) {
             setDetails([]);
@@ -204,7 +205,8 @@ export default function AuditDashboard() {
         const { data: existingAssemblies } = await supabase
             .from('assembly_products')
             .select('order_id, product_sku')
-            .gte('created_at', quarentaDiasAtras.toISOString());
+            .gte('created_at', quarentaDiasAtras.toISOString())
+            .limit(10000);
 
         const missingDetails: any[] = [];
 
