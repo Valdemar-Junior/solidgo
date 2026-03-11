@@ -682,7 +682,7 @@ export default function AuditDashboard() {
                                                     const filtered = activeCheck === 'assembly'
                                                         ? details.filter(item => {
                                                             const isAvulso = ['manual', 'avulso', 'avulsa'].includes(String(item.import_source || '').toLowerCase()) ||
-                                                                /-[AT]$/i.test(item.order_id_erp || '');
+                                                                /-[AT](-\d+)?$/i.test(item.order_id_erp || '');
                                                             return assemblyTab === 'avulso' ? isAvulso : !isAvulso;
                                                         })
                                                         : details;

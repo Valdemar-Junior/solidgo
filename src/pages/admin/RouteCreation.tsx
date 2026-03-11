@@ -691,6 +691,15 @@ function RouteCreationContent() {
   const [launchType, setLaunchType] = useState<'troca' | 'assistencia' | 'venda'>('troca');
   const [launchLoading, setLaunchLoading] = useState(false);
 
+  // --- NOVO: Estados para Preview de Lançamento Avulso (RouteCreation) ---
+  const [previewLaunchData, setPreviewLaunchData] = useState<any>(null); // Dados brutos do N8N
+  const [showLaunchPreview, setShowLaunchPreview] = useState(false);
+  const [selectedItemsForImport, setSelectedItemsForImport] = useState<{
+    [skuItem: string]: { import: boolean; has_assembly: boolean }
+  }>({});
+  const [confirmingLaunch, setConfirmingLaunch] = useState(false);
+
+
   const handleLaunchSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!launchNumber.trim()) { toast.error('Digite o número do lançamento'); return; }
@@ -732,100 +741,172 @@ function RouteCreationContent() {
         return;
       }
 
-      // Map to DB structure
-      const toDb = items.map((o: any) => {
-        const produtos = Array.isArray(o.produtos) ? o.produtos : (Array.isArray(o.produtos_locais) ? o.produtos_locais : []);
-        const getVal = (v: any) => String(v ?? '').trim();
+      // Parar na Prévia em vez de salvar direto na DB
+      setPreviewLaunchData(items[0]); // Considera apenas 1 lançamento retornado
+      setShowLaunchPreview(true);
 
-        const pickZip = (raw: any) => {
-          const candidates = [raw?.destinatario_cep, raw?.cep, raw?.endereco_cep, raw?.codigo_postal, raw?.zip];
-          for (const c of candidates) { const s = String(c || '').trim(); if (s) return s; }
-          return '';
+      // Inicia com todos marcados para importar, e usa as flags e strings das observações nativas para marcar 'has_assembly' previstos.
+      const initialSelection: Record<string, { import: boolean; has_assembly: boolean }> = {};
+      const o = items[0];
+      const produtos = Array.isArray(o.produtos) ? o.produtos : (Array.isArray(o.produtos_locais) ? o.produtos_locais : []);
+      const obsVal = String(o.observacoes_internas ?? '').toLowerCase();
+      const hasKeywordMontagem = obsVal.includes('*montagem*');
+
+      produtos.forEach((p: any, index: number) => {
+        const explicitFlag = String(p.tem_montagem ?? '');
+        const predictedAssembly = (explicitFlag === 'Sim' || hasKeywordMontagem || String(p.produto_e_montavel ?? '').toLowerCase() === 'sim');
+        
+        initialSelection[index] = {
+          import: true, // Por padrão sugere trazer todas as peças daquela importação do Tiny
+          has_assembly: predictedAssembly
         };
+      });
+      setSelectedItemsForImport(initialSelection);
+      setLaunchLoading(false);
 
-        const obsVal = getVal(o.observacoes_internas).toLowerCase();
-        const hasKeywordMontagem = obsVal.includes('*montagem*');
-        console.log(`[Manual Import Debug] Lancamento ${o.numero_lancamento}: Obs="${obsVal}", Montagem=${hasKeywordMontagem}`);
+    } catch (e: any) {
+      console.error(e);
+      toast.error(`Erro na busca: ${e.message}`);
+      setLaunchLoading(false);
+    }
+  };
 
-        const itemsJson = produtos.length > 0 ? produtos.map((p: any) => {
-          const explicitFlag = getVal(p.tem_montagem);
-          // Restore checking for keywords or explicit flag
+  const handleConfirmLaunch = async () => {
+    if (!previewLaunchData) return;
+    setConfirmingLaunch(true);
+    
+    try {
+      const o = previewLaunchData;
+      const rawProducts = Array.isArray(o.produtos) ? o.produtos : (Array.isArray(o.produtos_locais) ? o.produtos_locais : []);
+      
+      // Filtrar apenas os produtos que o operador deixou marcado `import: true` (por padrão é true se não houver registro)
+      const produtosParaImportar = rawProducts.filter((p: any, index: number) => {
+        const itemState = selectedItemsForImport[index];
+        return itemState ? itemState.import : true;
+      });
 
-          // LOGIC: If explicit says yes OR keyword says yes -> Sim.
-          // We can also use p.produto_e_montavel to HELP, but we must NOT filter the item out.
-          // Let's keep it simple and safe: Revert to mixed logic.
+      if (produtosParaImportar.length === 0) {
+        toast.error('Selecione ao menos 1 produto para importar.');
+        setConfirmingLaunch(false);
+        return;
+      }
 
-          // Old logic + New Field Persistence
-          const finalHasAssembly = (explicitFlag === 'Sim' || hasKeywordMontagem) ? 'Sim' : explicitFlag;
+      // Map to DB structure
+      const getVal = (v: any) => String(v ?? '').trim();
 
-          return {
-            sku: getVal(p.codigo_produto),
-            name: getVal(p.nome_produto),
-            quantity: Number(p.quantidade_volumes ?? 1),
-            volumes_per_unit: Number(p.quantidade_volumes ?? 1),
-            purchased_quantity: Number(p.quantidade_comprada ?? 1),
-            unit_price_real: Number(p.valor_unitario_real ?? p.valor_unitario ?? 0),
-            total_price_real: Number(p.valor_total_real ?? p.valor_total_item ?? 0),
-            unit_price: Number(p.valor_unitario_real ?? p.valor_unitario ?? 0),
-            total_price: Number(p.valor_total_real ?? p.valor_total_item ?? 0),
-            price: Number(p.valor_unitario_real ?? p.valor_unitario ?? 0),
-            location: getVal(p.local_estocagem),
-            has_assembly: finalHasAssembly,
-            produto_e_montavel: getVal(p.produto_e_montavel), // Mantendo o mapeamento
-            labels: Array.isArray(p.etiquetas) ? p.etiquetas : [],
-            department: getVal(p.departamento),
-            brand: getVal(p.marca),
-          };
-        }) : [];
+      const pickZip = (raw: any) => {
+        const candidates = [raw?.destinatario_cep, raw?.cep, raw?.endereco_cep, raw?.codigo_postal, raw?.zip];
+        for (const c of candidates) { const s = String(c || '').trim(); if (s) return s; }
+        return '';
+      };
 
-        const xmlDanfe = o.xml_danfe_remessa || {};
+      const obsVal = getVal(o.observacoes_internas).toLowerCase();
+      const hasKeywordMontagem = obsVal.includes('*montagem*');
+      console.log(`[Manual Import Debug] Lancamento ${o.numero_lancamento}: Obs="${obsVal}", Montagem=${hasKeywordMontagem}`);
 
-        // Append type suffix to ensure uniqueness and identification
-        // Para vendas, NÃO adiciona sufixo (é o pedido original)
-        let erpId = String(o.numero_lancamento ?? o.lancamento_venda ?? o.codigo_cliente ?? launchNumber);
-        if (launchType !== 'venda') {
-          const suffix = launchType === 'troca' ? '-T' : '-A';
-          if (!erpId.endsWith(suffix) && !erpId.endsWith('-T') && !erpId.endsWith('-A')) {
-            erpId = `${erpId}${suffix}`;
-          }
-        }
+      const itemsJson = produtosParaImportar.map((p: any, index: number) => {
+        const itemState = selectedItemsForImport[index] || { import: true, has_assembly: false };
+        const isAssemblyRequiredCheckbox = itemState.has_assembly ? 'Sim' : 'Não'; // Força Sim ou Não com base na UI
 
         return {
-          order_id_erp: erpId,
-          customer_name: getVal(o.nome_cliente),
-          phone: getVal(o.cliente_celular),
-          customer_cpf: getVal(o.cpf_cliente),
-          filial_venda: getVal(o.filial_venda),
-          vendedor_nome: getVal(o.nome_vendedor ?? o.vendedor ?? o.vendedor_nome),
-          data_venda: o.data_venda ? new Date(o.data_venda).toISOString() : new Date().toISOString(),
-          previsao_entrega: o.previsao_entrega ? new Date(o.previsao_entrega).toISOString() : null,
-          observacoes_publicas: getVal(o.observacoes_publicas),
-          observacoes_internas: getVal(o.observacoes_internas),
-          tem_frete_full: getVal(o.tem_frete_full),
-          address_json: {
-            street: getVal(o.destinatario_endereco),
-            neighborhood: getVal(o.destinatario_bairro),
-            city: getVal(o.destinatario_cidade),
-            state: '',
-            zip: pickZip(o),
-            complement: getVal(o.destinatario_complemento),
-            lat: o.lat ?? o.latitude ?? null,
-            lng: o.lng ?? o.longitude ?? o.long ?? null
-          },
-          items_json: itemsJson,
-          status: 'pending',
-          raw_json: o,
-          service_type: launchType === 'venda' ? undefined : launchType,
-          department: String(itemsJson[0]?.department || ''),
-          brand: String(itemsJson[0]?.brand || ''),
-          import_source: 'avulsa',
-          xml_documento: xmlDanfe.conteudo_xml || null,
+          sku: getVal(p.codigo_produto),
+          name: getVal(p.nome_produto),
+          quantity: Number(p.quantidade_volumes ?? p.quantidade ?? 1),
+          purchased_quantity: Number(p.quantidade_comprada ?? p.quantidade ?? 1),
+          volumes_per_unit: Number(p.quantidade_volumes ?? p.quantidade ?? 1),
+          unit_price_real: Number(p.valor_unitario_real ?? p.valor_unitario ?? 0),
+          total_price_real: Number(p.valor_total_real ?? p.valor_total_item ?? 0),
+          unit_price: Number(p.valor_unitario_real ?? p.valor_unitario ?? 0),
+          total_price: Number(p.valor_total_real ?? p.valor_total_item ?? 0),
+          price: Number(p.valor_unitario_real ?? p.valor_unitario ?? 0),
+          location: getVal(p.local_estocagem),
+          // AQUI ESTÁ O CARIMBO QUE O BANCO DE DADOS VAI LER NO FUTURO! (backgroundSync)
+          has_assembly: isAssemblyRequiredCheckbox,
+          produto_e_montavel: getVal(p.produto_e_montavel),
+          labels: Array.isArray(p.etiquetas) ? p.etiquetas : [],
+          department: getVal(p.departamento),
+          brand: getVal(p.marca),
         };
       });
 
+      const xmlDanfe = o.xml_danfe_remessa || {};
+
+      let erpId = String(o.numero_lancamento ?? o.lancamento_venda ?? o.codigo_cliente ?? launchNumber).trim();
+      
+      // LOGICA 100% BLINDADA PARA SEQUENCIAIS
+      if (launchType !== 'venda') {
+        const suffixType = launchType === 'troca' ? '-T' : '-A';
+        // Remove sufixos existentes por precaução se por acaso vierem sujos do tiny (`12345-T-1` -> `12345`)
+        let baseId = erpId.replace(/-(T|A)(-\d+)?$/i, ''); 
+
+        // Vamos procurar no banco quantos já existem com essa Base
+        // Padrões de busca: '12345-A', '12345-A-1', '12345-A-2', etc.. e suas variações T.
+        const { data: siblingOrders } = await supabase
+          .from('orders')
+          .select('order_id_erp')
+          .ilike('order_id_erp', `${baseId}%`);
+
+        if (!siblingOrders || siblingOrders.length === 0) {
+           erpId = `${baseId}${suffixType}-1`; // O primeiríssimo
+        } else {
+           // Descobrir o número mais alto
+           let highestSeq = 0;
+           siblingOrders.forEach((so: any) => {
+             const m = so.order_id_erp.match(/-(T|A)(?:-(\d+))?$/i);
+             if (m) {
+               // Se é apenas "12345-A", o Match grupo 2 (o numero) vem undef. Consideramos sequencia 1.
+               let seqNum = m[2] ? parseInt(m[2], 10) : 1;
+               if (!isNaN(seqNum) && seqNum > highestSeq) {
+                 highestSeq = seqNum;
+               }
+             }
+           });
+           
+           if (highestSeq === 0 && siblingOrders.length > 0) {
+             // Caso raríssimo em que encontrou "12345", mas não tinha "-A" ou "-T" no final. Era a venda original solta.
+             highestSeq = 0;
+           }
+
+           // Se era `1', vira `2`.
+           erpId = `${baseId}${suffixType}-${highestSeq + 1}`;
+        }
+      }
+
+      const toDb = [{
+        order_id_erp: erpId,
+        customer_name: getVal(o.nome_cliente),
+        phone: getVal(o.cliente_celular),
+        customer_cpf: getVal(o.cpf_cliente),
+        filial_venda: getVal(o.filial_venda),
+        vendedor_nome: getVal(o.nome_vendedor ?? o.vendedor ?? o.vendedor_nome),
+        data_venda: o.data_venda ? new Date(o.data_venda).toISOString() : new Date().toISOString(),
+        previsao_entrega: o.previsao_entrega ? new Date(o.previsao_entrega).toISOString() : null,
+        observacoes_publicas: getVal(o.observacoes_publicas),
+        observacoes_internas: getVal(o.observacoes_internas),
+        tem_frete_full: getVal(o.tem_frete_full),
+        address_json: {
+          street: getVal(o.destinatario_endereco),
+          neighborhood: getVal(o.destinatario_bairro),
+          city: getVal(o.destinatario_cidade),
+          state: '',
+          zip: pickZip(o),
+          complement: getVal(o.destinatario_complemento),
+          lat: o.lat ?? o.latitude ?? null,
+          lng: o.lng ?? o.longitude ?? o.long ?? null
+        },
+        items_json: itemsJson,
+        status: 'pending',
+        raw_json: o,
+        service_type: launchType === 'venda' ? undefined : launchType,
+        department: String(itemsJson[0]?.department || ''),
+        brand: String(itemsJson[0]?.brand || ''),
+        import_source: 'avulsa',
+        xml_documento: xmlDanfe.conteudo_xml || null,
+      }];
+
       // Para vendas, verificar se o pedido já existe ANTES de importar
       if (launchType === 'venda') {
-        const erpIds = toDb.map((o: any) => o.order_id_erp);
+        const erpIds = toDb.map((itemDb: any) => itemDb.order_id_erp);
         const { data: existingOrders } = await supabase
           .from('orders')
           .select('order_id_erp')
@@ -894,13 +975,18 @@ function RouteCreationContent() {
         toast.info('Nenhum dado importado.');
       }
 
+      setShowLaunchPreview(false);
+      setPreviewLaunchData(null);
+
     } catch (e: any) {
       console.error(e);
       toast.error(`Erro: ${e.message}`);
     } finally {
-      setLaunchLoading(false);
+      setConfirmingLaunch(false);
     }
   };
+
+  // Table Config
 
   // Table Config
   const [columnsConf, setColumnsConf] = useState<Array<{ id: string, label: string, visible: boolean }>>([
@@ -3880,59 +3966,122 @@ function RouteCreationContent() {
         )
       }
 
-      {/* --- PICKUP MODAL --- */}
+      {/* --- PREVIEW DO AVULSO (MODAL DE CONFIRMAÇÃO) --- */}
       {
-        showPickupModal && (
+        showLaunchPreview && previewLaunchData && (
           <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
-            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden">
-              <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
-                <h3 className="text-lg font-bold text-gray-900 flex items-center gap-2">
-                  <Store className="h-5 w-5 text-purple-600" />
-                  Registrar Retirada
-                </h3>
-                <button onClick={() => setShowPickupModal(false)} className="text-gray-400 hover:text-gray-600"><X className="h-5 w-5" /></button>
-              </div>
-              <div className="p-6 space-y-4">
-                <p className="text-sm text-gray-600 bg-purple-50 p-3 rounded-lg border border-purple-100">
-                  Você está prestes a marcar <strong>{selectedOrders.size}</strong> pedido(s) como <strong>RETIRADO</strong>.
-                  Isso baixará os pedidos do sistema imediatamente e gerará um comprovante.
-                </p>
-
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden">
+              <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50 flex-shrink-0">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Responsável pela Entrega *</label>
-                  <select
-                    value={pickupConferente}
-                    onChange={e => setPickupConferente(e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 outline-none bg-white"
-                    autoFocus
-                  >
-                    <option value="">Selecione o conferente...</option>
-                    {conferentes.map(c => (
-                      <option key={c.id} value={c.id}>{c.name}</option>
-                    ))}
-                  </select>
-                  <p className="text-xs text-gray-500 mt-1">Quem entregou a mercadoria ao cliente na loja</p>
+                  <h3 className="text-xl font-bold text-gray-900 flex items-center gap-2">
+                    <CheckCircle2 className="h-6 w-6 text-green-600" />
+                    Revisão de Importação: {previewLaunchData.numero || previewLaunchData.id}
+                  </h3>
+                  <p className="text-sm text-gray-500 mt-1">
+                    Cliente: {previewLaunchData.cliente?.nome || previewLaunchData.nome_cliente || previewLaunchData.nome || 'Cliente não identificado'}
+                  </p>
                 </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Observações (Opcional)</label>
-                  <textarea
-                    value={pickupObservations}
-                    onChange={e => setPickupObservations(e.target.value)}
-                    placeholder="Ex: Cliente conferiu mercadoria no local."
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 outline-none h-24 resize-none"
-                  />
-                </div>
-              </div>
-              <div className="px-6 py-4 border-t border-gray-100 bg-gray-50 flex justify-end gap-3">
-                <button onClick={() => setShowPickupModal(false)} className="px-4 py-2 rounded-lg border border-gray-300 text-gray-700 font-medium hover:bg-white transition-colors">Cancelar</button>
                 <button
-                  onClick={createPickup}
-                  disabled={pickupSaving}
-                  className="px-6 py-2 rounded-lg bg-purple-600 text-white font-bold hover:bg-purple-700 shadow-md transition-all flex items-center gap-2"
+                  onClick={() => {
+                    setShowLaunchPreview(false);
+                    setPreviewLaunchData(null);
+                  }}
+                  className="text-gray-400 hover:text-gray-600 p-2 rounded-full hover:bg-gray-200 transition-colors"
                 >
-                  {pickupSaving && <RefreshCw className="animate-spin h-4 w-4" />}
-                  Confirmar Retirada
+                  <X className="h-6 w-6" />
+                </button>
+              </div>
+
+              <div className="p-6 overflow-y-auto flex-1">
+                <div className="bg-orange-50/50 border border-orange-100 rounded-xl p-4 mb-6">
+                  <h4 className="font-semibold text-orange-900 flex items-center gap-2 mb-2">
+                    <AlertTriangle className="h-4 w-4" />
+                    Selecione os itens e Montagens
+                  </h4>
+                  <p className="text-sm text-orange-800">
+                    Abaixo estão os produtos capturados neste pedido. Desmarque aqueles que você <strong>não</strong> deseja importar na rota atual.
+                  </p>
+                </div>
+
+                <div className="space-y-3">
+                  {(() => {
+                    const rawProducts = Array.isArray(previewLaunchData.produtos)
+                      ? previewLaunchData.produtos
+                      : (Array.isArray(previewLaunchData.produtos_locais) ? previewLaunchData.produtos_locais : []);
+
+                    if (!rawProducts || rawProducts.length === 0) {
+                      return <p className="text-gray-500 text-center py-4">Nenhum produto encontrado neste pedido.</p>;
+                    }
+
+                    return rawProducts.map((prod: any, idx: number) => {
+                      const selection = selectedItemsForImport[idx] || { import: true, has_assembly: false };
+                      const nome = prod.produto?.nome || prod.nome_produto || prod.nome || prod.descricao_produto || 'Produto sem nome';
+                      const sku = prod.produto?.codigo || prod.codigo_produto || prod.codigo || prod.sku || 'N/A';
+                      const qte = prod.quantidade_volumes || prod.quantidade || prod.quantity || prod.purchased_quantity || 1;
+
+                      return (
+                        <div key={idx} className={`border rounded-lg p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 transition-colors ${selection.import ? 'border-orange-200 bg-white' : 'border-gray-200 bg-gray-50 opacity-50'}`}>
+                          <label className="flex items-start gap-3 cursor-pointer flex-1">
+                            <input
+                              type="checkbox"
+                              checked={selection.import}
+                              onChange={(e) => {
+                                setSelectedItemsForImport(prev => {
+                                  const novo = { ...prev };
+                                  novo[idx] = { ...(novo[idx] || { import: true, has_assembly: false }), import: e.target.checked };
+                                  return novo;
+                                });
+                              }}
+                              className="mt-1 h-5 w-5 rounded border-gray-300 text-orange-600 focus:ring-orange-500"
+                            />
+                            <div>
+                              <p className={`font-semibold ${selection.import ? 'text-gray-900' : 'text-gray-500 line-through'}`}>{nome}</p>
+                              <p className="text-xs text-gray-500 mt-1">SKU: {sku} • Qtd: {qte}</p>
+                            </div>
+                          </label>
+
+                          <div className={`flex items-center gap-2 pr-2 ${!selection.import && 'pointer-events-none'}`}>
+                            <span className="text-sm font-medium text-gray-700">Requer Montagem?</span>
+                            <label className="relative inline-flex items-center cursor-pointer">
+                              <input
+                                type="checkbox"
+                                className="sr-only peer"
+                                checked={selection.import && selection.has_assembly}
+                                onChange={(e) => {
+                                  setSelectedItemsForImport(prev => {
+                                    const novo = { ...prev };
+                                    novo[idx] = { ...(novo[idx] || { import: true, has_assembly: false }), has_assembly: e.target.checked };
+                                    return novo;
+                                  });
+                                }}
+                                disabled={!selection.import}
+                              />
+                              <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                            </label>
+                          </div>
+                        </div>
+                      )
+                    });
+                  })()}
+                </div>
+              </div>
+
+              <div className="px-6 py-4 border-t border-gray-100 bg-gray-50 flex justify-end gap-3 flex-shrink-0">
+                <button
+                  onClick={() => {
+                    setShowLaunchPreview(false);
+                    setPreviewLaunchData(null);
+                  }}
+                  className="px-6 py-2.5 rounded-xl border border-gray-300 text-gray-700 font-medium hover:bg-white transition-colors"
+                >
+                  Cancelar e Voltar
+                </button>
+                <button
+                  onClick={handleConfirmLaunch}
+                  disabled={confirmingLaunch}
+                  className="min-w-[160px] px-6 py-2.5 rounded-xl bg-orange-600 text-white font-bold hover:bg-orange-700 shadow-lg shadow-orange-200 disabled:opacity-50 disabled:shadow-none transition-all transform active:scale-95 flex justify-center items-center"
+                >
+                  {confirmingLaunch ? <RefreshCw className="animate-spin h-5 w-5" /> : 'Confirmar Importação'}
                 </button>
               </div>
             </div>
