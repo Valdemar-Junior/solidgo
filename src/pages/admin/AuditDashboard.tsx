@@ -2,11 +2,11 @@
 import React, { useEffect, useState } from 'react';
 import { supabase } from '../../supabase/client';
 import { toast } from 'sonner';
-import { CheckCircle2, AlertTriangle, AlertOctagon, RefreshCw, ArrowLeft, Search, Save, Truck, Hammer, History, ClipboardList, ShoppingBag } from 'lucide-react';
+import { CheckCircle2, AlertTriangle, AlertOctagon, RefreshCw, ArrowLeft, Search, Save, Truck, Hammer, History, ClipboardList, ShoppingBag, Route } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../../stores/authStore';
 
-type ActiveSection = 'geral' | 'venda';
+type ActiveSection = 'geral' | 'venda' | 'rotas';
 
 export default function AuditDashboard() {
     const navigate = useNavigate();
@@ -25,6 +25,11 @@ export default function AuditDashboard() {
     const [activeCheck, setActiveCheck] = useState<string | null>(null);
     const [assemblyTab, setAssemblyTab] = useState<'lote' | 'avulso'>('lote');
 
+    // States for E2E Simulator
+    const [e2eLoading, setE2eLoading] = useState(false);
+    const [e2eDrivers, setE2eDrivers] = useState<any[]>([]);
+    const [chosenDriver, setChosenDriver] = useState<string>('');
+
     // States for Sales Audit
     const [searchOrderId, setSearchOrderId] = useState('');
     const [searchedOrder, setSearchedOrder] = useState<any | null>(null);
@@ -33,10 +38,45 @@ export default function AuditDashboard() {
     const [saving, setSaving] = useState(false);
     const [auditHistory, setAuditHistory] = useState<any[]>([]);
 
+    // States for Route Status Change
+    const [routeSearchName, setRouteSearchName] = useState('');
+    const [routeSearchLoading, setRouteSearchLoading] = useState(false);
+    const [foundRoute, setFoundRoute] = useState<any | null>(null);
+    const [routeChanging, setRouteChanging] = useState(false);
+
     useEffect(() => {
         runChecks(true);
+        loadE2EDrivers();
         // Realtime removido: assinaturas sem filtro sobrecarregavam o pool de conexões.
     }, []);
+
+    const loadE2EDrivers = async () => {
+        // Tabela original de Motoristas atrelada com inner join na tabela "users" para puxar o Nome visível
+        const { data, error } = await supabase.from('drivers')
+            .select('id, active, user_id, user:users!user_id(name)');
+            
+        if (data && data.length > 0) {
+            // Filtrar na mão motoristas ativos e extrair nome limpo pra UI
+            const activeRaw = data.filter((d: any) => d.active === true || d.active === 'true');
+            const cleanDrivers = activeRaw.map((d: any) => ({
+                id: d.id,
+                name: d.user?.name || `Motorista #${d.id}`
+            }));
+
+            if (cleanDrivers.length > 0) {
+                setE2eDrivers(cleanDrivers);
+                setChosenDriver(cleanDrivers[0].id);
+                return;
+            }
+        } 
+        
+        // Conta de Fallback se não encontrar os verdadeiros no BD
+        const { data: admin } = await supabase.from('users').select('id, name').eq('id', user?.id || '').single();
+        if (admin) {
+            setE2eDrivers([admin]);
+            setChosenDriver(admin.id);
+        }
+    };
 
     const runChecks = async (isInitial = false) => {
         if (isInitial) setLoading(true);
@@ -73,39 +113,41 @@ export default function AuditDashboard() {
             });
             duplicateCount = Object.values(orderRouteCounts).filter(count => count > 1).length;
 
-            // 3. Montagem Pendente (Últimos 30 dias)
-            const trintaDiasAtras = new Date();
-            trintaDiasAtras.setDate(trintaDiasAtras.getDate() - 30);
+            // 3. Montagem Pendente (Últimos 7 dias — economia de egress)
+            const seteDiasAtras = new Date();
+            seteDiasAtras.setDate(seteDiasAtras.getDate() - 7);
             const { data: deliveredOrders } = await supabase
                 .from('orders')
                 .select('id, items_json')
                 .eq('status', 'delivered')
-                .gte('updated_at', trintaDiasAtras.toISOString())
+                .gte('updated_at', seteDiasAtras.toISOString())
                 .limit(10000);
 
             let missingAssemblyCount = 0;
             if (deliveredOrders && deliveredOrders.length > 0) {
+                // Buscar montagens SEM filtro de data — direto pelos IDs dos pedidos
+                const orderIds = deliveredOrders.map(o => o.id);
                 const { data: existingAssemblies } = await supabase
                     .from('assembly_products')
-                    .select('order_id, product_sku')
-                    .gte('created_at', trintaDiasAtras.toISOString())
-                    .limit(10000);
+                    .select('order_id')
+                    .in('order_id', orderIds);
+
+                // Set de order_ids que JÁ possuem montagem (rápido)
+                const ordersWithAssembly = new Set((existingAssemblies || []).map(a => a.order_id));
 
                 deliveredOrders.forEach(order => {
                     const items = typeof order.items_json === 'string' ? JSON.parse(order.items_json) : (order.items_json || []);
-                    const existingForOrder = (existingAssemblies || []).filter(a => a.order_id === order.id);
 
-                    let needsAssembly = false;
-                    items.forEach((item: any) => {
-                        if (item.has_assembly === 'Sim' || item.produto_e_montavel === 'SIM') {
-                            const expectedQty = parseInt(item.purchased_quantity || item.quantity || 1);
-                            const currentQty = existingForOrder.filter(a => a.product_sku === item.sku).length;
-                            if (expectedQty > currentQty) {
-                                needsAssembly = true;
-                            }
-                        }
-                    });
-                    if (needsAssembly) missingAssemblyCount++;
+                    // Tem algum item de montagem? (case-insensitive)
+                    const hasAssemblyItem = items.some((item: any) =>
+                        String(item.has_assembly || '').toLowerCase() === 'sim' ||
+                        String(item.produto_e_montavel || '').toLowerCase() === 'sim'
+                    );
+
+                    // Tem item de montagem MAS não existe nenhuma linha em assembly_products?
+                    if (hasAssemblyItem && !ordersWithAssembly.has(order.id)) {
+                        missingAssemblyCount++;
+                    }
                 });
             }
 
@@ -122,6 +164,110 @@ export default function AuditDashboard() {
         } finally {
             setLoading(false);
             setIsRefreshing(false);
+        }
+    };
+    const handleInjectE2E = async () => {
+        if (!chosenDriver) {
+            toast.error('Selecione um motorista para receber a Rota de Teste.');
+            return;
+        }
+
+        const confirm = window.confirm('Isso criará 1 Pedido Fantasma e 1 Rota Fantasma na base de dados. Deseja simular um ciclo de uso do App?');
+        if (!confirm) return;
+
+        setE2eLoading(true);
+        try {
+            const mockOrderId = crypto.randomUUID();
+            const mockRouteId = crypto.randomUUID();
+            const mockOrderIdErp = `TST-PED-${Date.now().toString().slice(-6)}`;
+
+            const fakeItems = [{
+                sku: 'SKU-MOCK',
+                name: 'PRODUTO E2E (TESTE)',
+                quantity: 1,
+                purchased_quantity: 1,
+                has_assembly: 'Sim',
+                produto_e_montavel: 'SIM',
+                location: 'A01',
+                unit_price: 15.00
+            }];
+
+            const { error: errOrder } = await supabase.from('orders').insert({
+                id: mockOrderId,
+                order_id_erp: mockOrderIdErp,
+                customer_name: 'CLIENTE DA SILVA (SIMULAÇÃO E2E)',
+                phone: '84999999999',
+                status: 'pending',
+                address_json: { city: 'Natal', street: 'Rua do Teste', number: '999', neighborhood: 'Tirol' },
+                items_json: fakeItems,
+                import_source: 'AVULSO'
+            });
+            if (errOrder) throw new Error('Order error: ' + errOrder.message);
+
+            const { error: errRoute } = await supabase.from('routes').insert({
+                id: mockRouteId,
+                name: `ROTA E2E - TESTE DE INTEGRAÇÃO`,
+                status: 'in_progress',
+                driver_id: chosenDriver
+            });
+            if (errRoute) throw new Error('Route error: ' + errRoute.message);
+
+            const { error: errBind } = await supabase.from('route_orders').insert({
+                route_id: mockRouteId,
+                order_id: mockOrderId,
+                sequence: 1,
+                status: 'pending'
+            });
+            if (errBind) throw new Error('Bind error: ' + errBind.message);
+
+            toast.success(`Mock criado com sucesso! Rota E2E atribuída ao motorista (Acesse a aba Rotas / App).`);
+        } catch (err: any) {
+            console.error(err);
+            toast.error(err.message);
+        } finally {
+            setE2eLoading(false);
+        }
+    };
+
+    const handleCleanE2E = async () => {
+        const confirm = window.confirm('BOMBA ATÔMICA! Isso apagará tudo no App vindo da simulação E2E. É irreversível. Deseja Continuar?');
+        if (!confirm) return;
+
+        setE2eLoading(true);
+        try {
+            toast.info('Buscando lixos de teste E2E...');
+            
+            // 1. Achar Orders
+            const { data: fakeOrders } = await supabase.from('orders').select('id').like('order_id_erp', 'TST-PED-%');
+            const fakeOrderIds = fakeOrders?.map(o => o.id) || [];
+            
+            if (fakeOrderIds.length > 0) {
+                await supabase.from('assembly_products').delete().in('order_id', fakeOrderIds);
+                // 1.1 Deletar os vínculos route_orders ligados a estes pedidos
+                await supabase.from('route_orders').delete().in('order_id', fakeOrderIds);
+                // 1.2 Deletar os pedidos
+                const { error: errO } = await supabase.from('orders').delete().in('id', fakeOrderIds);
+                if (errO) throw new Error('Falha ao deletar pedios: ' + errO.message);
+            }
+
+            // 2. Achar Routes
+            const { data: fakeRoutes } = await supabase.from('routes').select('id').ilike('name', '%rota e2e%');
+            const fakeRouteIds = fakeRoutes?.map(r => r.id) || [];
+            
+            if (fakeRouteIds.length > 0) {
+                // 2.1 Garantir que NENHUM vínculo route_orders de outras naturezas sobraram travando a rota
+                await supabase.from('route_orders').delete().in('route_id', fakeRouteIds);
+                // 2.2 Por fim, explodir a rota fantasma
+                const { error: errR } = await supabase.from('routes').delete().in('id', fakeRouteIds);
+                if (errR) throw new Error('Falha ao deletar rotas: ' + errR.message);
+            }
+
+            toast.success('Limpeza Concluída. Todos os testes TST foram extinguidos!');
+        } catch (err: any) {
+            console.error(err);
+            toast.error(err.message);
+        } finally {
+            setE2eLoading(false);
         }
     };
 
@@ -186,13 +332,13 @@ export default function AuditDashboard() {
 
     const showMissingAssembly = async () => {
         setActiveCheck('assembly');
-        const trintaDiasAtras = new Date();
-        trintaDiasAtras.setDate(trintaDiasAtras.getDate() - 30);
+        const seteDiasAtras = new Date();
+        seteDiasAtras.setDate(seteDiasAtras.getDate() - 7);
         const { data: deliveredOrders } = await supabase
             .from('orders')
             .select('id, order_id_erp, customer_name, phone, address_json, items_json, import_source')
             .eq('status', 'delivered')
-            .gte('updated_at', trintaDiasAtras.toISOString())
+            .gte('updated_at', seteDiasAtras.toISOString())
             .limit(10000);
 
         if (!deliveredOrders || deliveredOrders.length === 0) {
@@ -200,44 +346,34 @@ export default function AuditDashboard() {
             return;
         }
 
-        const quarentaDiasAtras = new Date();
-        quarentaDiasAtras.setDate(quarentaDiasAtras.getDate() - 40);
+        // Buscar montagens SEM filtro de data — direto pelos IDs dos pedidos
+        const orderIds = deliveredOrders.map(o => o.id);
         const { data: existingAssemblies } = await supabase
             .from('assembly_products')
-            .select('order_id, product_sku')
-            .gte('created_at', quarentaDiasAtras.toISOString())
-            .limit(10000);
+            .select('order_id')
+            .in('order_id', orderIds);
 
+        const ordersWithAssembly = new Set((existingAssemblies || []).map(a => a.order_id));
         const missingDetails: any[] = [];
 
         deliveredOrders.forEach(order => {
             const items = typeof order.items_json === 'string' ? JSON.parse(order.items_json) : (order.items_json || []);
-            const existingForOrder = (existingAssemblies || []).filter(a => a.order_id === order.id);
 
-            let missingQty = 0;
-            const itemsToAssemble: any[] = [];
+            // Coletar todos os itens de montagem (case-insensitive)
+            const itemsToAssemble = items.filter((item: any) =>
+                String(item.has_assembly || '').toLowerCase() === 'sim' ||
+                String(item.produto_e_montavel || '').toLowerCase() === 'sim'
+            );
 
-            items.forEach((item: any) => {
-                if (item.has_assembly === 'Sim' || item.produto_e_montavel === 'SIM') {
-                    const expectedQty = parseInt(item.purchased_quantity || item.quantity || 1);
-                    const currentQty = existingForOrder.filter(a => a.product_sku === item.sku).length;
-
-                    if (expectedQty > currentQty) {
-                        missingQty += (expectedQty - currentQty);
-                        itemsToAssemble.push(item);
-                    }
-                }
-            });
-
-            if (missingQty > 0) {
+            // Se tem itens de montagem mas NÃO existe nenhuma linha em assembly_products
+            if (itemsToAssemble.length > 0 && !ordersWithAssembly.has(order.id)) {
                 missingDetails.push({
                     id: order.id,
                     order_id_erp: order.order_id_erp,
                     client_name: order.customer_name,
-                    delivery_date: 'Nos últimos 30 dias',
-                    // Passar os itens faltantes exatos para quando o usuário clicar em "Gerar"
+                    delivery_date: 'Entrega: Nos últimos 7 dias',
                     items_json: itemsToAssemble,
-                    details: `Faltam ${missingQty} item(ns) de montagem`,
+                    details: `${itemsToAssemble.length} item(ns) sem montagem gerada`,
                     import_source: order.import_source,
                     phone: order.phone,
                     address_json: order.address_json
@@ -291,7 +427,7 @@ export default function AuditDashboard() {
                 .eq('order_id', orderId);
 
             items.forEach((i: any) => {
-                if (i.has_assembly === 'Sim' || i.produto_e_montavel === 'SIM') {
+                if (String(i.has_assembly || '').toLowerCase() === 'sim' || String(i.produto_e_montavel || '').toLowerCase() === 'sim') {
                     const expected = parseInt(i.purchased_quantity || i.quantity || 1);
                     const current = (existingAssemblies || []).filter(a => a.product_sku === i.sku).length;
                     const missing = expected - current;
@@ -479,6 +615,105 @@ export default function AuditDashboard() {
         setEditedOrder({ ...editedOrder, items_json: newItems });
     };
 
+    // ==================== ROUTE STATUS CHANGE ====================
+    const searchRoute = async () => {
+        const term = routeSearchName.trim();
+        if (!term) {
+            toast.error('Digite o ID da rota');
+            return;
+        }
+
+        setRouteSearchLoading(true);
+        setFoundRoute(null);
+
+        try {
+            const { data, error } = await supabase
+                .from('routes')
+                .select('id, name, status, driver_id, vehicle_id, created_at, route_code, observations, route_orders(order_id)')
+                .eq('route_code', term)
+                .single();
+
+            if (error || !data) {
+                toast.error('Rota não encontrada. Verifique o ID.');
+                return;
+            }
+
+            // Buscar nome do motorista via drivers → users
+            let driverName = 'Sem motorista';
+            if (data.driver_id) {
+                const { data: driverData } = await supabase
+                    .from('drivers')
+                    .select('user_id, users(name)')
+                    .eq('id', data.driver_id)
+                    .single();
+                if (driverData && (driverData as any).users?.name) {
+                    driverName = (driverData as any).users.name;
+                }
+            }
+
+            // Buscar veículo
+            let vehicleInfo = 'Sem veículo';
+            if ((data as any).vehicle_id) {
+                const { data: vehicleData } = await supabase
+                    .from('vehicles')
+                    .select('plate, model')
+                    .eq('id', (data as any).vehicle_id)
+                    .single();
+                if (vehicleData) {
+                    vehicleInfo = `${vehicleData.model || ''} (${vehicleData.plate || ''})`.trim();
+                }
+            }
+
+            setFoundRoute({ ...data, driver_name: driverName, vehicle_info: vehicleInfo });
+        } catch (e) {
+            console.error(e);
+            toast.error('Erro ao buscar rota');
+        } finally {
+            setRouteSearchLoading(false);
+        }
+    };
+
+    const changeRouteStatus = async (routeId: string, newStatus: string) => {
+        const statusLabels: Record<string, string> = {
+            pending: 'Separação',
+            in_progress: 'Em Rota',
+            completed: 'Finalizada'
+        };
+
+        if (!window.confirm(`Deseja realmente mudar a rota para "${statusLabels[newStatus]}"?`)) return;
+
+        setRouteChanging(true);
+        try {
+            const { error } = await supabase
+                .from('routes')
+                .update({ status: newStatus })
+                .eq('id', routeId);
+
+            if (error) throw error;
+
+            // Se voltou para pending, os pedidos também devem voltar
+            if (newStatus === 'pending') {
+                const routeOrders = foundRoute?.route_orders || [];
+                const orderIds = routeOrders.map((ro: any) => ro.order_id);
+                if (orderIds.length > 0) {
+                    await supabase
+                        .from('orders')
+                        .update({ status: 'assigned' })
+                        .in('id', orderIds)
+                        .eq('status', 'delivered');
+                }
+            }
+
+            toast.success(`Rota alterada para "${statusLabels[newStatus]}" com sucesso!`);
+            setFoundRoute({ ...foundRoute, status: newStatus });
+        } catch (e) {
+            console.error(e);
+            toast.error('Erro ao alterar status da rota');
+        } finally {
+            setRouteChanging(false);
+        }
+    };
+
     if (loading) {
         return (
             <div className="min-h-screen bg-gray-50 flex items-center justify-center">
@@ -538,6 +773,20 @@ export default function AuditDashboard() {
                             <span className="text-xs opacity-70">Editar dados do pedido</span>
                         </div>
                     </button>
+
+                    <button
+                        onClick={() => { setActiveSection('rotas'); setDetails(null); setActiveCheck(null); setFoundRoute(null); }}
+                        className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-left transition-all ${activeSection === 'rotas'
+                            ? 'bg-orange-50 text-orange-700 border border-orange-200'
+                            : 'text-gray-600 hover:bg-gray-50'
+                            }`}
+                    >
+                        <Route className="h-5 w-5" />
+                        <div>
+                            <span className="font-medium block">Status de Rota</span>
+                            <span className="text-xs opacity-70">Alterar status de rotas</span>
+                        </div>
+                    </button>
                 </nav>
             </aside>
 
@@ -545,7 +794,7 @@ export default function AuditDashboard() {
             <main className="flex-1 overflow-auto bg-gray-50/50">
                 <div className="px-6 py-4 flex items-center justify-between">
                     <h2 className="text-xl font-bold text-gray-900 border-l-4 border-blue-500 pl-3">
-                        {activeSection === 'geral' ? 'Auditoria Geral' : 'Auditoria de Venda (Edição de Status)'}
+                        {activeSection === 'geral' ? 'Auditoria Geral' : activeSection === 'venda' ? 'Auditoria de Venda (Edição de Status)' : 'Alterar Status de Rota'}
                     </h2>
                     {activeSection === 'geral' && (
                         <button
@@ -563,6 +812,52 @@ export default function AuditDashboard() {
                     {/* AUDITORIA GERAL */}
                     {activeSection === 'geral' && (
                         <>
+                            {/* Controle do Simulador E2E */}
+                            <div className="bg-white rounded-xl shadow-[0_4px_10px_rgba(0,0,0,0.05)] border border-purple-200 mb-8 p-6 relative overflow-hidden">
+                                <div className="absolute top-0 left-0 w-2 h-full bg-purple-500"></div>
+                                <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                                    <div>
+                                        <h3 className="text-xl font-bold text-gray-900 flex items-center gap-2">
+                                            <Hammer className="h-5 w-5 text-purple-600" />
+                                            Simulador de Entregas e Montagem (E2E)
+                                        </h3>
+                                        <p className="text-sm text-gray-500 mt-1">Crie um pedido e rota real de TESTE para você operar no App e verificar a ativação correta do painel de Montagens.</p>
+                                    </div>
+
+                                    <div className="flex flex-col sm:flex-row items-center gap-3 w-full md:w-auto">
+                                        <select
+                                            className="px-4 py-2 bg-gray-50 border border-gray-300 rounded-lg text-sm focus:ring-purple-500 focus:border-purple-500 w-full sm:w-auto"
+                                            value={chosenDriver}
+                                            onChange={(e) => setChosenDriver(e.target.value)}
+                                            disabled={e2eLoading}
+                                        >
+                                            <option value="">-- Selecione Motorista --</option>
+                                            {e2eDrivers.map(d => (
+                                                <option key={d.id} value={d.id}>{d.name}</option>
+                                            ))}
+                                        </select>
+
+                                        <button
+                                            onClick={handleInjectE2E}
+                                            disabled={e2eLoading || !chosenDriver}
+                                            className="whitespace-nowrap flex items-center gap-2 px-5 py-2 bg-purple-600 text-white font-medium rounded-lg hover:bg-purple-700 transition-colors disabled:opacity-50"
+                                        >
+                                            {e2eLoading ? <RefreshCw className="animate-spin h-4 w-4" /> : <Truck className="h-4 w-4" />}
+                                            Injetar Cenário (Preparar)
+                                        </button>
+
+                                        <button
+                                            onClick={handleCleanE2E}
+                                            disabled={e2eLoading}
+                                            className="whitespace-nowrap flex items-center gap-2 px-5 py-2 bg-white text-red-600 border border-red-200 font-medium rounded-lg hover:bg-red-50 transition-colors disabled:opacity-50"
+                                        >
+                                            {e2eLoading ? <RefreshCw className="animate-spin h-4 w-4" /> : <AlertOctagon className="h-4 w-4" />}
+                                            Limpar Testes Antigos
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+
                             {/* Cards Grid */}
                             <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
                                 {/* Card Pedidos Travados */}
@@ -907,7 +1202,7 @@ export default function AuditDashboard() {
                                                         <div className="flex items-center gap-3">
                                                             <span className="text-sm text-gray-600">Montagem:</span>
                                                             <select
-                                                                value={item.has_assembly || 'Não'}
+                                                                value={String(item.has_assembly || '').toLowerCase() === 'sim' ? 'Sim' : 'Não'}
                                                                 onChange={(e) => updateItemAssembly(idx, e.target.value)}
                                                                 className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-green-500"
                                                             >
@@ -962,6 +1257,121 @@ export default function AuditDashboard() {
                                             </div>
                                         </div>
                                     )}
+                                </div>
+                            )}
+                        </div>
+                    )}
+
+                    {/* ALTERAÇÃO DE STATUS DE ROTA */}
+                    {activeSection === 'rotas' && (
+                        <div className="space-y-6">
+                            {/* Search Bar */}
+                            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+                                <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
+                                    <Search className="h-5 w-5 text-gray-500" />
+                                    Buscar Rota por ID
+                                </h3>
+                                <div className="flex gap-3">
+                                    <input
+                                        type="text"
+                                        value={routeSearchName}
+                                        onChange={(e) => setRouteSearchName(e.target.value)}
+                                        onKeyDown={(e) => e.key === 'Enter' && searchRoute()}
+                                        placeholder="Cole o ID da rota aqui..."
+                                        className="flex-1 px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 text-lg font-mono"
+                                    />
+                                    <button
+                                        onClick={searchRoute}
+                                        disabled={routeSearchLoading}
+                                        className="px-6 py-3 bg-orange-600 text-white rounded-lg hover:bg-orange-700 font-medium flex items-center gap-2 disabled:opacity-50 transition-colors"
+                                    >
+                                        {routeSearchLoading ? (
+                                            <RefreshCw className="animate-spin h-5 w-5" />
+                                        ) : (
+                                            <Search className="h-5 w-5" />
+                                        )}
+                                        Buscar
+                                    </button>
+                                </div>
+                            </div>
+
+                            {/* Route Result */}
+                            {foundRoute && (
+                                <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                                    <div className={`p-6 border-l-4 ${
+                                        foundRoute.status === 'in_progress' ? 'border-l-blue-500 bg-blue-50/30' :
+                                        foundRoute.status === 'pending' ? 'border-l-yellow-500 bg-yellow-50/30' :
+                                        'border-l-green-500 bg-green-50/30'
+                                    }`}>
+                                        <h3 className="text-lg font-bold text-gray-900 mb-4">{foundRoute.name}</h3>
+
+                                        <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mb-6">
+                                            <div>
+                                                <p className="text-xs text-gray-500 mb-1">Status Atual</p>
+                                                <span className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-semibold ${
+                                                    foundRoute.status === 'in_progress' ? 'bg-blue-100 text-blue-800' :
+                                                    foundRoute.status === 'pending' ? 'bg-yellow-100 text-yellow-800' :
+                                                    'bg-green-100 text-green-800'
+                                                }`}>
+                                                    {foundRoute.status === 'in_progress' ? '🚛 Em Rota' :
+                                                     foundRoute.status === 'pending' ? '📦 Separação' :
+                                                     '✅ Finalizada'}
+                                                </span>
+                                            </div>
+                                            <div>
+                                                <p className="text-xs text-gray-500 mb-1">Motorista</p>
+                                                <p className="font-medium text-gray-900">{foundRoute.driver_name}</p>
+                                            </div>
+                                            <div>
+                                                <p className="text-xs text-gray-500 mb-1">Veículo</p>
+                                                <p className="font-medium text-gray-900">{foundRoute.vehicle_info}</p>
+                                            </div>
+                                            <div>
+                                                <p className="text-xs text-gray-500 mb-1">Pedidos</p>
+                                                <p className="font-medium text-gray-900">{foundRoute.route_orders?.length || 0} pedido(s)</p>
+                                            </div>
+                                            <div>
+                                                <p className="text-xs text-gray-500 mb-1">Criada em</p>
+                                                <p className="font-medium text-gray-900">{new Date(foundRoute.created_at).toLocaleDateString('pt-BR')}</p>
+                                            </div>
+                                            {foundRoute.observations && (
+                                                <div>
+                                                    <p className="text-xs text-gray-500 mb-1">Observações</p>
+                                                    <p className="font-medium text-gray-900 text-sm">{foundRoute.observations}</p>
+                                                </div>
+                                            )}
+                                        </div>
+
+                                        {/* Action Buttons */}
+                                        {foundRoute.status === 'in_progress' && (
+                                            <div className="flex gap-3">
+                                                <button
+                                                    onClick={() => changeRouteStatus(foundRoute.id, 'pending')}
+                                                    disabled={routeChanging}
+                                                    className="flex items-center gap-2 px-5 py-2.5 bg-yellow-500 text-white rounded-lg hover:bg-yellow-600 font-medium disabled:opacity-50 transition-colors"
+                                                >
+                                                    {routeChanging ? (
+                                                        <RefreshCw className="animate-spin h-4 w-4" />
+                                                    ) : (
+                                                        <ArrowLeft className="h-4 w-4" />
+                                                    )}
+                                                    Voltar para Separação
+                                                </button>
+                                            </div>
+                                        )}
+
+                                        {foundRoute.status === 'pending' && (
+                                            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
+                                                <p className="text-sm text-yellow-800">✅ Esta rota já está em separação.</p>
+                                            </div>
+                                        )}
+
+                                        {foundRoute.status === 'completed' && (
+                                            <div className="bg-gray-50 border border-gray-200 rounded-lg p-3">
+                                                <p className="text-sm text-gray-600">🔒 Rotas finalizadas não podem ter o status alterado.</p>
+                                            </div>
+                                        )}
+                                    </div>
                                 </div>
                             )}
                         </div>
