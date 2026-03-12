@@ -449,7 +449,7 @@ function RouteCreationContent() {
         v['operacao'] = raw?.operacoes || '-';
         v['vendedor'] = (o as any).vendedor_nome || raw?.vendedor || '-';
         v['situacao'] = o.status || '-';
-        v['obsPublicas'] = (o as any).observacoes || raw?.observacoes || '-';
+        v['obsPublicas'] = (o as any).observacoes_publicas || raw?.observacoes || '-';
         v['obsInternas'] = o.observacoes_internas || raw?.observacoes_internas || '-';
 
         // --- NEW COLUMN: Prev. Entrega ---
@@ -2883,7 +2883,7 @@ function RouteCreationContent() {
                     const isSelected = selectedOrders.has(o.id);
                     const raw: any = o.raw_json || {};
                     const obsIntLower = String(o.observacoes_internas || raw.observacoes_internas || '').toLowerCase();
-                    const obsLower = String(o.observacoes || raw.observacoes || '').toLowerCase();
+                    const obsLower = String(o.observacoes_publicas || raw.observacoes || '').toLowerCase();
                     const temFreteFull = hasFreteFull(o);
                     const hasAssembly = isTrueGlobal(it?.has_assembly) || obsIntLower.includes('*montagem*');
 
