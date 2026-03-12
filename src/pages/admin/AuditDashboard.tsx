@@ -7,11 +7,18 @@ import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../../stores/authStore';
 
 type ActiveSection = 'geral' | 'venda' | 'rotas';
+const AUDIT_ADMIN_PASSWORD = '0000';
 
 export default function AuditDashboard() {
     const navigate = useNavigate();
     const { user } = useAuthStore();
     const [loading, setLoading] = useState(true);
+    const [generalAccessGranted, setGeneralAccessGranted] = useState(false);
+    const [generalAccessPassword, setGeneralAccessPassword] = useState('');
+    const [generalAccessError, setGeneralAccessError] = useState('');
+    const [routeAccessGranted, setRouteAccessGranted] = useState(false);
+    const [routeAccessPassword, setRouteAccessPassword] = useState('');
+    const [routeAccessError, setRouteAccessError] = useState('');
     const [isRefreshing, setIsRefreshing] = useState(false);
     const [activeSection, setActiveSection] = useState<ActiveSection>('geral');
     const [counts, setCounts] = useState({
@@ -50,8 +57,32 @@ export default function AuditDashboard() {
     useEffect(() => {
         runChecks(true);
         loadE2EDrivers();
-        // Realtime removido: assinaturas sem filtro sobrecarregavam o pool de conexões.
+        // Realtime removido: assinaturas sem filtro sobrecarregavam o pool de conexoes.
     }, []);
+
+    const handleUnlockGeneralSection = (e?: React.FormEvent) => {
+        if (e) e.preventDefault();
+        if (generalAccessPassword === AUDIT_ADMIN_PASSWORD) {
+            setGeneralAccessGranted(true);
+            setGeneralAccessError('');
+            setGeneralAccessPassword('');
+            return;
+        }
+        setGeneralAccessError('Senha invalida.');
+        toast.error('Senha invalida.');
+    };
+
+    const handleUnlockRouteSection = (e?: React.FormEvent) => {
+        if (e) e.preventDefault();
+        if (routeAccessPassword === AUDIT_ADMIN_PASSWORD) {
+            setRouteAccessGranted(true);
+            setRouteAccessError('');
+            setRouteAccessPassword('');
+            return;
+        }
+        setRouteAccessError('Senha invalida.');
+        toast.error('Senha invalida.');
+    };
 
     const loadE2EDrivers = async () => {
         // Tabela original de Motoristas atrelada com inner join na tabela "users" para puxar o Nome visível
@@ -1078,6 +1109,11 @@ export default function AuditDashboard() {
 
     // ==================== ROUTE STATUS CHANGE ====================
     const searchRoute = async () => {
+        if (!routeAccessGranted) {
+            toast.error('Área protegida. Informe a senha para continuar.');
+            return;
+        }
+
         const term = routeSearchName.trim();
         if (!term) {
             toast.error('Digite o ID da rota');
@@ -1135,6 +1171,11 @@ export default function AuditDashboard() {
     };
 
     const changeRouteStatus = async (routeId: string, newStatus: string) => {
+        if (!routeAccessGranted) {
+            toast.error('Área protegida. Informe a senha para continuar.');
+            return;
+        }
+
         const statusLabels: Record<string, string> = {
             pending: 'Separação',
             in_progress: 'Em Rota',
@@ -1257,7 +1298,7 @@ export default function AuditDashboard() {
                     <h2 className="text-xl font-bold text-gray-900 border-l-4 border-blue-500 pl-3">
                         {activeSection === 'geral' ? 'Auditoria Geral' : activeSection === 'venda' ? 'Auditoria de Venda (Edição de Status)' : 'Alterar Status de Rota'}
                     </h2>
-                    {activeSection === 'geral' && (
+                    {activeSection === 'geral' && generalAccessGranted && (
                         <button
                             onClick={() => runChecks(false)}
                             className="flex items-center gap-2 px-4 py-2 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 transition-colors font-medium text-sm border border-blue-200"
@@ -1272,6 +1313,36 @@ export default function AuditDashboard() {
                 <div className="p-6">
                     {/* AUDITORIA GERAL */}
                     {activeSection === 'geral' && (
+                        !generalAccessGranted ? (
+                            <div className="w-full max-w-md bg-white border border-gray-200 rounded-xl shadow-sm p-6">
+                                <h3 className="text-lg font-bold text-gray-900 mb-2">Acesso à Auditoria Geral</h3>
+                                <p className="text-sm text-gray-600 mb-5">
+                                    Informe a senha de admin para liberar esta seção.
+                                </p>
+                                <form onSubmit={handleUnlockGeneralSection} className="space-y-4">
+                                    <input
+                                        type="password"
+                                        value={generalAccessPassword}
+                                        onChange={(e) => {
+                                            setGeneralAccessPassword(e.target.value);
+                                            if (generalAccessError) setGeneralAccessError('');
+                                        }}
+                                        placeholder="Senha"
+                                        autoFocus
+                                        className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                                    />
+                                    {generalAccessError && (
+                                        <p className="text-sm text-red-600">{generalAccessError}</p>
+                                    )}
+                                    <button
+                                        type="submit"
+                                        className="w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                                    >
+                                        Liberar Auditoria Geral
+                                    </button>
+                                </form>
+                            </div>
+                        ) : (
                         <>
                             {/* Controle do Simulador E2E */}
                             <div className="bg-white rounded-xl shadow-[0_4px_10px_rgba(0,0,0,0.05)] border border-purple-200 mb-8 p-6 relative overflow-hidden">
@@ -1570,6 +1641,7 @@ export default function AuditDashboard() {
                                 </div>
                             )}
                         </>
+                        )
                     )}
 
                     {/* AUDITORIA DE VENDA */}
@@ -1779,114 +1851,147 @@ export default function AuditDashboard() {
                     {/* ALTERAÇÃO DE STATUS DE ROTA */}
                     {activeSection === 'rotas' && (
                         <div className="space-y-6">
-                            {/* Search Bar */}
-                            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-                                <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
-                                    <Search className="h-5 w-5 text-gray-500" />
-                                    Buscar Rota por ID
-                                </h3>
-                                <div className="flex gap-3">
-                                    <input
-                                        type="text"
-                                        value={routeSearchName}
-                                        onChange={(e) => setRouteSearchName(e.target.value)}
-                                        onKeyDown={(e) => e.key === 'Enter' && searchRoute()}
-                                        placeholder="Cole o ID da rota aqui..."
-                                        className="flex-1 px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 text-lg font-mono"
-                                    />
-                                    <button
-                                        onClick={searchRoute}
-                                        disabled={routeSearchLoading}
-                                        className="px-6 py-3 bg-orange-600 text-white rounded-lg hover:bg-orange-700 font-medium flex items-center gap-2 disabled:opacity-50 transition-colors"
-                                    >
-                                        {routeSearchLoading ? (
-                                            <RefreshCw className="animate-spin h-5 w-5" />
-                                        ) : (
-                                            <Search className="h-5 w-5" />
+                            {!routeAccessGranted ? (
+                                <div className="w-full max-w-md bg-white border border-gray-200 rounded-xl shadow-sm p-6">
+                                    <h3 className="text-lg font-bold text-gray-900 mb-2">Acesso ao Status de Rota</h3>
+                                    <p className="text-sm text-gray-600 mb-5">
+                                        Informe a senha de admin para liberar apenas esta seção.
+                                    </p>
+                                    <form onSubmit={handleUnlockRouteSection} className="space-y-4">
+                                        <input
+                                            type="password"
+                                            value={routeAccessPassword}
+                                            onChange={(e) => {
+                                                setRouteAccessPassword(e.target.value);
+                                                if (routeAccessError) setRouteAccessError('');
+                                            }}
+                                            placeholder="Senha"
+                                            autoFocus
+                                            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500"
+                                        />
+                                        {routeAccessError && (
+                                            <p className="text-sm text-red-600">{routeAccessError}</p>
                                         )}
-                                        Buscar
-                                    </button>
+                                        <button
+                                            type="submit"
+                                            className="w-full px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700"
+                                        >
+                                            Liberar Status de Rota
+                                        </button>
+                                    </form>
                                 </div>
-                            </div>
-
-                            {/* Route Result */}
-                            {foundRoute && (
-                                <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-                                    <div className={`p-6 border-l-4 ${
-                                        foundRoute.status === 'in_progress' ? 'border-l-blue-500 bg-blue-50/30' :
-                                        foundRoute.status === 'pending' ? 'border-l-yellow-500 bg-yellow-50/30' :
-                                        'border-l-green-500 bg-green-50/30'
-                                    }`}>
-                                        <h3 className="text-lg font-bold text-gray-900 mb-4">{foundRoute.name}</h3>
-
-                                        <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mb-6">
-                                            <div>
-                                                <p className="text-xs text-gray-500 mb-1">Status Atual</p>
-                                                <span className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-semibold ${
-                                                    foundRoute.status === 'in_progress' ? 'bg-blue-100 text-blue-800' :
-                                                    foundRoute.status === 'pending' ? 'bg-yellow-100 text-yellow-800' :
-                                                    'bg-green-100 text-green-800'
-                                                }`}>
-                                                    {foundRoute.status === 'in_progress' ? '🚛 Em Rota' :
-                                                     foundRoute.status === 'pending' ? '📦 Separação' :
-                                                     '✅ Finalizada'}
-                                                </span>
-                                            </div>
-                                            <div>
-                                                <p className="text-xs text-gray-500 mb-1">Motorista</p>
-                                                <p className="font-medium text-gray-900">{foundRoute.driver_name}</p>
-                                            </div>
-                                            <div>
-                                                <p className="text-xs text-gray-500 mb-1">Veículo</p>
-                                                <p className="font-medium text-gray-900">{foundRoute.vehicle_info}</p>
-                                            </div>
-                                            <div>
-                                                <p className="text-xs text-gray-500 mb-1">Pedidos</p>
-                                                <p className="font-medium text-gray-900">{foundRoute.route_orders?.length || 0} pedido(s)</p>
-                                            </div>
-                                            <div>
-                                                <p className="text-xs text-gray-500 mb-1">Criada em</p>
-                                                <p className="font-medium text-gray-900">{new Date(foundRoute.created_at).toLocaleDateString('pt-BR')}</p>
-                                            </div>
-                                            {foundRoute.observations && (
-                                                <div>
-                                                    <p className="text-xs text-gray-500 mb-1">Observações</p>
-                                                    <p className="font-medium text-gray-900 text-sm">{foundRoute.observations}</p>
-                                                </div>
-                                            )}
+                            ) : (
+                                <>
+                                    {/* Search Bar */}
+                                    <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+                                        <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
+                                            <Search className="h-5 w-5 text-gray-500" />
+                                            Buscar Rota por ID
+                                        </h3>
+                                        <div className="flex gap-3">
+                                            <input
+                                                type="text"
+                                                value={routeSearchName}
+                                                onChange={(e) => setRouteSearchName(e.target.value)}
+                                                onKeyDown={(e) => e.key === 'Enter' && searchRoute()}
+                                                placeholder="Cole o ID da rota aqui..."
+                                                className="flex-1 px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 text-lg font-mono"
+                                            />
+                                            <button
+                                                onClick={searchRoute}
+                                                disabled={routeSearchLoading}
+                                                className="px-6 py-3 bg-orange-600 text-white rounded-lg hover:bg-orange-700 font-medium flex items-center gap-2 disabled:opacity-50 transition-colors"
+                                            >
+                                                {routeSearchLoading ? (
+                                                    <RefreshCw className="animate-spin h-5 w-5" />
+                                                ) : (
+                                                    <Search className="h-5 w-5" />
+                                                )}
+                                                Buscar
+                                            </button>
                                         </div>
-
-                                        {/* Action Buttons */}
-                                        {foundRoute.status === 'in_progress' && (
-                                            <div className="flex gap-3">
-                                                <button
-                                                    onClick={() => changeRouteStatus(foundRoute.id, 'pending')}
-                                                    disabled={routeChanging}
-                                                    className="flex items-center gap-2 px-5 py-2.5 bg-yellow-500 text-white rounded-lg hover:bg-yellow-600 font-medium disabled:opacity-50 transition-colors"
-                                                >
-                                                    {routeChanging ? (
-                                                        <RefreshCw className="animate-spin h-4 w-4" />
-                                                    ) : (
-                                                        <ArrowLeft className="h-4 w-4" />
-                                                    )}
-                                                    Voltar para Separação
-                                                </button>
-                                            </div>
-                                        )}
-
-                                        {foundRoute.status === 'pending' && (
-                                            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
-                                                <p className="text-sm text-yellow-800">✅ Esta rota já está em separação.</p>
-                                            </div>
-                                        )}
-
-                                        {foundRoute.status === 'completed' && (
-                                            <div className="bg-gray-50 border border-gray-200 rounded-lg p-3">
-                                                <p className="text-sm text-gray-600">🔒 Rotas finalizadas não podem ter o status alterado.</p>
-                                            </div>
-                                        )}
                                     </div>
-                                </div>
+
+                                    {/* Route Result */}
+                                    {foundRoute && (
+                                        <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                                            <div className={`p-6 border-l-4 ${
+                                                foundRoute.status === 'in_progress' ? 'border-l-blue-500 bg-blue-50/30' :
+                                                foundRoute.status === 'pending' ? 'border-l-yellow-500 bg-yellow-50/30' :
+                                                'border-l-green-500 bg-green-50/30'
+                                            }`}>
+                                                <h3 className="text-lg font-bold text-gray-900 mb-4">{foundRoute.name}</h3>
+
+                                                <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mb-6">
+                                                    <div>
+                                                        <p className="text-xs text-gray-500 mb-1">Status Atual</p>
+                                                        <span className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-semibold ${
+                                                            foundRoute.status === 'in_progress' ? 'bg-blue-100 text-blue-800' :
+                                                            foundRoute.status === 'pending' ? 'bg-yellow-100 text-yellow-800' :
+                                                            'bg-green-100 text-green-800'
+                                                        }`}>
+                                                            {foundRoute.status === 'in_progress' ? '🚛 Em Rota' :
+                                                             foundRoute.status === 'pending' ? '📦 Separação' :
+                                                             '✅ Finalizada'}
+                                                        </span>
+                                                    </div>
+                                                    <div>
+                                                        <p className="text-xs text-gray-500 mb-1">Motorista</p>
+                                                        <p className="font-medium text-gray-900">{foundRoute.driver_name}</p>
+                                                    </div>
+                                                    <div>
+                                                        <p className="text-xs text-gray-500 mb-1">Veículo</p>
+                                                        <p className="font-medium text-gray-900">{foundRoute.vehicle_info}</p>
+                                                    </div>
+                                                    <div>
+                                                        <p className="text-xs text-gray-500 mb-1">Pedidos</p>
+                                                        <p className="font-medium text-gray-900">{foundRoute.route_orders?.length || 0} pedido(s)</p>
+                                                    </div>
+                                                    <div>
+                                                        <p className="text-xs text-gray-500 mb-1">Criada em</p>
+                                                        <p className="font-medium text-gray-900">{new Date(foundRoute.created_at).toLocaleDateString('pt-BR')}</p>
+                                                    </div>
+                                                    {foundRoute.observations && (
+                                                        <div>
+                                                            <p className="text-xs text-gray-500 mb-1">Observações</p>
+                                                            <p className="font-medium text-gray-900 text-sm">{foundRoute.observations}</p>
+                                                        </div>
+                                                    )}
+                                                </div>
+
+                                                {/* Action Buttons */}
+                                                {foundRoute.status === 'in_progress' && (
+                                                    <div className="flex gap-3">
+                                                        <button
+                                                            onClick={() => changeRouteStatus(foundRoute.id, 'pending')}
+                                                            disabled={routeChanging}
+                                                            className="flex items-center gap-2 px-5 py-2.5 bg-yellow-500 text-white rounded-lg hover:bg-yellow-600 font-medium disabled:opacity-50 transition-colors"
+                                                        >
+                                                            {routeChanging ? (
+                                                                <RefreshCw className="animate-spin h-4 w-4" />
+                                                            ) : (
+                                                                <ArrowLeft className="h-4 w-4" />
+                                                            )}
+                                                            Voltar para Separação
+                                                        </button>
+                                                    </div>
+                                                )}
+
+                                                {foundRoute.status === 'pending' && (
+                                                    <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
+                                                        <p className="text-sm text-yellow-800">✅ Esta rota já está em separação.</p>
+                                                    </div>
+                                                )}
+
+                                                {foundRoute.status === 'completed' && (
+                                                    <div className="bg-gray-50 border border-gray-200 rounded-lg p-3">
+                                                        <p className="text-sm text-gray-600">🔒 Rotas finalizadas não podem ter o status alterado.</p>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+                                    )}
+                                </>
                             )}
                         </div>
                     )}
