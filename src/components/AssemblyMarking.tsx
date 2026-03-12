@@ -645,48 +645,81 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
       }
 
       if (isOnline && !hasPendingSync) {
-        // 1. Mark status completed
+        // 1. Mark route completed (must not block operation on clone errors)
         const { error } = await supabase.from('assembly_routes').update({ status: 'completed' }).eq('id', routeId);
         if (error) throw error;
 
-        // 2. Find returned items to re-insert
+        // 2. Try to reconcile returned clones by COUNT (best effort, non-blocking)
         const returnedItems = assemblyItems.filter(i => i.status === 'cancelled');
+        let cloneReconcileFailed = false;
 
         if (returnedItems.length > 0) {
-          // Para cada item retornado, verificar se já existe clone pendente
-          for (const item of returnedItems) {
-            const { data: existingClone } = await supabase
-              .from('assembly_products')
-              .select('id')
-              .eq('order_id', item.order_id)
-              .eq('product_sku', item.product_sku)
-              .eq('status', 'pending')
-              .is('assembly_route_id', null)
-              .limit(1);
+          try {
+            const grouped = new Map<string, { item: any; returnedCount: number }>();
 
-            if (existingClone && existingClone.length > 0) {
-              console.log('[FinalizeRoute] Clone already exists for', item.product_sku, '- skipping');
-              continue;
+            for (const item of returnedItems) {
+              const skuKey = item.product_sku === null || item.product_sku === undefined ? '__null__' : String(item.product_sku);
+              const key = `${item.order_id}::${skuKey}`;
+              const current = grouped.get(key);
+              if (current) {
+                current.returnedCount += 1;
+              } else {
+                grouped.set(key, { item, returnedCount: 1 });
+              }
             }
 
-            const newItem = {
-              order_id: item.order_id,
-              product_name: item.product_name,
-              product_sku: item.product_sku,
-              customer_name: item.customer_name,
-              customer_phone: item.customer_phone,
-              installation_address: item.installation_address,
-              status: 'pending',
-              observations: null,
-              assembly_route_id: null,
-              was_returned: true
-            };
+            const clonesToInsert: any[] = [];
 
-            await supabase.from('assembly_products').insert(newItem);
+            for (const { item, returnedCount } of grouped.values()) {
+              let countQuery: any = supabase
+                .from('assembly_products')
+                .select('id', { count: 'exact', head: true })
+                .eq('order_id', item.order_id)
+                .eq('status', 'pending')
+                .is('assembly_route_id', null);
+
+              if (item.product_sku === null || item.product_sku === undefined) {
+                countQuery = countQuery.is('product_sku', null);
+              } else {
+                countQuery = countQuery.eq('product_sku', item.product_sku);
+              }
+
+              const { count: existingCount, error: countError } = await countQuery;
+              if (countError) throw countError;
+
+              const missingCount = returnedCount - (existingCount || 0);
+              if (missingCount <= 0) continue;
+
+              for (let i = 0; i < missingCount; i++) {
+                clonesToInsert.push({
+                  order_id: item.order_id,
+                  product_name: item.product_name,
+                  product_sku: item.product_sku ?? null,
+                  customer_name: item.customer_name,
+                  customer_phone: item.customer_phone,
+                  installation_address: item.installation_address,
+                  status: 'pending',
+                  observations: null,
+                  assembly_route_id: null,
+                  was_returned: true
+                });
+              }
+            }
+
+            if (clonesToInsert.length > 0) {
+              const { error: insertError } = await supabase.from('assembly_products').insert(clonesToInsert);
+              if (insertError) throw insertError;
+            }
+          } catch (cloneErr) {
+            cloneReconcileFailed = true;
+            console.error('[FinalizeRoute] Clone reconciliation failed:', cloneErr);
           }
         }
 
         toast.success('Rota finalizada com sucesso!');
+        if (cloneReconcileFailed) {
+          toast.warning('Rota finalizada, mas alguns retornos ficaram pendentes para auditoria.');
+        }
         setRouteStatus('completed');
         if (onUpdated) onUpdated();
       } else {

@@ -1,4 +1,4 @@
-
+﻿
 import React, { useEffect, useState } from 'react';
 import { supabase } from '../../supabase/client';
 import { toast } from 'sonner';
@@ -18,15 +18,18 @@ export default function AuditDashboard() {
         stuck_orders: 0,
         duplicates: 0,
         missing_assembly: 0,
-        ghost_routes: 0
+        ghost_routes: 0,
+        missing_return_clones: 0
     });
 
     const [details, setDetails] = useState<any[] | null>(null);
     const [activeCheck, setActiveCheck] = useState<string | null>(null);
     const [assemblyTab, setAssemblyTab] = useState<'lote' | 'avulso'>('lote');
+    const [processingReturnFix, setProcessingReturnFix] = useState<Set<string>>(new Set());
 
     // States for E2E Simulator
     const [e2eLoading, setE2eLoading] = useState(false);
+    const [returnGapLoading, setReturnGapLoading] = useState(false);
     const [e2eDrivers, setE2eDrivers] = useState<any[]>([]);
     const [chosenDriver, setChosenDriver] = useState<string>('');
 
@@ -78,6 +81,327 @@ export default function AuditDashboard() {
         }
     };
 
+    const computeReturnCloneGaps = async () => {
+        const toMs = (value: any) => {
+            if (!value) return 0;
+            const parsed = new Date(value).getTime();
+            return Number.isFinite(parsed) ? parsed : 0;
+        };
+
+        const normalizeSku = (value: any) => {
+            if (value === null || value === undefined) return '__null__';
+            const normalized = String(value).trim().toUpperCase();
+            return normalized.length > 0 ? normalized : '__null__';
+        };
+
+        const seteDiasAtras = new Date();
+        seteDiasAtras.setDate(seteDiasAtras.getDate() - 7);
+        const cutoffIso = seteDiasAtras.toISOString();
+
+        const { data: returnedItems, error: returnedErr } = await supabase
+            .from('assembly_products')
+            .select(`
+                id, order_id, product_name, product_sku, customer_name, customer_phone, installation_address, updated_at, returned_at, assembly_route_id,
+                route:assembly_routes!inner(id, route_code, status, updated_at),
+                order:orders!inner(id, order_id_erp, customer_name, import_source)
+            `)
+            .eq('status', 'cancelled')
+            .not('assembly_route_id', 'is', null)
+            .eq('route.status', 'completed')
+            // Janela da auditoria: retornos de montagem dos últimos 7 dias.
+            .or(`returned_at.gte.${cutoffIso},and(returned_at.is.null,updated_at.gte.${cutoffIso})`)
+            .limit(10000);
+
+        if (returnedErr) {
+            throw returnedErr;
+        }
+
+        if (!returnedItems || returnedItems.length === 0) {
+            return [];
+        }
+
+        const groupedReturns = new Map<string, any>();
+        const orderIds = new Set<string>();
+
+        returnedItems.forEach((row: any) => {
+            const skuKey = normalizeSku(row.product_sku);
+            const key = `${row.order_id}::${skuKey}`;
+            orderIds.add(String(row.order_id));
+            const rowReturnAt = row.returned_at || row.updated_at;
+            const rowReturnMs = toMs(rowReturnAt);
+
+            const current = groupedReturns.get(key);
+            if (!current) {
+                const routeInfo = new Map<string, any>();
+                const routeKey = String(row.route?.id || row.assembly_route_id || 'sem-rota');
+                routeInfo.set(routeKey, {
+                    route_id: row.route?.id || row.assembly_route_id || null,
+                    route_code: row.route?.route_code || '-',
+                    return_count: 1,
+                    first_return_at: rowReturnAt,
+                    latest_return_at: rowReturnAt
+                });
+
+                groupedReturns.set(key, {
+                    key,
+                    order_id: row.order_id,
+                    order_id_erp: row.order?.order_id_erp || '-',
+                    client_name: row.order?.customer_name || row.customer_name || '-',
+                    import_source: row.order?.import_source || null,
+                    product_sku: row.product_sku,
+                    product_name: row.product_name || 'Produto sem nome',
+                    customer_name: row.customer_name || row.order?.customer_name || '-',
+                    customer_phone: row.customer_phone || null,
+                    installation_address: row.installation_address || null,
+                    latest_route_code: row.route?.route_code || '-',
+                    latest_route_id: row.route?.id || null,
+                    first_return_at: rowReturnAt,
+                    latest_return_at: rowReturnAt,
+                    returned_count: 1,
+                    route_returns: routeInfo
+                });
+            } else {
+                current.returned_count += 1;
+                const routeKey = String(row.route?.id || row.assembly_route_id || 'sem-rota');
+                const routeCurrent = current.route_returns.get(routeKey);
+
+                if (!routeCurrent) {
+                    current.route_returns.set(routeKey, {
+                        route_id: row.route?.id || row.assembly_route_id || null,
+                        route_code: row.route?.route_code || '-',
+                        return_count: 1,
+                        first_return_at: rowReturnAt,
+                        latest_return_at: rowReturnAt
+                    });
+                } else {
+                    routeCurrent.return_count += 1;
+                    if (rowReturnMs < toMs(routeCurrent.first_return_at)) {
+                        routeCurrent.first_return_at = rowReturnAt;
+                    }
+                    if (rowReturnMs > toMs(routeCurrent.latest_return_at)) {
+                        routeCurrent.latest_return_at = rowReturnAt;
+                    }
+                }
+
+                const firstTs = toMs(current.first_return_at);
+                const rowTsForFirst = rowReturnMs;
+                if (rowTsForFirst <= firstTs) {
+                    current.first_return_at = rowReturnAt || current.first_return_at;
+                }
+                const currentTs = toMs(current.latest_return_at);
+                const rowTs = rowReturnMs;
+                if (rowTs >= currentTs) {
+                    current.latest_route_code = row.route?.route_code || current.latest_route_code;
+                    current.latest_route_id = row.route?.id || current.latest_route_id;
+                    current.latest_return_at = rowReturnAt || current.latest_return_at;
+                    current.product_name = row.product_name || current.product_name;
+                    current.customer_name = row.customer_name || current.customer_name;
+                    current.customer_phone = row.customer_phone || current.customer_phone;
+                    current.installation_address = row.installation_address || current.installation_address;
+                }
+            }
+        });
+
+        const orderIdsArray = Array.from(orderIds);
+        const { data: allAssemblyRows, error: cloneErr } = await supabase
+            .from('assembly_products')
+            .select('order_id, product_sku, created_at')
+            .in('order_id', orderIdsArray)
+            .limit(20000);
+
+        if (cloneErr) {
+            throw cloneErr;
+        }
+
+        const gaps: any[] = [];
+        groupedReturns.forEach((group: any) => {
+            const latestRouteReturn = Array.from((group.route_returns as Map<string, any>).values())
+                .sort((a: any, b: any) => toMs(b.latest_return_at) - toMs(a.latest_return_at))[0];
+
+            const targetReturnedCount = Number(latestRouteReturn?.return_count || 0);
+            const cutoffTs = toMs(latestRouteReturn?.latest_return_at || group.latest_return_at);
+            const cutoffIso = latestRouteReturn?.latest_return_at || group.latest_return_at;
+
+            const reentryCount = (allAssemblyRows || []).filter((row: any) => {
+                if (String(row.order_id) !== String(group.order_id)) return false;
+                const rowSkuKey = normalizeSku(row.product_sku);
+                const groupSkuKey = normalizeSku(group.product_sku);
+                if (rowSkuKey !== groupSkuKey) return false;
+                return toMs(row.created_at) >= cutoffTs;
+            }).length;
+
+            const missingCount = targetReturnedCount - reentryCount;
+            if (missingCount > 0) {
+                gaps.push({
+                    id: group.key,
+                    type: 'return_clone_gap',
+                    order_id: group.order_id,
+                    order_id_erp: group.order_id_erp,
+                    client_name: group.client_name,
+                    import_source: group.import_source,
+                    product_sku: group.product_sku,
+                    product_name: group.product_name,
+                    route_code: latestRouteReturn?.route_code || group.latest_route_code,
+                    route_id: latestRouteReturn?.route_id || group.latest_route_id,
+                    first_return_at: latestRouteReturn?.first_return_at || group.first_return_at,
+                    latest_return_at: cutoffIso,
+                    returned_count: targetReturnedCount,
+                    clone_count: reentryCount,
+                    missing_count: missingCount,
+                    details: `Rota ${latestRouteReturn?.route_code || group.latest_route_code} | SKU ${group.product_sku || '-'} | Faltam ${missingCount}`,
+                    sample_clone: {
+                        order_id: group.order_id,
+                        product_name: group.product_name,
+                        product_sku: group.product_sku,
+                        customer_name: group.customer_name,
+                        customer_phone: group.customer_phone,
+                        installation_address: group.installation_address
+                    }
+                });
+            }
+        });
+
+        gaps.sort((a, b) => {
+            const routeA = String(a.route_code || '');
+            const routeB = String(b.route_code || '');
+            if (routeA !== routeB) return routeA.localeCompare(routeB);
+            return String(a.order_id_erp || '').localeCompare(String(b.order_id_erp || ''));
+        });
+
+        return gaps;
+    };
+
+    const normalizeSkuKey = (value: any) => {
+        if (value === null || value === undefined) return '__null__';
+        const normalized = String(value).trim().toUpperCase();
+        return normalized.length > 0 ? normalized : '__null__';
+    };
+
+    const toPositiveInt = (value: any) => {
+        const parsed = Number(value);
+        if (!Number.isFinite(parsed) || parsed <= 0) return 1;
+        return Math.floor(parsed);
+    };
+
+    const parseItemsJson = (itemsJson: any) => {
+        if (!itemsJson) return [];
+        if (Array.isArray(itemsJson)) return itemsJson;
+        if (typeof itemsJson === 'string') {
+            try {
+                return JSON.parse(itemsJson);
+            } catch {
+                return [];
+            }
+        }
+        return [];
+    };
+
+    const itemRequiresAssembly = (item: any) => {
+        const hasAssemblyRaw = String(item?.has_assembly ?? '').trim().toLowerCase();
+        if (hasAssemblyRaw.length > 0) return hasAssemblyRaw === 'sim';
+
+        // Fallback para cargas legadas que ainda usam a flag antiga.
+        const legacyRaw = String(item?.produto_e_montavel ?? '').trim().toLowerCase();
+        return legacyRaw === 'sim';
+    };
+
+    const computeMissingAssemblyOrders = async () => {
+        const seteDiasAtras = new Date();
+        seteDiasAtras.setDate(seteDiasAtras.getDate() - 7);
+
+        const { data: deliveredOrders, error: deliveredErr } = await supabase
+            .from('orders')
+            .select('id, order_id_erp, customer_name, phone, address_json, items_json, import_source')
+            .eq('status', 'delivered')
+            .gte('updated_at', seteDiasAtras.toISOString())
+            .limit(10000);
+
+        if (deliveredErr) throw deliveredErr;
+        if (!deliveredOrders || deliveredOrders.length === 0) return [];
+
+        const orderIds = deliveredOrders.map((order: any) => order.id);
+        const { data: activeRouteOrders, error: activeRouteErr } = await supabase
+            .from('route_orders')
+            .select('order_id, route:routes(status)')
+            .in('order_id', orderIds)
+            .in('route.status', ['pending', 'in_progress', 'ready']);
+
+        if (activeRouteErr) throw activeRouteErr;
+
+        const ordersWithActiveRoute = new Set(
+            (activeRouteOrders || [])
+                .map((row: any) => row.order_id)
+                .filter(Boolean)
+        );
+
+        const { data: existingAssemblies, error: assemblyErr } = await supabase
+            .from('assembly_products')
+            .select('order_id, product_sku')
+            .in('order_id', orderIds)
+            .limit(50000);
+
+        if (assemblyErr) throw assemblyErr;
+
+        const existingByOrderSku = new Map<string, number>();
+        (existingAssemblies || []).forEach((row: any) => {
+            const key = `${row.order_id}::${normalizeSkuKey(row.product_sku)}`;
+            existingByOrderSku.set(key, (existingByOrderSku.get(key) || 0) + 1);
+        });
+
+        const missingDetails: any[] = [];
+
+        (deliveredOrders || []).forEach((order: any) => {
+            // Pedido ainda em rota ativa de entrega nao deve entrar como pendente de montagem.
+            if (ordersWithActiveRoute.has(order.id)) return;
+
+            const items = parseItemsJson(order.items_json);
+            const assemblyItems = items.filter((item: any) => itemRequiresAssembly(item));
+            if (assemblyItems.length === 0) return;
+
+            const expectedBySku = new Map<string, { skuLabel: string; expected: number }>();
+            assemblyItems.forEach((item: any) => {
+                const skuRaw = item?.sku ?? item?.product_sku ?? item?.codigo ?? item?.code ?? null;
+                const skuKey = normalizeSkuKey(skuRaw);
+                const skuLabel = skuRaw == null || String(skuRaw).trim() === '' ? '-' : String(skuRaw).trim();
+                const expected = toPositiveInt(item?.purchased_quantity ?? item?.quantity ?? 1);
+
+                const current = expectedBySku.get(skuKey);
+                if (!current) expectedBySku.set(skuKey, { skuLabel, expected });
+                else current.expected += expected;
+            });
+
+            const missingBySku: Array<{ sku: string; missing: number }> = [];
+            let totalMissing = 0;
+
+            expectedBySku.forEach((expectedInfo, skuKey) => {
+                const existingCount = existingByOrderSku.get(`${order.id}::${skuKey}`) || 0;
+                const missingCount = expectedInfo.expected - existingCount;
+                if (missingCount > 0) {
+                    totalMissing += missingCount;
+                    missingBySku.push({ sku: expectedInfo.skuLabel, missing: missingCount });
+                }
+            });
+
+            if (totalMissing > 0) {
+                missingDetails.push({
+                    id: order.id,
+                    order_id_erp: order.order_id_erp,
+                    client_name: order.customer_name,
+                    delivery_date: 'Nos últimos 7 dias',
+                    items_json: assemblyItems,
+                    details: `${totalMissing} item(ns) faltando em ${missingBySku.length} SKU(s)`,
+                    missing_skus: missingBySku.map((item) => `${item.sku} x${item.missing}`).join(', '),
+                    missing_total: totalMissing,
+                    import_source: order.import_source,
+                    phone: order.phone,
+                    address_json: order.address_json
+                });
+            }
+        });
+
+        return missingDetails;
+    };
+
     const runChecks = async (isInitial = false) => {
         if (isInitial) setLoading(true);
         else setIsRefreshing(true);
@@ -113,49 +437,19 @@ export default function AuditDashboard() {
             });
             duplicateCount = Object.values(orderRouteCounts).filter(count => count > 1).length;
 
-            // 3. Montagem Pendente (Últimos 7 dias — economia de egress)
-            const seteDiasAtras = new Date();
-            seteDiasAtras.setDate(seteDiasAtras.getDate() - 7);
-            const { data: deliveredOrders } = await supabase
-                .from('orders')
-                .select('id, items_json')
-                .eq('status', 'delivered')
-                .gte('updated_at', seteDiasAtras.toISOString())
-                .limit(10000);
+            // 3. Montagem Pendente (entregues nos ultimos 7 dias, com validacao por SKU/quantidade)
+            const missingAssemblyCount = (await computeMissingAssemblyOrders()).length;
 
-            let missingAssemblyCount = 0;
-            if (deliveredOrders && deliveredOrders.length > 0) {
-                // Buscar montagens SEM filtro de data — direto pelos IDs dos pedidos
-                const orderIds = deliveredOrders.map(o => o.id);
-                const { data: existingAssemblies } = await supabase
-                    .from('assembly_products')
-                    .select('order_id')
-                    .in('order_id', orderIds);
-
-                // Set de order_ids que JÁ possuem montagem (rápido)
-                const ordersWithAssembly = new Set((existingAssemblies || []).map(a => a.order_id));
-
-                deliveredOrders.forEach(order => {
-                    const items = typeof order.items_json === 'string' ? JSON.parse(order.items_json) : (order.items_json || []);
-
-                    // Tem algum item de montagem? (case-insensitive)
-                    const hasAssemblyItem = items.some((item: any) =>
-                        String(item.has_assembly || '').toLowerCase() === 'sim' ||
-                        String(item.produto_e_montavel || '').toLowerCase() === 'sim'
-                    );
-
-                    // Tem item de montagem MAS não existe nenhuma linha em assembly_products?
-                    if (hasAssemblyItem && !ordersWithAssembly.has(order.id)) {
-                        missingAssemblyCount++;
-                    }
-                });
-            }
+            // 4. Retornos de montagem sem clones suficientes
+            const returnCloneGaps = await computeReturnCloneGaps();
+            const missingReturnClones = returnCloneGaps.reduce((sum: number, row: any) => sum + (row.missing_count || 0), 0);
 
             setCounts({
                 stuck_orders: realStuckOrders.length,
                 duplicates: duplicateCount,
                 missing_assembly: missingAssemblyCount,
-                ghost_routes: 0
+                ghost_routes: 0,
+                missing_return_clones: missingReturnClones
             });
 
         } catch (error) {
@@ -271,6 +565,131 @@ export default function AuditDashboard() {
         }
     };
 
+    const handleInjectReturnGapE2E = async () => {
+        const confirm = window.confirm('Isso criará um caso de TESTE para "Retornos sem Reentrada". Deseja continuar?');
+        if (!confirm) return;
+
+        setReturnGapLoading(true);
+        try {
+            const suffix = Date.now().toString().slice(-6);
+            const mockOrderId = crypto.randomUUID();
+            const mockAssemblyRouteId = crypto.randomUUID();
+            const mockOrderIdErp = `TST-RET-${suffix}`;
+            const routeCode = `RM-TRT-${suffix}`;
+
+            const orderNow = new Date().toISOString();
+            const returnAt = new Date(Date.now() - 10_000).toISOString();
+            const createdAt = new Date(Date.now() - 60_000).toISOString();
+
+            const fakeItems = [{
+                sku: 'SKU-RET-MOCK',
+                name: 'PRODUTO RETORNO E2E',
+                quantity: 1,
+                purchased_quantity: 1,
+                has_assembly: 'SIM',
+                produto_e_montavel: 'SIM',
+                location: 'A01',
+                unit_price: 25.00
+            }];
+
+            const { error: orderErr } = await supabase.from('orders').insert({
+                id: mockOrderId,
+                order_id_erp: mockOrderIdErp,
+                customer_name: 'CLIENTE DA SILVA (SIMULAÇÃO RETORNO E2E)',
+                phone: '84999999999',
+                status: 'delivered',
+                address_json: { city: 'Natal', street: 'Rua do Teste', number: '999', neighborhood: 'Tirol' },
+                items_json: fakeItems,
+                import_source: 'AVULSO',
+                updated_at: orderNow
+            });
+            if (orderErr) throw new Error('Order error: ' + orderErr.message);
+
+            const { error: routeErr } = await supabase.from('assembly_routes').insert({
+                id: mockAssemblyRouteId,
+                name: `ROTA RETORNO E2E ${suffix}`,
+                route_code: routeCode,
+                status: 'completed',
+                deadline: orderNow
+            });
+            if (routeErr) throw new Error('Assembly route error: ' + routeErr.message);
+
+            const { error: apErr } = await supabase.from('assembly_products').insert({
+                order_id: mockOrderId,
+                assembly_route_id: mockAssemblyRouteId,
+                product_name: 'PRODUTO RETORNO E2E',
+                product_sku: 'SKU-RET-MOCK',
+                customer_name: 'CLIENTE DA SILVA (SIMULAÇÃO RETORNO E2E)',
+                customer_phone: '84999999999',
+                installation_address: { city: 'Natal', street: 'Rua do Teste', number: '999', neighborhood: 'Tirol' },
+                status: 'cancelled',
+                observations: 'SIMULAÇÃO E2E: retorno sem reentrada',
+                was_returned: false,
+                return_reason: 'TESTE E2E',
+                returned_at: returnAt,
+                created_at: createdAt,
+                updated_at: returnAt
+            });
+            if (apErr) throw new Error('Assembly product error: ' + apErr.message);
+
+            toast.success(`Cenário criado: ${mockOrderIdErp} (${routeCode})`);
+            await runChecks(false);
+            if (activeCheck === 'return_clones') await showReturnCloneGaps();
+        } catch (err: any) {
+            console.error(err);
+            toast.error(err.message || 'Erro ao criar cenário de retorno sem reentrada.');
+        } finally {
+            setReturnGapLoading(false);
+        }
+    };
+
+    const handleCleanReturnGapE2E = async () => {
+        const confirm = window.confirm('Isso apagará os cenários TST-RET e rotas RETORNO E2E. Deseja continuar?');
+        if (!confirm) return;
+
+        setReturnGapLoading(true);
+        try {
+            const { data: retOrders, error: retOrderErr } = await supabase
+                .from('orders')
+                .select('id')
+                .like('order_id_erp', 'TST-RET-%');
+            if (retOrderErr) throw new Error('Lookup orders error: ' + retOrderErr.message);
+
+            const retOrderIds = (retOrders || []).map((o: any) => o.id);
+            if (retOrderIds.length > 0) {
+                const { error: delApErr } = await supabase.from('assembly_products').delete().in('order_id', retOrderIds);
+                if (delApErr) throw new Error('Delete assembly_products error: ' + delApErr.message);
+
+                const { error: delOrderErr } = await supabase.from('orders').delete().in('id', retOrderIds);
+                if (delOrderErr) throw new Error('Delete orders error: ' + delOrderErr.message);
+            }
+
+            const { data: retRoutes, error: retRoutesErr } = await supabase
+                .from('assembly_routes')
+                .select('id')
+                .ilike('name', '%RETORNO E2E%');
+            if (retRoutesErr) throw new Error('Lookup assembly_routes error: ' + retRoutesErr.message);
+
+            const retRouteIds = (retRoutes || []).map((r: any) => r.id);
+            if (retRouteIds.length > 0) {
+                const { error: delApByRouteErr } = await supabase.from('assembly_products').delete().in('assembly_route_id', retRouteIds);
+                if (delApByRouteErr) throw new Error('Delete assembly_products by route error: ' + delApByRouteErr.message);
+
+                const { error: delRouteErr } = await supabase.from('assembly_routes').delete().in('id', retRouteIds);
+                if (delRouteErr) throw new Error('Delete assembly_routes error: ' + delRouteErr.message);
+            }
+
+            toast.success('Cenários de retorno E2E removidos.');
+            await runChecks(false);
+            if (activeCheck === 'return_clones') await showReturnCloneGaps();
+        } catch (err: any) {
+            console.error(err);
+            toast.error(err.message || 'Erro ao limpar cenários de retorno E2E.');
+        } finally {
+            setReturnGapLoading(false);
+        }
+    };
+
     const showStuckOrders = async () => {
         setActiveCheck('stuck');
         const { data: stuckData } = await supabase
@@ -332,56 +751,98 @@ export default function AuditDashboard() {
 
     const showMissingAssembly = async () => {
         setActiveCheck('assembly');
-        const seteDiasAtras = new Date();
-        seteDiasAtras.setDate(seteDiasAtras.getDate() - 7);
-        const { data: deliveredOrders } = await supabase
-            .from('orders')
-            .select('id, order_id_erp, customer_name, phone, address_json, items_json, import_source')
-            .eq('status', 'delivered')
-            .gte('updated_at', seteDiasAtras.toISOString())
-            .limit(10000);
-
-        if (!deliveredOrders || deliveredOrders.length === 0) {
+        try {
+            const missingDetails = await computeMissingAssemblyOrders();
+            setDetails(missingDetails);
+        } catch (err) {
+            console.error(err);
+            toast.error('Erro ao carregar pendencias de montagem.');
             setDetails([]);
-            return;
         }
+    };
 
-        // Buscar montagens SEM filtro de data — direto pelos IDs dos pedidos
-        const orderIds = deliveredOrders.map(o => o.id);
-        const { data: existingAssemblies } = await supabase
-            .from('assembly_products')
-            .select('order_id')
-            .in('order_id', orderIds);
+    const showReturnCloneGaps = async () => {
+        setActiveCheck('return_clones');
+        try {
+            const gaps = await computeReturnCloneGaps();
+            setDetails(gaps);
+        } catch (err) {
+            console.error(err);
+            toast.error('Erro ao carregar pendencias de retorno de montagem.');
+            setDetails([]);
+        }
+    };
 
-        const ordersWithAssembly = new Set((existingAssemblies || []).map(a => a.order_id));
-        const missingDetails: any[] = [];
+    const reprocessReturnCloneGap = async (gap: any) => {
+        if (!gap?.order_id) return;
 
-        deliveredOrders.forEach(order => {
-            const items = typeof order.items_json === 'string' ? JSON.parse(order.items_json) : (order.items_json || []);
-
-            // Coletar todos os itens de montagem (case-insensitive)
-            const itemsToAssemble = items.filter((item: any) =>
-                String(item.has_assembly || '').toLowerCase() === 'sim' ||
-                String(item.produto_e_montavel || '').toLowerCase() === 'sim'
-            );
-
-            // Se tem itens de montagem mas NÃO existe nenhuma linha em assembly_products
-            if (itemsToAssemble.length > 0 && !ordersWithAssembly.has(order.id)) {
-                missingDetails.push({
-                    id: order.id,
-                    order_id_erp: order.order_id_erp,
-                    client_name: order.customer_name,
-                    delivery_date: 'Entrega: Nos últimos 7 dias',
-                    items_json: itemsToAssemble,
-                    details: `${itemsToAssemble.length} item(ns) sem montagem gerada`,
-                    import_source: order.import_source,
-                    phone: order.phone,
-                    address_json: order.address_json
-                });
-            }
+        const key = String(gap.id || `${gap.order_id}-${gap.product_sku || 'null'}`);
+        setProcessingReturnFix(prev => {
+            const n = new Set(prev);
+            n.add(key);
+            return n;
         });
 
-        setDetails(missingDetails);
+        try {
+            let existingRowsQuery: any = supabase
+                .from('assembly_products')
+                .select('id, created_at')
+                .eq('order_id', gap.order_id);
+
+            if (gap.product_sku == null) {
+                existingRowsQuery = existingRowsQuery.is('product_sku', null);
+            } else {
+                existingRowsQuery = existingRowsQuery.eq('product_sku', gap.product_sku);
+            }
+
+            const { data: existingRows, error: countError } = await existingRowsQuery.limit(10000);
+            if (countError) throw countError;
+
+            const cutoffTs = gap.latest_return_at ? new Date(gap.latest_return_at).getTime() : 0;
+            const reentryCountNow = (existingRows || []).filter((row: any) => {
+                if (!gap.latest_return_at) return true;
+                const createdTs = new Date(row.created_at || 0).getTime();
+                return Number.isFinite(createdTs) && createdTs >= cutoffTs;
+            }).length;
+
+            const targetCount = Number(gap.returned_count || 0);
+            const missingNow = targetCount - reentryCountNow;
+
+            if (missingNow <= 0) {
+                toast.info(`Pedido ${gap.order_id_erp}: já está reconciliado.`);
+            } else {
+                const payload = Array.from({ length: missingNow }).map(() => ({
+                    order_id: gap.order_id,
+                    product_name: gap.sample_clone?.product_name || gap.product_name || 'Produto sem nome',
+                    product_sku: gap.product_sku ?? null,
+                    customer_name: gap.sample_clone?.customer_name || gap.client_name || '-',
+                    customer_phone: gap.sample_clone?.customer_phone || null,
+                    installation_address: gap.sample_clone?.installation_address || null,
+                    status: 'pending',
+                    observations: null,
+                    assembly_route_id: null,
+                    was_returned: true
+                }));
+
+                const { error: insertErr } = await supabase.from('assembly_products').insert(payload);
+                if (insertErr) throw insertErr;
+
+                toast.success(`Reprocessado: ${missingNow} clone(s) criado(s) para ${gap.order_id_erp}.`);
+            }
+
+            const refreshed = await computeReturnCloneGaps();
+            setDetails(refreshed);
+            await runChecks(false);
+        } catch (err) {
+            console.error(err);
+            toast.error('Falha ao reprocessar retorno.');
+        } finally {
+            setProcessingReturnFix(prev => {
+                const n = new Set(prev);
+                n.delete(key);
+                return n;
+            });
+        }
     };
 
     const resolveStuckOrder = async (orderId: string, resolution: 'delivered' | 'returned') => {
@@ -829,7 +1290,7 @@ export default function AuditDashboard() {
                                             className="px-4 py-2 bg-gray-50 border border-gray-300 rounded-lg text-sm focus:ring-purple-500 focus:border-purple-500 w-full sm:w-auto"
                                             value={chosenDriver}
                                             onChange={(e) => setChosenDriver(e.target.value)}
-                                            disabled={e2eLoading}
+                                            disabled={e2eLoading || returnGapLoading}
                                         >
                                             <option value="">-- Selecione Motorista --</option>
                                             {e2eDrivers.map(d => (
@@ -839,7 +1300,7 @@ export default function AuditDashboard() {
 
                                         <button
                                             onClick={handleInjectE2E}
-                                            disabled={e2eLoading || !chosenDriver}
+                                            disabled={e2eLoading || returnGapLoading || !chosenDriver}
                                             className="whitespace-nowrap flex items-center gap-2 px-5 py-2 bg-purple-600 text-white font-medium rounded-lg hover:bg-purple-700 transition-colors disabled:opacity-50"
                                         >
                                             {e2eLoading ? <RefreshCw className="animate-spin h-4 w-4" /> : <Truck className="h-4 w-4" />}
@@ -848,18 +1309,36 @@ export default function AuditDashboard() {
 
                                         <button
                                             onClick={handleCleanE2E}
-                                            disabled={e2eLoading}
+                                            disabled={e2eLoading || returnGapLoading}
                                             className="whitespace-nowrap flex items-center gap-2 px-5 py-2 bg-white text-red-600 border border-red-200 font-medium rounded-lg hover:bg-red-50 transition-colors disabled:opacity-50"
                                         >
                                             {e2eLoading ? <RefreshCw className="animate-spin h-4 w-4" /> : <AlertOctagon className="h-4 w-4" />}
                                             Limpar Testes Antigos
+                                        </button>
+
+                                        <button
+                                            onClick={handleInjectReturnGapE2E}
+                                            disabled={e2eLoading || returnGapLoading}
+                                            className="whitespace-nowrap flex items-center gap-2 px-5 py-2 bg-rose-600 text-white font-medium rounded-lg hover:bg-rose-700 transition-colors disabled:opacity-50"
+                                        >
+                                            {returnGapLoading ? <RefreshCw className="animate-spin h-4 w-4" /> : <AlertTriangle className="h-4 w-4" />}
+                                            Gerar Retorno sem Reentrada
+                                        </button>
+
+                                        <button
+                                            onClick={handleCleanReturnGapE2E}
+                                            disabled={e2eLoading || returnGapLoading}
+                                            className="whitespace-nowrap flex items-center gap-2 px-5 py-2 bg-white text-rose-600 border border-rose-200 font-medium rounded-lg hover:bg-rose-50 transition-colors disabled:opacity-50"
+                                        >
+                                            {returnGapLoading ? <RefreshCw className="animate-spin h-4 w-4" /> : <AlertOctagon className="h-4 w-4" />}
+                                            Limpar Retorno E2E
                                         </button>
                                     </div>
                                 </div>
                             </div>
 
                             {/* Cards Grid */}
-                            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+                            <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
                                 {/* Card Pedidos Travados */}
                                 <div
                                     onClick={showStuckOrders}
@@ -928,6 +1407,29 @@ export default function AuditDashboard() {
                                     </div>
                                     <p className="text-sm mt-4 text-gray-600">Entregues c/ montagem sem lista para montadores.</p>
                                 </div>
+
+                                {/* Card Retornos sem Reentrada */}
+                                <div
+                                    onClick={showReturnCloneGaps}
+                                    className={`p-6 rounded-xl shadow-sm border cursor-pointer transition-all hover:-translate-y-1 hover:shadow-md ${counts.missing_return_clones > 0 ? 'bg-rose-50 border-rose-200' : 'bg-white border-gray-100'}`}
+                                >
+                                    <div className="flex justify-between items-start mb-4">
+                                        <div>
+                                            <p className="text-sm font-semibold text-gray-500 uppercase tracking-wider">Montagem</p>
+                                            <h3 className="font-bold text-xl text-gray-800 mt-1">Retornos sem Reentrada</h3>
+                                        </div>
+                                        {counts.missing_return_clones > 0 ? (
+                                            <div className="bg-rose-100 p-2 rounded-full"><AlertTriangle className="text-rose-500 h-5 w-5" /></div>
+                                        ) : (
+                                            <div className="bg-green-100 p-2 rounded-full"><CheckCircle2 className="text-green-500 h-5 w-5" /></div>
+                                        )}
+                                    </div>
+                                    <div className="flex items-baseline">
+                                        <p className={`text-4xl font-bold ${counts.missing_return_clones > 0 ? 'text-rose-600' : 'text-gray-900'}`}>{counts.missing_return_clones}</p>
+                                        <span className="ml-2 text-sm text-gray-500">clones faltando</span>
+                                    </div>
+                                    <p className="text-sm mt-4 text-gray-600">Retornos de montagem dos últimos 7 dias sem reentrada suficiente para nova roteirização.</p>
+                                </div>
                             </div>
 
                             {/* Details Table */}
@@ -938,9 +1440,11 @@ export default function AuditDashboard() {
                                             {activeCheck === 'stuck' && <AlertTriangle className="text-red-500 h-5 w-5" />}
                                             {activeCheck === 'duplicate' && <AlertTriangle className="text-amber-500 h-5 w-5" />}
                                             {activeCheck === 'assembly' && <AlertTriangle className="text-purple-500 h-5 w-5" />}
+                                            {activeCheck === 'return_clones' && <AlertTriangle className="text-rose-500 h-5 w-5" />}
                                             {activeCheck === 'stuck' ? 'Pedidos Travados' :
                                                 activeCheck === 'duplicate' ? 'Duplicidades Detectadas' :
-                                                    activeCheck === 'assembly' ? 'Montagens Pendentes' : 'Detalhes'}
+                                                    activeCheck === 'assembly' ? 'Montagens Pendentes' :
+                                                        activeCheck === 'return_clones' ? 'Retornos sem Reentrada' : 'Detalhes'}
                                         </h2>
                                         <button onClick={() => setDetails(null)} className="text-gray-400 hover:text-gray-600 text-xl">×</button>
                                     </div>
@@ -1007,7 +1511,8 @@ export default function AuditDashboard() {
                                                             </td>
                                                             <td className="p-4 text-sm text-gray-500">
                                                                 {activeCheck === 'duplicate' ? item.details :
-                                                                    activeCheck === 'assembly' ? `Entrega: ${item.delivery_date}` :
+                                                                    activeCheck === 'assembly' ? `${item.details}${item.missing_skus ? ` | ${item.missing_skus}` : ''}` :
+                                                                        activeCheck === 'return_clones' ? item.details :
                                                                         item.route_orders?.[0]?.route?.name}
                                                             </td>
                                                             <td className="p-4 text-right">
@@ -1041,6 +1546,15 @@ export default function AuditDashboard() {
                                                                         className="px-3 py-1.5 bg-purple-50 text-purple-700 rounded-md hover:bg-purple-100 border border-purple-200 text-sm font-medium"
                                                                     >
                                                                         Gerar Montagem
+                                                                    </button>
+                                                                )}
+                                                                {activeCheck === 'return_clones' && (
+                                                                    <button
+                                                                        onClick={() => reprocessReturnCloneGap(item)}
+                                                                        disabled={processingReturnFix.has(String(item.id))}
+                                                                        className="px-3 py-1.5 bg-rose-50 text-rose-700 rounded-md hover:bg-rose-100 border border-rose-200 text-sm font-medium disabled:opacity-50"
+                                                                    >
+                                                                        {processingReturnFix.has(String(item.id)) ? 'Reprocessando...' : 'Reprocessar'}
                                                                     </button>
                                                                 )}
                                                                 {activeCheck === 'duplicate' && (
@@ -1381,3 +1895,6 @@ export default function AuditDashboard() {
         </div>
     );
 }
+
+
+

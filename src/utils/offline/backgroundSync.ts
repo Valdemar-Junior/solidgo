@@ -333,59 +333,87 @@ export class BackgroundSyncService {
       throw new Error(`Route still has pending items. Waiting for item sync.`);
     }
 
-    // 1. Mark assembly route as completed
+    // 1. Mark assembly route as completed (non-blocking flow for clone failures)
     const { error } = await supabase.from('assembly_routes').update({ status: 'completed' }).eq('id', route_id);
     if (error) {
       console.error('[BackgroundSync] Error completing assembly route:', error);
       throw error;
     }
 
-    // 2. Find returned items (cancelled) and re-insert for new routing
-    const { data: returnedItems } = await supabase
-      .from('assembly_products')
-      .select('*')
-      .eq('assembly_route_id', route_id)
-      .eq('status', 'cancelled');
+    // 2. Try to reconcile returned clones by COUNT (best effort, no throw)
+    try {
+      const { data: returnedItems } = await supabase
+        .from('assembly_products')
+        .select('*')
+        .eq('assembly_route_id', route_id)
+        .eq('status', 'cancelled');
 
-    if (returnedItems && returnedItems.length > 0) {
-      // Para cada item retornado, verificar se já existe um clone pendente
-      for (const item of returnedItems) {
-        // Checar se já existe clone pendente para este order_id + product_sku
-        const { data: existingClone } = await supabase
-          .from('assembly_products')
-          .select('id')
-          .eq('order_id', item.order_id)
-          .eq('product_sku', item.product_sku)
-          .eq('status', 'pending')
-          .is('assembly_route_id', null)
-          .limit(1);
+      if (returnedItems && returnedItems.length > 0) {
+        const grouped = new Map<string, { item: any; returnedCount: number }>();
 
-        if (existingClone && existingClone.length > 0) {
-          console.log('[BackgroundSync] Clone already exists for', item.product_sku, '- skipping');
-          continue;
+        for (const item of returnedItems) {
+          const skuKey = item.product_sku === null || item.product_sku === undefined ? '__null__' : String(item.product_sku);
+          const key = `${item.order_id}::${skuKey}`;
+          const current = grouped.get(key);
+          if (current) {
+            current.returnedCount += 1;
+          } else {
+            grouped.set(key, { item, returnedCount: 1 });
+          }
         }
 
-        // Criar clone
-        const newItem = {
-          order_id: item.order_id,
-          product_name: item.product_name,
-          product_sku: item.product_sku,
-          customer_name: item.customer_name,
-          customer_phone: item.customer_phone,
-          installation_address: item.installation_address,
-          status: 'pending',
-          observations: null,
-          assembly_route_id: null,
-          was_returned: true
-        };
+        const clonesToInsert: any[] = [];
 
-        const { error: insertError } = await supabase.from('assembly_products').insert(newItem);
-        if (insertError) {
-          console.error('[BackgroundSync] Error inserting clone:', insertError);
-        } else {
-          console.log('[BackgroundSync] Created clone for', item.product_sku);
+        for (const { item, returnedCount } of grouped.values()) {
+          let countQuery: any = supabase
+            .from('assembly_products')
+            .select('id', { count: 'exact', head: true })
+            .eq('order_id', item.order_id)
+            .eq('status', 'pending')
+            .is('assembly_route_id', null);
+
+          if (item.product_sku === null || item.product_sku === undefined) {
+            countQuery = countQuery.is('product_sku', null);
+          } else {
+            countQuery = countQuery.eq('product_sku', item.product_sku);
+          }
+
+          const { count: existingCount, error: countError } = await countQuery;
+          if (countError) {
+            console.error('[BackgroundSync] Error counting existing clones:', countError);
+            continue;
+          }
+
+          const missingCount = returnedCount - (existingCount || 0);
+          if (missingCount <= 0) continue;
+
+          for (let i = 0; i < missingCount; i++) {
+            clonesToInsert.push({
+              order_id: item.order_id,
+              product_name: item.product_name,
+              product_sku: item.product_sku ?? null,
+              customer_name: item.customer_name,
+              customer_phone: item.customer_phone,
+              installation_address: item.installation_address,
+              status: 'pending',
+              observations: null,
+              assembly_route_id: null,
+              was_returned: true
+            });
+          }
+        }
+
+        if (clonesToInsert.length > 0) {
+          const { error: insertError } = await supabase.from('assembly_products').insert(clonesToInsert);
+          if (insertError) {
+            console.error('[BackgroundSync] Error inserting clones:', insertError);
+          } else {
+            console.log('[BackgroundSync] Created returned clones:', clonesToInsert.length);
+          }
         }
       }
+    } catch (cloneErr) {
+      console.error('[BackgroundSync] Clone reconciliation failed (non-blocking):', cloneErr);
     }
 
     console.log('[BackgroundSync] Assembly route completed successfully:', route_id);
