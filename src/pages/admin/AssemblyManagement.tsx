@@ -1385,7 +1385,7 @@ function AssemblyManagementContent() {
       const importedOrderIds: string[] = [];
 
       for (const o of items) {
-        const produtos = o.produtos; // These are the enriched ones
+        const produtos = Array.isArray(o.produtos) ? o.produtos : [];
         const getVal = (v: any) => String(v ?? '').trim();
 
         const pickZip = (raw: any) => {
@@ -1394,38 +1394,64 @@ function AssemblyManagementContent() {
           return '';
         };
 
-        let erpId = String(o.numero_lancamento ?? o.lancamento_venda ?? o.codigo_cliente ?? launchNumber);
+        const selectedProducts = produtos.filter((p: any) => selectedPreviewIndices.has(p._selectionKey));
+        if (selectedProducts.length === 0) {
+          toast.info('Nenhum produto selecionado para importar.');
+          continue;
+        }
+
+        let erpId = String(o.numero_lancamento ?? o.lancamento_venda ?? o.codigo_cliente ?? launchNumber).trim();
         if (launchType !== 'venda') {
-          const suffix = launchType === 'troca' ? '-T' : '-A';
-          if (!erpId.endsWith(suffix) && !erpId.endsWith('-T') && !erpId.endsWith('-A')) {
-            erpId = `${erpId}${suffix}`;
+          const suffixType = launchType === 'troca' ? '-T' : '-A';
+          const baseId = erpId.replace(/-(T|A)(-\d+)?$/i, '');
+
+          const { data: siblingOrders } = await supabase
+            .from('orders')
+            .select('order_id_erp')
+            .ilike('order_id_erp', `${baseId}%`);
+
+          if (!siblingOrders || siblingOrders.length === 0) {
+            erpId = `${baseId}${suffixType}-1`;
+          } else {
+            let highestSeq = 0;
+            siblingOrders.forEach((so: any) => {
+              const m = String(so.order_id_erp || '').match(/-(T|A)(?:-(\d+))?$/i);
+              if (m) {
+                const seqNum = m[2] ? parseInt(m[2], 10) : 1;
+                if (!isNaN(seqNum) && seqNum > highestSeq) highestSeq = seqNum;
+              }
+            });
+            erpId = `${baseId}${suffixType}-${highestSeq + 1}`;
           }
         }
 
         const { data: existingOrder } = await supabase
           .from('orders')
-          .select('id, order_id_erp')
+          .select('id, order_id_erp, customer_name, phone, address_json')
           .eq('order_id_erp', erpId)
           .single();
 
         let orderId: string;
+        let orderCustomerName = getVal(o.nome_cliente);
+        let orderPhone = getVal(o.cliente_celular);
+        let orderAddress: any = {
+          street: getVal(o.destinatario_endereco),
+          neighborhood: getVal(o.destinatario_bairro),
+          city: getVal(o.destinatario_cidade),
+          state: '',
+          zip: pickZip(o),
+          complement: getVal(o.destinatario_complemento),
+          lat: o.lat ?? o.latitude ?? null,
+          lng: o.lng ?? o.longitude ?? o.long ?? null
+        };
 
         if (existingOrder) {
-          const { data: existingProducts } = await supabase
-            .from('assembly_products')
-            .select('id')
-            .eq('order_id', existingOrder.id);
-
-          if (existingProducts && existingProducts.length > 0) {
-            toast.warning(`Pedido ${erpId} já possui produtos de montagem cadastrados. Pulando...`);
-            continue;
-          }
           orderId = existingOrder.id;
+          orderCustomerName = getVal(existingOrder.customer_name) || orderCustomerName;
+          orderPhone = getVal(existingOrder.phone) || orderPhone;
+          orderAddress = existingOrder.address_json || orderAddress;
 
-          // ============ CORREÇÃO: Atualizar items_json para marcar has_assembly='Sim' ============
-          // Isso garante que o romaneio de montagem exiba corretamente os produtos
           try {
-            // Buscar items_json atual do pedido
             const { data: orderData } = await supabase
               .from('orders')
               .select('items_json')
@@ -1433,11 +1459,9 @@ function AssemblyManagementContent() {
               .single();
 
             if (orderData && Array.isArray(orderData.items_json)) {
-              const selectedSkus = o.produtos
-                .filter((p: any) => selectedPreviewIndices.has(p._selectionKey))
+              const selectedSkus = selectedProducts
                 .map((p: any) => String(p.codigo_produto || '').toLowerCase().trim());
 
-              // Atualizar has_assembly='Sim' nos itens correspondentes
               const updatedItemsJson = orderData.items_json.map((item: any) => {
                 const itemSku = String(item.sku || '').toLowerCase().trim();
                 if (selectedSkus.includes(itemSku)) {
@@ -1446,7 +1470,6 @@ function AssemblyManagementContent() {
                 return item;
               });
 
-              // Fazer UPDATE na tabela orders (incluindo observação interna editada)
               await supabase
                 .from('orders')
                 .update({
@@ -1456,32 +1479,10 @@ function AssemblyManagementContent() {
                 .eq('id', existingOrder.id);
             }
           } catch (updateErr) {
-            console.warn('Aviso: não foi possível atualizar items_json com has_assembly:', updateErr);
-            // Continua mesmo se falhar - o assembly_product ainda será criado
+            console.warn('Aviso: nao foi possivel atualizar items_json com has_assembly:', updateErr);
           }
-          // ============ FIM DA CORREÇÃO ============
         } else {
-          // Create order with FULL original products list (from _originalProducts if available, or just use what we have logic)
-          // User requested: "na tabela orders salva somente as infromaçoes daquele pedido importado"
-          // Wait, user said: "na tabela orders salva somente as infromaçoes daquele pedido importado"
-          // Typically we want the order record to be accurate to what was imported.
-          // If we import only 1 product, should the order JSON contain only that product? 
-          // "na tabela orders salva somente as infromaçoes daquele pedido importado" -> "in the orders table save only the information of that imported order"
-          // I will stick to saving the order with ALL items in items_json to maintain data integrity of the "Order" entity as it exists in ERP,
-          // BUT, the Assembly Products will strictly be the selected ones.
-          // Actually, re-reading: "ao realizar uma assintencia por exemplo o cliente pode ter comprado dois ou mais produtos mas so um produto vai precisar de assitencia então nessa importação eu so irei importar esse produto que precisa de assistencia"
-          // "no formato atual eu so consigo importar todos os produtos ai contabilizo pra o montador variso porodutos e não somente o que ele de fato prestou o serviço"
-          // So the core issue is the ASSEMBLY PRODUCTS being too many.
-          // I will use ALL products for the Order JSON (so we know what the order *was*), but ONLY selected for Assembly Products (what is being worked on).
-
-          // To ensure we don't break the "order" view, let's use the full original list for the JSON if possible.
-          // But my previewItems logic put _originalProducts in the item loop.
-
-          // Filter enriched products by selection first
-          const selectedProductsForOrder = o.produtos.filter((p: any) => selectedPreviewIndices.has(p._selectionKey));
-
-          // Map SELECTED products to items_json
-          const itemsJson = selectedProductsForOrder.map((p: any) => ({
+          const itemsJson = selectedProducts.map((p: any) => ({
             sku: getVal(p.codigo_produto),
             name: getVal(p.nome_produto),
             quantity: Number(p.quantidade_volumes ?? 1),
@@ -1502,8 +1503,8 @@ function AssemblyManagementContent() {
 
           const orderRecord = {
             order_id_erp: erpId,
-            customer_name: getVal(o.nome_cliente),
-            phone: getVal(o.cliente_celular),
+            customer_name: orderCustomerName,
+            phone: orderPhone,
             customer_cpf: getVal(o.cpf_cliente),
             filial_venda: getVal(o.filial_venda),
             vendedor_nome: getVal(o.nome_vendedor ?? o.vendedor ?? o.vendedor_nome),
@@ -1512,16 +1513,7 @@ function AssemblyManagementContent() {
             observacoes_publicas: getVal(o.observacoes_publicas),
             observacoes_internas: launchObservation || getVal(o.observacoes_internas),
             tem_frete_full: getVal(o.tem_frete_full),
-            address_json: {
-              street: getVal(o.destinatario_endereco),
-              neighborhood: getVal(o.destinatario_bairro),
-              city: getVal(o.destinatario_cidade),
-              state: '',
-              zip: pickZip(o),
-              complement: getVal(o.destinatario_complemento),
-              lat: o.lat ?? o.latitude ?? null,
-              lng: o.lng ?? o.longitude ?? o.long ?? null
-            },
+            address_json: orderAddress,
             items_json: itemsJson,
             status: 'delivered',
             raw_json: o,
@@ -1548,25 +1540,61 @@ function AssemblyManagementContent() {
           orderId = insertedOrder.id;
         }
 
-        // --- FILTER PRODUCTS BASED ON SELECTION ---
-        // Apenas para log/feedback visual, já que o trigger do banco criará os assembly_products
-        // baseados no update do items_json que fizemos acima.
+        const assemblyProductsToInsert: any[] = [];
+        let skipThisOrder = false;
 
-        // Calcular quantos produtos teoricamente seriam criados para feedback
-        const selectedProducts = produtos.filter((p: any) => selectedPreviewIndices.has(p._selectionKey));
-        let countForThisOrder = 0;
+        for (const p of selectedProducts) {
+          const cleanSku = getVal(p.codigo_produto) || 'SKU-INDEF';
+          const cleanName = getVal(p.nome_produto) || 'Produto sem nome';
+          const qty = Math.max(1, Number(p.quantidade_comprada ?? p.quantidade ?? p.quantidade_volumes ?? 1) || 1);
 
-        selectedProducts.forEach((p: any) => {
-          const qty = Math.max(1, Number(p.quantidade_comprada ?? p.quantidade ?? p.quantidade_volumes ?? 1));
-          countForThisOrder += qty;
-        });
+          const { count: currentCount, error: countError } = await supabase
+            .from('assembly_products')
+            .select('*', { count: 'exact', head: true })
+            .eq('order_id', orderId)
+            .eq('product_sku', cleanSku);
 
-        if (countForThisOrder > 0) {
-          insertedProductsCount += countForThisOrder;
+          if (countError) {
+            console.error('[AssemblyManagement] Erro ao verificar montagem existente:', countError);
+            errors++;
+            skipThisOrder = true;
+            break;
+          }
+
+          const missingCount = qty - (currentCount || 0);
+          if (missingCount <= 0) continue;
+
+          for (let i = 0; i < missingCount; i++) {
+            assemblyProductsToInsert.push({
+              order_id: orderId,
+              product_name: cleanName,
+              product_sku: cleanSku,
+              customer_name: orderCustomerName,
+              customer_phone: orderPhone || null,
+              installation_address: orderAddress || null,
+              status: 'pending',
+              created_at: now,
+              updated_at: now
+            });
+          }
+        }
+
+        if (skipThisOrder) continue;
+
+        if (assemblyProductsToInsert.length > 0) {
+          const { error: insertAssemblyError } = await supabase
+            .from('assembly_products')
+            .insert(assemblyProductsToInsert);
+
+          if (insertAssemblyError) {
+            console.error('[AssemblyManagement] Erro ao gerar montagem avulsa:', insertAssemblyError);
+            errors++;
+            continue;
+          }
+
+          insertedProductsCount += assemblyProductsToInsert.length;
           importedOrderIds.push(orderId);
-          console.log(`[AssemblyManagement] Pedido ${erpId} atualizado/criado. Trigger do banco criará ${countForThisOrder} produtos de montagem.`);
-        } else {
-          toast.info(`Nenhum produto selecionado para o pedido ${erpId}`);
+          console.log(`[AssemblyManagement] Pedido ${erpId}: ${assemblyProductsToInsert.length} item(ns) de montagem gerado(s) na importacao avulsa.`);
         }
       }
 
