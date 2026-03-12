@@ -106,7 +106,6 @@ export default function UsersTeams() {
     setIsCreatingUser(true);
     try {
       const pwd = uPassword.trim() ? uPassword.trim() : genPassword();
-      setGeneratedPassword(pwd);
 
       let pseudoEmail = toLoginEmailFromName(uName);
       const { data: existsUserEmail } = await supabase.from('users').select('id').eq('email', pseudoEmail).maybeSingle();
@@ -115,24 +114,53 @@ export default function UsersTeams() {
         pseudoEmail = `${base}.${String(Date.now()).slice(-4)}@solidgo.local`;
       }
 
-      const { data: resData, error: invokeErr } = await supabase.functions.invoke('create-user', {
-        body: {
-          email: pseudoEmail,
-          password: pwd,
-          name: uName.trim(),
-          role: uRole
-        }
+      const functionUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/create-user`;
+      if (!functionUrl || !functionUrl.startsWith('http')) {
+        throw new Error('Configuracao do Supabase invalida no frontend.');
+      }
+
+      const payload: any = {
+        email: pseudoEmail,
+        password: pwd,
+        name: uName.trim(),
+        role: uRole
+      };
+
+      // Para perfis nao-driver, a funcao valida privilegio de admin.
+      // Enviamos token no corpo para evitar preflight instavel em alguns ambientes.
+      if (uRole !== 'driver') {
+        const { data: sessionData } = await supabase.auth.getSession();
+        const accessToken = sessionData?.session?.access_token;
+        if (!accessToken) throw new Error('Sessao expirada. Faca login novamente.');
+        payload.auth_token = accessToken;
+      }
+
+      const response = await fetch(functionUrl, {
+        method: 'POST',
+        body: JSON.stringify(payload),
       });
 
-      if (invokeErr) throw invokeErr;
-      if (resData?.error) throw new Error(resData.error);
+      const raw = await response.text();
+      let resData: any = null;
+      try {
+        resData = raw ? JSON.parse(raw) : null;
+      } catch {
+        resData = null;
+      }
 
-      toast.success('Usuário criado com sucesso!');
+      if (!response.ok || resData?.error) {
+        throw new Error(resData?.error || `Falha ao criar usuario (HTTP ${response.status})`);
+      }
+
+      setGeneratedPassword(pwd);
+
+      toast.success('Usu\u00e1rio criado com sucesso!');
       setUName(''); setUPassword(''); setURole('driver');
       await loadAll();
     } catch (e: any) {
       console.error(e);
-      toast.error(String(e.message || 'Falha ao criar usuário'));
+      setGeneratedPassword(null);
+      toast.error(String(e.message || 'Falha ao criar usu\u00e1rio'));
     } finally {
       setIsCreatingUser(false);
     }
@@ -724,3 +752,4 @@ export default function UsersTeams() {
     </div>
   );
 }
+
