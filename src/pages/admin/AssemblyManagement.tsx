@@ -151,6 +151,7 @@ function AssemblyManagementContent() {
   const [orderProductsModal, setOrderProductsModal] = useState<{ orderId: string; products: AssemblyProductWithDetails[] } | null>(null);
   const [waSending, setWaSending] = useState(false);
   const [groupSending, setGroupSending] = useState(false);
+  const [startingRoute, setStartingRoute] = useState(false);
   // Edit route states
   const [isEditingRoute, setIsEditingRoute] = useState(false);
   const [editSelectedDeliveryRouteId, setEditSelectedDeliveryRouteId] = useState('');
@@ -3041,7 +3042,8 @@ function AssemblyManagementContent() {
                     {(selectedRoute as any).status === 'pending' && (
                       <button
                         onClick={async () => {
-                          if (!selectedRoute) return;
+                          if (!selectedRoute || startingRoute) return;
+                          setStartingRoute(true);
                           try {
                             const { error } = await supabase.from('assembly_routes').update({ status: 'in_progress' }).eq('id', selectedRoute.id);
                             if (error) throw error;
@@ -3052,9 +3054,12 @@ function AssemblyManagementContent() {
                           } catch (e) {
                             console.error(e);
                             toast.error('Erro ao iniciar rota');
+                          } finally {
+                            setStartingRoute(false);
                           }
                         }}
-                        className="inline-flex items-center px-3 py-2 border border-blue-200 shadow-sm text-sm font-medium rounded-lg text-blue-700 bg-blue-50 hover:bg-blue-100"
+                        disabled={startingRoute}
+                        className="inline-flex items-center px-3 py-2 border border-blue-200 shadow-sm text-sm font-medium rounded-lg text-blue-700 bg-blue-50 hover:bg-blue-100 disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                         <Clock className="h-4 w-4 mr-2" /> Iniciar Rota
                       </button>
