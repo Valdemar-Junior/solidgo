@@ -651,7 +651,7 @@ export default function OrderLookup() {
     assigned: 'Atribuído',
     in_progress: 'Em andamento',
     completed: 'Concluído',
-    cancelled: 'Cancelado',
+    cancelled: 'Retornado',
     none: 'Sem montagem',
   };
 
@@ -1057,7 +1057,9 @@ export default function OrderLookup() {
                   <Hammer className="h-5 w-5 text-purple-600" />
                   <div>
                     <p className="text-xs font-semibold text-gray-500 uppercase">Montagem</p>
-                    <p className="text-sm font-bold text-gray-900 capitalize">{statusLabelMontagem[assemblyStatus] || statusLabelMontagem.none}</p>
+                    <p className={`text-sm font-bold capitalize ${(assemblyStatus || '').toLowerCase() === 'cancelled' ? 'text-red-600' : 'text-gray-900'}`}>
+                      {statusLabelMontagem[assemblyStatus] || statusLabelMontagem.none}
+                    </p>
                   </div>
                 </div>
                 {assemblies.length === 0 ? (
@@ -1078,7 +1080,9 @@ export default function OrderLookup() {
                         </div>
 
                         <p className="text-xs font-medium text-gray-700 mt-2 mb-1">{ap.product_name || 'Produto não identificado'}</p>
-                        <p className="text-xs text-gray-500 capitalize">Status: {statusLabelMontagem[(ap.status || '').toLowerCase()] || ap.status}</p>
+                        <p className={`text-xs capitalize ${(ap.status || '').toLowerCase() === 'cancelled' ? 'text-red-600 font-semibold' : 'text-gray-500'}`}>
+                          Status: {statusLabelMontagem[(ap.status || '').toLowerCase()] || ap.status}
+                        </p>
                         <p className="text-xs text-gray-500">Montador: {ap.assembly_route?.assembler?.name || '-'}</p>
 
                         {ap.status === 'completed' ? (
