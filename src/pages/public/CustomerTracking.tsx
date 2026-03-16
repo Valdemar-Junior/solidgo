@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { Search, Package, Calendar, MapPin, Truck, CheckCircle2, Circle, Clock, Hammer, AlertTriangle } from 'lucide-react';
 import { supabase } from '../../supabase/client';
 import { toast } from 'sonner';
@@ -51,12 +51,42 @@ interface TrackingResult {
     assembly_timeline?: AssemblyTimeline;
 }
 
+const PUBLIC_TRACKING_ORDER_STORAGE_KEY = 'public_tracking_order_number';
+const PUBLIC_TRACKING_CPF_STORAGE_KEY = 'public_tracking_cpf';
+
 export default function CustomerTracking() {
     const [orderNumber, setOrderNumber] = useState('');
     const [cpf, setCpf] = useState('');
+    const [formHydrated, setFormHydrated] = useState(false);
     const [loading, setLoading] = useState(false);
     const [result, setResult] = useState<TrackingResult | null>(null);
     const [searched, setSearched] = useState(false);
+
+    useEffect(() => {
+        try {
+            const savedOrder = sessionStorage.getItem(PUBLIC_TRACKING_ORDER_STORAGE_KEY);
+            const savedCpf = sessionStorage.getItem(PUBLIC_TRACKING_CPF_STORAGE_KEY);
+            if (savedOrder) setOrderNumber(savedOrder);
+            if (savedCpf) setCpf(savedCpf);
+        } catch {
+            // ignore storage errors
+        } finally {
+            setFormHydrated(true);
+        }
+    }, []);
+
+    useEffect(() => {
+        if (!formHydrated) return;
+        try {
+            if (orderNumber) sessionStorage.setItem(PUBLIC_TRACKING_ORDER_STORAGE_KEY, orderNumber);
+            else sessionStorage.removeItem(PUBLIC_TRACKING_ORDER_STORAGE_KEY);
+
+            if (cpf) sessionStorage.setItem(PUBLIC_TRACKING_CPF_STORAGE_KEY, cpf);
+            else sessionStorage.removeItem(PUBLIC_TRACKING_CPF_STORAGE_KEY);
+        } catch {
+            // ignore storage errors
+        }
+    }, [orderNumber, cpf, formHydrated]);
 
     const handleSearch = async (e?: React.FormEvent) => {
         e?.preventDefault();
