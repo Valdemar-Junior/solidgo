@@ -8,8 +8,6 @@ import { toast } from 'sonner';
 import { AssemblyPhotosViewer, DeliveryPhotosViewer } from '../../components/photos';
 import { DeliveryProofPdfGenerator } from '../../utils/pdf/deliveryProofPdfGenerator';
 
-const ORDER_LOOKUP_QUERY_STORAGE_KEY = 'order_lookup_query';
-
 interface RouteOrderInfo {
   id: string;
   route_id: string;
@@ -92,7 +90,6 @@ function CopyButton({ text, label = "Copiado!" }: { text: string, label?: string
 export default function OrderLookup() {
   const navigate = useNavigate();
   const [query, setQuery] = useState('');
-  const [queryHydrated, setQueryHydrated] = useState(false);
   const [loading, setLoading] = useState(false);
   const [orders, setOrders] = useState<Order[]>([]);
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
@@ -111,29 +108,6 @@ export default function OrderLookup() {
     await logout();
     navigate('/login');
   };
-
-  useEffect(() => {
-    try {
-      const savedQuery = sessionStorage.getItem(ORDER_LOOKUP_QUERY_STORAGE_KEY);
-      if (savedQuery !== null) {
-        setQuery(savedQuery);
-      }
-    } catch {
-      // ignore storage errors
-    } finally {
-      setQueryHydrated(true);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!queryHydrated) return;
-    try {
-      if (query) sessionStorage.setItem(ORDER_LOOKUP_QUERY_STORAGE_KEY, query);
-      else sessionStorage.removeItem(ORDER_LOOKUP_QUERY_STORAGE_KEY);
-    } catch {
-      // ignore storage errors
-    }
-  }, [query, queryHydrated]);
 
   const fetchOrders = async (term: string) => {
     const q = term.trim();
