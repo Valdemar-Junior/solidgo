@@ -581,17 +581,22 @@ function AssemblyManagementContent() {
     return `${year}-${month}-${day}`;
   };
 
-  const getPrevisaoEntrega = (order: any): Date | null => {
+  const getPrevisaoMontagemValue = (order: any): string => {
     const raw: any = order?.raw_json || {};
-    const prev = order?.previsao_entrega || raw?.previsao_entrega || raw?.data_prevista_entrega || '';
-    return parseDateSafe(prev);
+    return order?.previsao_montagem || raw?.previsao_montagem || '';
+  };
+
+  const getPrevisaoMontagem = (order: any): Date | null => {
+    return parseDateSafe(getPrevisaoMontagemValue(order));
   };
 
   const getPrazoStatusForOrder = (o: any): 'within' | 'out' | 'none' => {
-    const prev = getPrevisaoEntrega(o);
+    const prev = getPrevisaoMontagem(o);
     if (!prev) return 'none';
     const today = new Date();
-    return today.getTime() <= prev.getTime() ? 'within' : 'out';
+    const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+    const prevStart = new Date(prev.getFullYear(), prev.getMonth(), prev.getDate());
+    return todayStart.getTime() <= prevStart.getTime() ? 'within' : 'out';
   };
 
   // --- ROUTE FETCHING ---
@@ -1510,6 +1515,7 @@ function AssemblyManagementContent() {
             vendedor_nome: getVal(o.nome_vendedor ?? o.vendedor ?? o.vendedor_nome),
             data_venda: o.data_venda ? new Date(o.data_venda).toISOString() : now,
             previsao_entrega: o.previsao_entrega ? new Date(o.previsao_entrega).toISOString() : null,
+            previsao_montagem: o.previsao_montagem ? new Date(o.previsao_montagem).toISOString() : null,
             observacoes_publicas: getVal(o.observacoes_publicas),
             observacoes_internas: launchObservation || getVal(o.observacoes_internas),
             tem_frete_full: getVal(o.tem_frete_full),
@@ -1684,9 +1690,9 @@ function AssemblyManagementContent() {
       const deliveryDateStr = deliveryInfo[orderId] ? deliveryInfo[orderId].split('T')[0] : '';
 
       let forecastDateStr = '';
-      const prevDate = getPrevisaoEntrega(order);
+      const prevDate = getPrevisaoMontagem(order);
       if (prevDate) {
-        forecastDateStr = prevDate.toISOString().split('T')[0];
+        forecastDateStr = dateToString(prevDate);
       }
 
       const matchCity = filterCity.length === 0 ? true : filterCity.some(fc => city.includes(fc.toLowerCase()));
@@ -1785,7 +1791,7 @@ function AssemblyManagementContent() {
   }, [groupedProducts, filterCity, filterNeighborhood, filterDeadline, filterOrder, filterClient, filterSaleDateStart, filterSaleDateEnd, filterDeliveryDateStart, filterDeliveryDateEnd, filterForecastDateStart, filterForecastDateEnd, filterReturned, filterFull, filterServiceType, deliveryInfo, filterDepartment, filterSubgroup]);
 
   const orderRows = useMemo(() => {
-    const rows: Array<{ key: string; orderId: string; dataVenda: string; entrega: string; previsao: string; pedido: string; cliente: string; telefone: string; produto: string; sku: string; obsPublicas: string; obsInternas: string; cidade: string; bairro: string; endereco: string; selected: boolean; wasReturned: boolean; isForaPrazo: boolean; temFreteFull: boolean; returnReason: string; returnObservation: string; department: string; subgroup: string; }> = [];
+    const rows: Array<{ key: string; orderId: string; dataVenda: string; entrega: string; previsao: string; pedido: string; cliente: string; telefone: string; produto: string; sku: string; obsPublicas: string; obsInternas: string; cidade: string; bairro: string; endereco: string; selected: boolean; wasReturned: boolean; prazoStatus: 'within' | 'out' | 'none'; temFreteFull: boolean; returnReason: string; returnObservation: string; department: string; subgroup: string; }> = [];
 
     // Helper para verificar se pedido tem Frete Full
     const isTrueValue = (v: any) => {
@@ -1800,7 +1806,7 @@ function AssemblyManagementContent() {
       const dataVenda = formatDate(order?.data_venda || order?.created_at);
       const entrega = formatDate(deliveryInfo[orderId] || null);
 
-      const previsao = formatDate(order?.previsao_montagem || order?.previsao_entrega || raw?.previsao_entrega || raw?.data_prevista_entrega);
+      const previsao = formatDate(getPrevisaoMontagemValue(order) || null);
 
       const pedido = order?.order_id_erp || orderId;
       const cliente = order?.customer_name || '-';
@@ -1812,7 +1818,6 @@ function AssemblyManagementContent() {
       const endereco = [addr.street, addr.number, addr.complement].filter(Boolean).join(', ') || '-';
       const selected = selectedOrders.has(orderId);
       const prazoStatus = getPrazoStatusForOrder(order);
-      const isForaPrazo = prazoStatus === 'out';
       // Verificar Frete Full: campo direto OU observações internas com *frete full*
       const temFreteFull = isTrueValue(order?.tem_frete_full) || isTrueValue(raw?.tem_frete_full) || obsInternas.toLowerCase().includes('*frete full*');
       products.forEach((ap, idx) => {
@@ -1833,7 +1838,7 @@ function AssemblyManagementContent() {
         }
         const department = String(order?.product_group || order?.department || '-');
         const subgroup = String(order?.product_subgroup || '-');
-        rows.push({ key: `${orderId}-${ap.id}-${idx}`, orderId, dataVenda, entrega, previsao, pedido, cliente, telefone, produto: ap.product_name || '-', sku: ap.product_sku || '-', obsPublicas, obsInternas, cidade, bairro, endereco, selected, wasReturned, isForaPrazo, temFreteFull, returnReason, returnObservation, department, subgroup });
+        rows.push({ key: `${orderId}-${ap.id}-${idx}`, orderId, dataVenda, entrega, previsao, pedido, cliente, telefone, produto: ap.product_name || '-', sku: ap.product_sku || '-', obsPublicas, obsInternas, cidade, bairro, endereco, selected, wasReturned, prazoStatus, temFreteFull, returnReason, returnObservation, department, subgroup });
       });
     });
     return rows;
@@ -2029,7 +2034,7 @@ function AssemblyManagementContent() {
                 </div>
 
                 <div className="space-y-1">
-                  <label className="text-xs font-semibold text-gray-500 uppercase">Previsão Entrega (Período)</label>
+                  <label className="text-xs font-semibold text-gray-500 uppercase">Previsao Montagem (Periodo)</label>
                   <div className="w-full">
                     <DatePicker
                       selectsRange={true}
@@ -2333,13 +2338,17 @@ function AssemblyManagementContent() {
                                                       ⚡ Full
                                                     </span>
                                                   )}
-                                                  {row.isForaPrazo ? (
+                                                  {row.prazoStatus === 'out' ? (
                                                     <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-800">
                                                       ⏰ Fora do Prazo
                                                     </span>
-                                                  ) : (
+                                                  ) : row.prazoStatus === 'within' ? (
                                                     <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800">
                                                       ✅ No Prazo
+                                                    </span>
+                                                  ) : (
+                                                    <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-700">
+                                                      Sem Previsao
                                                     </span>
                                                   )}
                                                 </div>
@@ -3863,8 +3872,8 @@ function AssemblyManagementContent() {
                         });
                       } else if (pdfSortOption === 'previsao_montagem') {
                         orders.sort((a, b) => {
-                          const dateA = parseDate(a.previsao_montagem || a.previsao_entrega || a.raw_json?.previsao_montagem || a.raw_json?.previsao_entrega);
-                          const dateB = parseDate(b.previsao_montagem || b.previsao_entrega || b.raw_json?.previsao_montagem || b.raw_json?.previsao_entrega);
+                          const dateA = parseDate(getPrevisaoMontagemValue(a));
+                          const dateB = parseDate(getPrevisaoMontagemValue(b));
                           return dateA.getTime() - dateB.getTime();
                         });
                       } else if (pdfSortOption === 'cliente') {
