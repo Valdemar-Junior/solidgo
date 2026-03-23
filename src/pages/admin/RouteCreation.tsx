@@ -60,6 +60,29 @@ import { ptBR } from 'date-fns/locale';
 import 'react-datepicker/dist/react-datepicker.css';
 
 registerLocale('pt-BR', ptBR);
+
+const FULL_URGENT_ALERT_STORAGE_KEY = 'rc_fullUrgentAlertDismissedAt';
+const FULL_URGENT_ALERT_SNOOZE_MS = 2 * 60 * 60 * 1000;
+
+type FullUrgentAlertItem = {
+  id: string;
+  orderIdErp: string;
+  customerName: string;
+  previsaoEntrega: string;
+  urgency: 'today' | 'overdue';
+  routeId?: string;
+  routeName?: string;
+  routeCode?: string;
+};
+
+type FullUrgentAlertSummary = {
+  total: number;
+  overdueCount: number;
+  dueTodayCount: number;
+  awaitingRouting: FullUrgentAlertItem[];
+  inSeparation: FullUrgentAlertItem[];
+};
+
 // --- ERROR BOUNDARY ---
 class RouteCreationErrorBoundary extends React.Component<
   { children: React.ReactNode },
@@ -84,6 +107,7 @@ class RouteCreationErrorBoundary extends React.Component<
       localStorage.removeItem('rc_showCreateModal');
       localStorage.removeItem('rc_showRouteModal');
       localStorage.removeItem('rc_selectedRouteId');
+      localStorage.removeItem(FULL_URGENT_ALERT_STORAGE_KEY);
       window.location.reload();
     } catch (e) {
       console.error('Failed to clear storage', e);
@@ -173,8 +197,11 @@ function RouteCreationContent() {
   const [conferenceRoute, setConferenceRoute] = useState<RouteWithDetails | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showColumnsModal, setShowColumnsModal] = useState(false);
+  const [showFullUrgentAlertModal, setShowFullUrgentAlertModal] = useState(false);
   const [mixedConfirmOpen, setMixedConfirmOpen] = useState(false);
   const [requireConference, setRequireConference] = useState<boolean>(true);
+  const [fullUrgentAlert, setFullUrgentAlert] = useState<FullUrgentAlertSummary | null>(null);
+  const [fullUrgentAlertRecheckToken, setFullUrgentAlertRecheckToken] = useState(0);
 
   // Loading states for specific actions
   const [nfLoading, setNfLoading] = useState(false);
@@ -182,6 +209,7 @@ function RouteCreationContent() {
   const [groupSending, setGroupSending] = useState(false);
   const isLoadingRef = useRef(false);
   const isMountedRef = useRef(true);
+  const fullUrgentAlertTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // --- PDF SORT OPTIONS MODAL ---
   const [showPdfSortModal, setShowPdfSortModal] = useState(false);
@@ -1055,6 +1083,19 @@ function RouteCreationContent() {
     }
   };
 
+  const dismissFullUrgentAlert = () => {
+    try {
+      localStorage.setItem(FULL_URGENT_ALERT_STORAGE_KEY, String(Date.now()));
+    } catch { }
+    setShowFullUrgentAlertModal(false);
+    setFullUrgentAlertRecheckToken(Date.now());
+  };
+
+  const dismissFullUrgentAlertAndGoTo = (ref: React.RefObject<HTMLElement>) => {
+    dismissFullUrgentAlert();
+    window.setTimeout(() => scrollToSection(ref), 50);
+  };
+
   // --- EFFECTS ---
 
   // Load initial data and set up visibility change listener
@@ -1496,6 +1537,31 @@ function RouteCreationContent() {
     return s === 'true' || s === '1' || s === 'sim' || s === 's' || s === 'y' || s === 'yes' || s === 't';
   };
 
+  const getDateOnlyKey = (value: any) => {
+    if (!value) return '';
+    const raw = String(value).trim();
+    const directMatch = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (directMatch) {
+      return `${directMatch[1]}-${directMatch[2]}-${directMatch[3]}`;
+    }
+    try {
+      const d = new Date(value);
+      if (isNaN(d.getTime())) return '';
+      const year = d.getFullYear();
+      const month = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    } catch {
+      return '';
+    }
+  };
+
+  const isAlertDeliveryRouteName = (value: any) => {
+    const routeName = String(value || '').trim().toUpperCase();
+    if (!routeName) return true;
+    return !routeName.startsWith('RETIRADA') && !routeName.startsWith('COLETA-');
+  };
+
   // Verifica se o pedido tem Frete Full
   // Prioridade 1: Campo tem_frete_full
   // Prioridade 2: Observações internas contendo *frete full* (entre asteriscos)
@@ -1511,6 +1577,98 @@ function RouteCreationContent() {
       return true;
     }
     return false;
+  };
+
+  const buildFullUrgentAlertSummary = (sourceOrders: Order[], activeRouteOrders: any[]): FullUrgentAlertSummary | null => {
+    const todayKey = getDateOnlyKey(new Date());
+    if (!todayKey) return null;
+
+    const routeByOrderId = new Map<string, { id?: string; name?: string; route_code?: string; status?: string }>();
+    const getRoutePriority = (status: string) => {
+      if (status === 'pending') return 2;
+      if (status === 'in_progress') return 1;
+      return 0;
+    };
+
+    for (const row of activeRouteOrders || []) {
+      const orderId = String(row?.order_id || '').trim();
+      const routeStatus = String(row?.route?.status || '').trim();
+      const routeName = String(row?.route?.name || '').trim();
+      if (!orderId || !routeStatus) continue;
+      if (!isAlertDeliveryRouteName(routeName)) continue;
+
+      const current = routeByOrderId.get(orderId);
+      const candidatePriority = getRoutePriority(routeStatus);
+      const currentPriority = current ? getRoutePriority(String(current.status || '')) : -1;
+
+      if (!current || candidatePriority > currentPriority) {
+        routeByOrderId.set(orderId, {
+          id: row?.route?.id ? String(row.route.id) : undefined,
+          name: routeName || undefined,
+          route_code: row?.route?.route_code ? String(row.route.route_code) : undefined,
+          status: routeStatus,
+        });
+      }
+    }
+
+    const awaitingRouting: FullUrgentAlertItem[] = [];
+    const inSeparation: FullUrgentAlertItem[] = [];
+
+    for (const order of sourceOrders || []) {
+      if (!order) continue;
+      if (!hasFreteFull(order)) continue;
+      if (String(order.status || '') === 'returned' || Boolean(order.return_flag) || Boolean(order.requires_pickup)) continue;
+
+      const previsaoKey = getDateOnlyKey(order.previsao_entrega);
+      if (!previsaoKey || previsaoKey > todayKey) continue;
+
+      const routeInfo = routeByOrderId.get(String(order.id));
+      if (routeInfo?.status === 'in_progress') continue;
+
+      const item: FullUrgentAlertItem = {
+        id: String(order.id),
+        orderIdErp: String(order.order_id_erp || '').trim() || String(order.id).slice(0, 8),
+        customerName: String(order.customer_name || 'Cliente sem nome').trim(),
+        previsaoEntrega: order.previsao_entrega || '',
+        urgency: previsaoKey < todayKey ? 'overdue' : 'today',
+        routeId: routeInfo?.id,
+        routeName: routeInfo?.name,
+        routeCode: routeInfo?.route_code,
+      };
+
+      if (routeInfo?.status === 'pending') {
+        inSeparation.push(item);
+        continue;
+      }
+
+      if (String(order.status || '') === 'pending') {
+        awaitingRouting.push(item);
+      }
+    }
+
+    const sortItems = (items: FullUrgentAlertItem[]) => {
+      items.sort((a, b) => {
+        const urgencyDiff = (a.urgency === 'overdue' ? 0 : 1) - (b.urgency === 'overdue' ? 0 : 1);
+        if (urgencyDiff !== 0) return urgencyDiff;
+        const dateDiff = getDateOnlyKey(a.previsaoEntrega).localeCompare(getDateOnlyKey(b.previsaoEntrega));
+        if (dateDiff !== 0) return dateDiff;
+        return a.orderIdErp.localeCompare(b.orderIdErp);
+      });
+    };
+
+    sortItems(awaitingRouting);
+    sortItems(inSeparation);
+
+    const allItems = [...awaitingRouting, ...inSeparation];
+    if (allItems.length === 0) return null;
+
+    return {
+      total: allItems.length,
+      overdueCount: allItems.filter((item) => item.urgency === 'overdue').length,
+      dueTodayCount: allItems.filter((item) => item.urgency === 'today').length,
+      awaitingRouting,
+      inSeparation,
+    };
   };
 
   const getFilteredOrderIds = (): Set<string> => {
@@ -1730,6 +1888,55 @@ function RouteCreationContent() {
     }
   }, [showCreateModal]);
 
+  const hasBlockingModalOpen = showRouteModal ||
+    showConferenceModal ||
+    showCreateModal ||
+    showColumnsModal ||
+    mixedConfirmOpen ||
+    showPickupModal ||
+    showPickupOrderModal ||
+    showLaunchModal ||
+    showLaunchPreview ||
+    showPdfSortModal;
+
+  useEffect(() => {
+    if (fullUrgentAlertTimerRef.current) {
+      clearTimeout(fullUrgentAlertTimerRef.current);
+      fullUrgentAlertTimerRef.current = null;
+    }
+
+    if (!fullUrgentAlert || fullUrgentAlert.total === 0) {
+      setShowFullUrgentAlertModal(false);
+      return;
+    }
+
+    if (showFullUrgentAlertModal || hasBlockingModalOpen) {
+      return;
+    }
+
+    let dismissedAt = 0;
+    try {
+      dismissedAt = Number(localStorage.getItem(FULL_URGENT_ALERT_STORAGE_KEY) || '0');
+    } catch { }
+
+    const remainingMs = dismissedAt + FULL_URGENT_ALERT_SNOOZE_MS - Date.now();
+    if (remainingMs > 0) {
+      fullUrgentAlertTimerRef.current = setTimeout(() => {
+        setFullUrgentAlertRecheckToken(Date.now());
+      }, remainingMs);
+      return;
+    }
+
+    setShowFullUrgentAlertModal(true);
+
+    return () => {
+      if (fullUrgentAlertTimerRef.current) {
+        clearTimeout(fullUrgentAlertTimerRef.current);
+        fullUrgentAlertTimerRef.current = null;
+      }
+    };
+  }, [fullUrgentAlert, showFullUrgentAlertModal, hasBlockingModalOpen, fullUrgentAlertRecheckToken]);
+
   // --- DATA LOADING ---
   // This function loads data directly from Supabase with optimized parallel queries (METADATA ONLY)
   const loadData = async (silent: boolean = true) => {
@@ -1802,7 +2009,7 @@ function RouteCreationContent() {
         // Active route orders (SAFETY: prevent re-routing orders that are in active routes)
         supabase
           .from('route_orders')
-          .select('order_id, route:routes!inner(status)')
+          .select('order_id, route:routes!inner(id,name,status,route_code)')
           .neq('route.status', 'completed'),
 
         // Pedidos bloqueados (para aba "Bloqueados") — sem colunas pesadas
@@ -1834,6 +2041,7 @@ function RouteCreationContent() {
       let processedOrders: Order[] = [];
       if (ordersRes.data) {
         const rawOrders = ordersRes.data as Order[];
+        setFullUrgentAlert(buildFullUrgentAlertSummary(rawOrders, activeRouteOrdersRes.data || []));
         processedOrders = rawOrders
           .filter(o => !lockedOrderIds.has(o.id)) // SAFETY FILTER
           .filter(o => String(o.status) !== 'assigned') // BLOCK VISIBILITY OF INCONSISTENT/STUCK ORDERS
@@ -1874,6 +2082,8 @@ function RouteCreationContent() {
           })));
         }
         setOrders(processedOrders);
+      } else {
+        setFullUrgentAlert(null);
       }
 
       // Processar pedidos bloqueados
@@ -2577,6 +2787,41 @@ function RouteCreationContent() {
             </div>
           </div>
         </div>
+
+        {fullUrgentAlert && (
+          <div className={`rounded-xl border px-4 py-4 shadow-sm ${fullUrgentAlert.overdueCount > 0 ? 'bg-red-50 border-red-200' : 'bg-amber-50 border-amber-200'}`}>
+            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div className="flex items-start gap-3">
+                <div className={`rounded-full p-2 ${fullUrgentAlert.overdueCount > 0 ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}>
+                  <AlertTriangle className="h-5 w-5" />
+                </div>
+                <div>
+                  <p className={`text-sm font-bold ${fullUrgentAlert.overdueCount > 0 ? 'text-red-900' : 'text-amber-900'}`}>
+                    Pedidos FULL no prazo final
+                  </p>
+                  <p className={`text-sm ${fullUrgentAlert.overdueCount > 0 ? 'text-red-800' : 'text-amber-800'}`}>
+                    {fullUrgentAlert.total} pedido(s) exigem atencao nesta tela.
+                    {' '}<strong>{fullUrgentAlert.awaitingRouting.length}</strong> aguardando roteirizacao e
+                    {' '}<strong>{fullUrgentAlert.inSeparation.length}</strong> em separacao.
+                  </p>
+                  <p className={`text-xs mt-1 ${fullUrgentAlert.overdueCount > 0 ? 'text-red-700' : 'text-amber-700'}`}>
+                    {fullUrgentAlert.overdueCount > 0
+                      ? `${fullUrgentAlert.overdueCount} atrasado(s) e ${fullUrgentAlert.dueTodayCount} para hoje.`
+                      : `${fullUrgentAlert.dueTodayCount} com entrega prevista para hoje.`}
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setShowFullUrgentAlertModal(true)}
+                  className={`px-3 py-2 rounded-lg text-sm font-semibold border ${fullUrgentAlert.overdueCount > 0 ? 'border-red-300 text-red-800 bg-white hover:bg-red-100' : 'border-amber-300 text-amber-800 bg-white hover:bg-amber-100'}`}
+                >
+                  Ver detalhes
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Filters Panel */}
         {showFilters && (
@@ -5507,6 +5752,138 @@ function RouteCreationContent() {
           </div>
         )
       }
+
+      {showFullUrgentAlertModal && fullUrgentAlert && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl overflow-hidden">
+            <div className={`px-6 py-5 ${fullUrgentAlert.overdueCount > 0 ? 'bg-red-600' : 'bg-amber-500'}`}>
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <div className="flex items-center gap-3 text-white">
+                    <AlertTriangle className="h-6 w-6" />
+                    <h3 className="text-xl font-bold">Pedidos FULL no prazo final</h3>
+                  </div>
+                  <p className={`mt-2 text-sm ${fullUrgentAlert.overdueCount > 0 ? 'text-red-100' : 'text-amber-50'}`}>
+                    O aviso considera apenas pedidos FULL com previsao de entrega para hoje ou atrasada,
+                    que ainda nao entraram efetivamente em rota.
+                  </p>
+                </div>
+                <button
+                  onClick={dismissFullUrgentAlert}
+                  className={`p-2 rounded-full ${fullUrgentAlert.overdueCount > 0 ? 'hover:bg-red-500 text-white' : 'hover:bg-amber-400 text-white'}`}
+                  aria-label="Fechar alerta"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+            </div>
+
+            <div className="p-6 space-y-6 max-h-[70vh] overflow-y-auto">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div className="rounded-xl border border-red-200 bg-red-50 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-red-700">Atrasados</p>
+                  <p className="mt-2 text-2xl font-bold text-red-900">{fullUrgentAlert.overdueCount}</p>
+                </div>
+                <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-amber-700">Para hoje</p>
+                  <p className="mt-2 text-2xl font-bold text-amber-900">{fullUrgentAlert.dueTodayCount}</p>
+                </div>
+                <div className="rounded-xl border border-blue-200 bg-blue-50 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-blue-700">Em separacao</p>
+                  <p className="mt-2 text-2xl font-bold text-blue-900">{fullUrgentAlert.inSeparation.length}</p>
+                </div>
+              </div>
+
+              {fullUrgentAlert.awaitingRouting.length > 0 && (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <h4 className="text-sm font-bold text-gray-900">Aguardando roteirizacao</h4>
+                    <span className="text-xs font-semibold px-2 py-1 rounded-full bg-orange-100 text-orange-800 border border-orange-200">
+                      {fullUrgentAlert.awaitingRouting.length} pedido(s)
+                    </span>
+                  </div>
+                  <div className="space-y-2">
+                    {fullUrgentAlert.awaitingRouting.slice(0, 6).map((item) => (
+                      <div key={`routing-${item.id}`} className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3">
+                        <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                          <div>
+                            <p className="text-sm font-semibold text-gray-900">Pedido #{item.orderIdErp}</p>
+                            <p className="text-sm text-gray-700">{item.customerName}</p>
+                          </div>
+                          <span className={`text-xs font-semibold px-2 py-1 rounded-full border self-start ${item.urgency === 'overdue' ? 'bg-red-100 text-red-800 border-red-200' : 'bg-amber-100 text-amber-800 border-amber-200'}`}>
+                            {item.urgency === 'overdue' ? 'Atrasado' : 'Entrega hoje'}
+                          </span>
+                        </div>
+                        <p className="text-xs text-gray-500 mt-2">Previsao: {formatDate(item.previsaoEntrega)}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {fullUrgentAlert.inSeparation.length > 0 && (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <h4 className="text-sm font-bold text-gray-900">Em separacao</h4>
+                    <span className="text-xs font-semibold px-2 py-1 rounded-full bg-blue-100 text-blue-800 border border-blue-200">
+                      {fullUrgentAlert.inSeparation.length} pedido(s)
+                    </span>
+                  </div>
+                  <div className="space-y-2">
+                    {fullUrgentAlert.inSeparation.slice(0, 6).map((item) => (
+                      <div key={`separation-${item.id}`} className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3">
+                        <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                          <div>
+                            <p className="text-sm font-semibold text-gray-900">Pedido #{item.orderIdErp}</p>
+                            <p className="text-sm text-gray-700">{item.customerName}</p>
+                          </div>
+                          <span className={`text-xs font-semibold px-2 py-1 rounded-full border self-start ${item.urgency === 'overdue' ? 'bg-red-100 text-red-800 border-red-200' : 'bg-amber-100 text-amber-800 border-amber-200'}`}>
+                            {item.urgency === 'overdue' ? 'Atrasado' : 'Entrega hoje'}
+                          </span>
+                        </div>
+                        <p className="text-xs text-gray-500 mt-2">
+                          Previsao: {formatDate(item.previsaoEntrega)}
+                          {(item.routeCode || item.routeName) ? ` • Rota: ${item.routeCode || item.routeName}` : ''}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="px-6 py-4 bg-gray-50 border-t border-gray-200 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <p className="text-xs text-gray-500">
+                Ao fechar, este aviso entra em soneca por 2 horas.
+              </p>
+              <div className="flex flex-wrap items-center gap-2">
+                {fullUrgentAlert.awaitingRouting.length > 0 && (
+                  <button
+                    onClick={() => dismissFullUrgentAlertAndGoTo(ordersSectionRef)}
+                    className="px-3 py-2 rounded-lg text-sm font-semibold border border-gray-300 text-gray-700 bg-white hover:bg-gray-100"
+                  >
+                    Ir para pedidos
+                  </button>
+                )}
+                {fullUrgentAlert.inSeparation.length > 0 && (
+                  <button
+                    onClick={() => dismissFullUrgentAlertAndGoTo(routesSectionRef)}
+                    className="px-3 py-2 rounded-lg text-sm font-semibold border border-blue-300 text-blue-700 bg-white hover:bg-blue-50"
+                  >
+                    Ir para rotas
+                  </button>
+                )}
+                <button
+                  onClick={dismissFullUrgentAlert}
+                  className="px-3 py-2 rounded-lg text-sm font-semibold bg-gray-900 text-white hover:bg-black"
+                >
+                  Lembrar em 2 horas
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Mixed Confirm Modal */}
       {
