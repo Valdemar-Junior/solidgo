@@ -28,6 +28,7 @@ import DiagnosticoOrders from './pages/diagnostico-orders';
 import VerificarColunasOrders from './pages/verificar-colunas';
 import AuditDashboard from './pages/admin/AuditDashboard';
 import Diary from './pages/admin/Diary';
+import FleetManagement from './pages/admin/FleetManagement';
 import AdminLayout from './layouts/AdminLayout';
 
 import ProtectedRoute from './components/ProtectedRoute';
@@ -150,6 +151,16 @@ function App() {
               <ProtectedRoute allowedRoles={['admin']}>
                 <AdminLayout>
                   <Reports />
+                </AdminLayout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/fleet"
+            element={
+              <ProtectedRoute allowedRoles={['admin']}>
+                <AdminLayout>
+                  <FleetManagement />
                 </AdminLayout>
               </ProtectedRoute>
             }

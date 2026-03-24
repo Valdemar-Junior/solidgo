@@ -16,7 +16,8 @@ import {
     X,
     UserCircle,
     Bell,
-    Box
+    Box,
+    CarFront
 } from 'lucide-react';
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
@@ -25,7 +26,6 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     const location = useLocation();
     const navigate = useNavigate();
 
-    // Fecha o menu mobile ao trocar de tela
     useEffect(() => {
         setIsMobileMenuOpen(false);
     }, [location.pathname]);
@@ -41,6 +41,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         { name: 'Consulta de Pedido', href: '/admin/order-lookup', icon: PackageSearch },
         { name: 'Gestão de Entregas', href: '/admin/routes', icon: Truck },
         { name: 'Gestão de Montagem', href: '/admin/assembly', icon: Hammer },
+        { name: 'Controle de Frota', href: '/admin/fleet', icon: CarFront },
         { name: 'Relatórios', href: '/admin/reports', icon: FileSpreadsheet },
         { name: 'Cadastros e Equipes', href: '/admin/users-teams', icon: Users },
         { name: 'Configurações', href: '/admin/settings', icon: Settings },
@@ -48,11 +49,10 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         { name: 'Diário de Bordo', href: '/admin/diary', icon: BookMarked },
     ];
 
-    const currentRoute = navigationItems.find(it => it.href === location.pathname) || { name: 'Painel Administrativo' };
+    const currentRoute = navigationItems.find((item) => item.href === location.pathname) || { name: 'Painel Administrativo' };
 
     return (
         <div className="min-h-screen bg-gray-50 flex overflow-hidden">
-            {/* Mobile Drawer Overlay */}
             {isMobileMenuOpen && (
                 <div
                     className="fixed inset-0 bg-gray-900/50 z-40 lg:hidden transition-opacity"
@@ -60,12 +60,10 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
                 />
             )}
 
-            {/* Sidebar Desktop & Mobile */}
             <aside
                 className={`fixed inset-y-0 left-0 z-50 w-72 bg-[#0B1E36] transform transition-transform duration-300 ease-in-out lg:static lg:translate-x-0 flex flex-col ${isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full'
                     }`}
             >
-                {/* Sidebar Header / Logo */}
                 <div className="h-16 flex items-center justify-between px-6 bg-[#0B1E36] border-b border-white/10 shrink-0">
                     <div className="flex items-center gap-3">
                         <div className="bg-blue-600 p-2 rounded-lg shadow-sm shadow-blue-900/50">
@@ -81,7 +79,6 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
                     </button>
                 </div>
 
-                {/* Sidebar Navigation */}
                 <div className="flex-1 overflow-y-auto px-4 py-6 scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent">
                     <div className="space-y-1">
                         {navigationItems.map((item) => {
@@ -106,7 +103,6 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
                     </div>
                 </div>
 
-                {/* Sidebar Footer (User Info & Logout) */}
                 <div className="p-4 border-t border-white/10 shrink-0 bg-[#0B1E36]">
                     <div className="flex items-center gap-3 px-3 py-3 rounded-lg bg-white/5 border border-white/5">
                         <div className="h-8 w-8 rounded-full bg-blue-600 flex items-center justify-center shrink-0">
@@ -129,9 +125,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
                 </div>
             </aside>
 
-            {/* Main Content Area */}
             <div className="flex-1 flex flex-col min-w-0 h-screen overflow-hidden">
-                {/* Top Header */}
                 <header className="h-16 bg-white border-b border-gray-200 flex items-center justify-between px-4 sm:px-6 z-10 shrink-0">
                     <div className="flex items-center gap-3">
                         <button
@@ -151,7 +145,6 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
                     <div className="flex items-center gap-2 sm:gap-4">
                         <button className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-full transition-colors relative">
                             <Bell className="h-5 w-5" />
-                            {/* Notifier badge */}
                             <span className="absolute top-1.5 right-1.5 h-2 w-2 bg-red-500 rounded-full border border-white"></span>
                         </button>
 
@@ -167,7 +160,6 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
                     </div>
                 </header>
 
-                {/* Page Content Scrollable Area */}
                 <main className="flex-1 overflow-auto bg-gray-50">
                     {children}
                 </main>

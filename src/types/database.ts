@@ -30,6 +30,84 @@ export interface Vehicle {
   name?: string;
 }
 
+export type FleetVehicleStatus = 'available' | 'maintenance' | 'inactive';
+
+export interface FleetVehicle {
+  id: string;
+  display_name: string;
+  plate: string;
+  brand: string;
+  model: string;
+  model_year?: number | null;
+  vehicle_type?: string | null;
+  renavam?: string | null;
+  chassis?: string | null;
+  current_odometer: number;
+  status: FleetVehicleStatus;
+  notes?: string | null;
+  active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export type FleetInspectionOverallStatus = 'approved' | 'attention' | 'critical';
+export type FleetInspectionItemStatus = 'ok' | 'attention' | 'critical' | 'na';
+
+export interface FleetInspection {
+  id: string;
+  vehicle_id: string;
+  inspection_at: string;
+  odometer: number;
+  overall_status: FleetInspectionOverallStatus;
+  general_notes?: string | null;
+  created_by?: string | null;
+  created_at: string;
+  vehicle?: FleetVehicle;
+  items?: FleetInspectionItem[];
+  photos?: FleetInspectionPhoto[];
+}
+
+export interface FleetInspectionItem {
+  id: string;
+  inspection_id: string;
+  item_code: string;
+  category: string;
+  label: string;
+  status: FleetInspectionItemStatus;
+  notes?: string | null;
+  sort_order: number;
+}
+
+export interface FleetInspectionPhoto {
+  id: string;
+  inspection_id: string;
+  storage_path: string;
+  file_name?: string | null;
+  file_size?: number | null;
+  caption?: string | null;
+  created_by?: string | null;
+  created_at: string;
+}
+
+export type FleetOccurrenceStatus = 'open' | 'in_progress' | 'resolved' | 'cancelled';
+
+export interface FleetOccurrence {
+  id: string;
+  vehicle_id: string;
+  inspection_id: string;
+  severity: 'critical';
+  status: FleetOccurrenceStatus;
+  title: string;
+  description?: string | null;
+  resolution_notes?: string | null;
+  created_by?: string | null;
+  resolved_by?: string | null;
+  created_at: string;
+  resolved_at?: string | null;
+  vehicle?: FleetVehicle;
+  inspection?: FleetInspection;
+}
+
 export interface Order {
   id: string;
   order_id_erp: string;
