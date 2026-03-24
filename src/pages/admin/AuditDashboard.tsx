@@ -60,6 +60,38 @@ export default function AuditDashboard() {
         // Realtime removido: assinaturas sem filtro sobrecarregavam o pool de conexoes.
     }, []);
 
+    const resolveOrderTextValue = (storedValue: any, fallbackValues: any[] = [], hasAuditOverride = false) => {
+        if (storedValue !== null && storedValue !== undefined) {
+            const storedText = String(storedValue);
+            if (storedText.trim() !== '' || hasAuditOverride) {
+                return storedText;
+            }
+        }
+
+        for (const value of fallbackValues) {
+            if (value === null || value === undefined) continue;
+            const text = String(value);
+            if (text.trim() !== '') return text;
+        }
+
+        return '';
+    };
+
+    const buildSyncedObservationsRawJson = (rawJson: any, observacoesPublicas: string, observacoesInternas: string) => {
+        const base = rawJson && typeof rawJson === 'object' && !Array.isArray(rawJson)
+            ? { ...rawJson }
+            : {};
+
+        base.observacoes_publicas = observacoesPublicas;
+        base.Observacoes_publicas = observacoesPublicas;
+        base.observacoes = observacoesPublicas;
+        base.Observacoes = observacoesPublicas;
+        base.observacoes_internas = observacoesInternas;
+        base.Observacoes_internas = observacoesInternas;
+
+        return base;
+    };
+
     const handleUnlockGeneralSection = (e?: React.FormEvent) => {
         if (e) e.preventDefault();
         if (generalAccessPassword === AUDIT_ADMIN_PASSWORD) {
@@ -982,13 +1014,6 @@ export default function AuditDashboard() {
                 return;
             }
 
-            setSearchedOrder(data);
-            setEditedOrder({
-                tem_frete_full: data.tem_frete_full || '',
-                address_json: data.address_json || {},
-                items_json: data.items_json || []
-            });
-
             // Load audit history
             const { data: logs } = await supabase
                 .from('order_audit_log')
@@ -997,7 +1022,43 @@ export default function AuditDashboard() {
                 .order('created_at', { ascending: false })
                 .limit(20);
 
-            setAuditHistory(logs || []);
+            const auditLogs = logs || [];
+            const raw = data.raw_json || {};
+            const hasObsPublicasAudit = auditLogs.some((log: any) => log.field_changed === 'observacoes_publicas');
+            const hasObsInternasAudit = auditLogs.some((log: any) => log.field_changed === 'observacoes_internas');
+
+            const observacoesPublicas = resolveOrderTextValue(
+                data.observacoes_publicas,
+                [
+                    raw.observacoes_publicas,
+                    raw.Observacoes_publicas,
+                    raw.observacoes,
+                    raw.Observacoes
+                ],
+                hasObsPublicasAudit
+            );
+            const observacoesInternas = resolveOrderTextValue(
+                data.observacoes_internas,
+                [
+                    raw.observacoes_internas,
+                    raw.Observacoes_internas
+                ],
+                hasObsInternasAudit
+            );
+
+            setSearchedOrder({
+                ...data,
+                observacoes_publicas: observacoesPublicas,
+                observacoes_internas: observacoesInternas
+            });
+            setEditedOrder({
+                tem_frete_full: data.tem_frete_full || '',
+                address_json: data.address_json || {},
+                items_json: data.items_json || [],
+                observacoes_publicas: observacoesPublicas,
+                observacoes_internas: observacoesInternas
+            });
+            setAuditHistory(auditLogs);
 
         } catch (e) {
             console.error(e);
@@ -1033,6 +1094,19 @@ export default function AuditDashboard() {
             changes.push({ field: 'endereco_numero', old_value: oldAddr.number || '', new_value: newAddr.number || '' });
         }
 
+        // Check observation changes
+        const oldObsPublicas = String(searchedOrder.observacoes_publicas ?? '');
+        const newObsPublicas = String(editedOrder.observacoes_publicas ?? '');
+        if (oldObsPublicas !== newObsPublicas) {
+            changes.push({ field: 'observacoes_publicas', old_value: oldObsPublicas, new_value: newObsPublicas });
+        }
+
+        const oldObsInternas = String(searchedOrder.observacoes_internas ?? '');
+        const newObsInternas = String(editedOrder.observacoes_internas ?? '');
+        if (oldObsInternas !== newObsInternas) {
+            changes.push({ field: 'observacoes_internas', old_value: oldObsInternas, new_value: newObsInternas });
+        }
+
         // Check Montagem changes per item
         const oldItems = searchedOrder.items_json || [];
         const newItems = editedOrder.items_json || [];
@@ -1054,17 +1128,37 @@ export default function AuditDashboard() {
         }
 
         try {
+            const syncedRawJson = buildSyncedObservationsRawJson(
+                searchedOrder.raw_json,
+                String(editedOrder.observacoes_publicas ?? ''),
+                String(editedOrder.observacoes_internas ?? '')
+            );
+
             // Update order
-            const { error: updateError } = await supabase
+            const { data: updatedOrder, error: updateError } = await supabase
                 .from('orders')
                 .update({
                     tem_frete_full: editedOrder.tem_frete_full,
                     address_json: editedOrder.address_json,
-                    items_json: editedOrder.items_json
+                    items_json: editedOrder.items_json,
+                    observacoes_publicas: editedOrder.observacoes_publicas,
+                    observacoes_internas: editedOrder.observacoes_internas,
+                    raw_json: syncedRawJson
                 })
-                .eq('id', searchedOrder.id);
+                .eq('id', searchedOrder.id)
+                .select('id, order_id_erp, customer_name, phone, address_json, items_json, status, tem_frete_full, observacoes_publicas, observacoes_internas, customer_cpf, raw_json')
+                .single();
 
             if (updateError) throw updateError;
+            if (!updatedOrder) throw new Error('Nenhum pedido foi atualizado.');
+
+            if (String(updatedOrder.observacoes_publicas ?? '') !== String(editedOrder.observacoes_publicas ?? '')) {
+                throw new Error('Observações públicas não foram persistidas como esperado.');
+            }
+
+            if (String(updatedOrder.observacoes_internas ?? '') !== String(editedOrder.observacoes_internas ?? '')) {
+                throw new Error('Observações internas não foram persistidas como esperado.');
+            }
 
             // Insert audit logs
             const logs = changes.map(c => ({
@@ -1081,7 +1175,19 @@ export default function AuditDashboard() {
             toast.success(`${changes.length} alteração(ões) salva(s) com sucesso!`);
 
             // Refresh order data
-            setSearchedOrder({ ...searchedOrder, ...editedOrder });
+            const syncedOrder = {
+                ...updatedOrder,
+                observacoes_publicas: String(updatedOrder.observacoes_publicas ?? ''),
+                observacoes_internas: String(updatedOrder.observacoes_internas ?? '')
+            };
+            setSearchedOrder(syncedOrder);
+            setEditedOrder({
+                tem_frete_full: updatedOrder.tem_frete_full || '',
+                address_json: updatedOrder.address_json || {},
+                items_json: updatedOrder.items_json || [],
+                observacoes_publicas: String(updatedOrder.observacoes_publicas ?? ''),
+                observacoes_internas: String(updatedOrder.observacoes_internas ?? '')
+            });
 
             // Refresh audit history
             const { data: newLogs } = await supabase
@@ -1772,6 +1878,45 @@ export default function AuditDashboard() {
                                             </div>
                                         </div>
 
+                                        {/* Observations */}
+                                        <div className="border-b border-gray-100 pb-6">
+                                            <label className="flex items-center gap-2 text-sm font-semibold text-gray-700 mb-3">
+                                                <ClipboardList className="h-4 w-4" />
+                                                Observações
+                                            </label>
+                                            <div className="grid grid-cols-1 gap-4">
+                                                <div>
+                                                    <label className="block text-xs text-gray-500 mb-1">Observações internas</label>
+                                                    <textarea
+                                                        value={editedOrder.observacoes_internas || ''}
+                                                        onChange={(e) => setEditedOrder({
+                                                            ...editedOrder,
+                                                            observacoes_internas: e.target.value
+                                                        })}
+                                                        rows={4}
+                                                        placeholder="Digite as observações internas do pedido..."
+                                                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 resize-y"
+                                                    />
+                                                    <p className="mt-1 text-xs text-amber-700">
+                                                        Use palavras-chave como *montagem* e *frete full* quando precisar acionar regras automáticas.
+                                                    </p>
+                                                </div>
+                                                <div>
+                                                    <label className="block text-xs text-gray-500 mb-1">Observações públicas</label>
+                                                    <textarea
+                                                        value={editedOrder.observacoes_publicas || ''}
+                                                        onChange={(e) => setEditedOrder({
+                                                            ...editedOrder,
+                                                            observacoes_publicas: e.target.value
+                                                        })}
+                                                        rows={4}
+                                                        placeholder="Digite as observações públicas do pedido..."
+                                                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 resize-y"
+                                                    />
+                                                </div>
+                                            </div>
+                                        </div>
+
                                         {/* Products / Assembly */}
                                         <div className="border-b border-gray-100 pb-6">
                                             <label className="flex items-center gap-2 text-sm font-semibold text-gray-700 mb-3">
@@ -1827,15 +1972,16 @@ export default function AuditDashboard() {
                                             </h4>
                                             <div className="space-y-2 max-h-60 overflow-y-auto">
                                                 {auditHistory.map((log: any) => (
-                                                    <div key={log.id} className="flex items-center justify-between p-3 bg-white rounded-lg border border-gray-100 text-sm">
-                                                        <div>
-                                                            <span className="font-medium text-gray-900">{log.field_changed}</span>
-                                                            <span className="text-gray-500 mx-2">:</span>
-                                                            <span className="text-red-500 line-through">{log.old_value || '(vazio)'}</span>
-                                                            <span className="text-gray-400 mx-1">→</span>
-                                                            <span className="text-green-600 font-medium">{log.new_value || '(vazio)'}</span>
+                                                    <div key={log.id} className="flex flex-col gap-2 p-3 bg-white rounded-lg border border-gray-100 text-sm md:flex-row md:items-start md:justify-between">
+                                                        <div className="min-w-0">
+                                                            <p className="font-medium text-gray-900">{log.field_changed}</p>
+                                                            <div className="mt-1 whitespace-pre-wrap break-words">
+                                                                <span className="text-red-500 line-through">{log.old_value || '(vazio)'}</span>
+                                                                <span className="text-gray-400 mx-1">→</span>
+                                                                <span className="text-green-600 font-medium">{log.new_value || '(vazio)'}</span>
+                                                            </div>
                                                         </div>
-                                                        <div className="text-xs text-gray-400">
+                                                        <div className="text-xs text-gray-400 shrink-0">
                                                             {log.user_name} • {new Date(log.created_at).toLocaleString('pt-BR')}
                                                         </div>
                                                     </div>
