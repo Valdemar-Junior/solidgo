@@ -1562,6 +1562,320 @@ function RouteCreationContent() {
     return !routeName.startsWith('RETIRADA') && !routeName.startsWith('COLETA-');
   };
 
+  const isCollectionRouteName = (value: any) => {
+    return String(value || '').trim().toUpperCase().startsWith('COLETA-');
+  };
+
+  const normalizeLookupText = (value: any) => {
+    return String(value ?? '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .trim();
+  };
+
+  const findXmlElementsByLocalName = (root: any, localName: string): Element[] => {
+    if (!root?.getElementsByTagName) return [];
+    return Array.from(root.getElementsByTagName('*') as HTMLCollectionOf<Element>)
+      .filter((node) => node.localName === localName);
+  };
+
+  const findFirstXmlElementByLocalName = (root: any, localName: string): Element | null => {
+    return findXmlElementsByLocalName(root, localName)[0] || null;
+  };
+
+  const getXmlNodeText = (root: any, localName: string) => {
+    const node = findFirstXmlElementByLocalName(root, localName);
+    return String(node?.textContent || '').trim();
+  };
+
+  const parsePickupItemsFromReturnXml = (xmlText: string): Partial<Order['items_json'][number]>[] => {
+    const xml = String(xmlText || '').trim();
+    if (!xml || !xml.includes('<')) return [];
+
+    try {
+      const parser = new DOMParser();
+      const xmlDoc = parser.parseFromString(xml, 'application/xml');
+      if (xmlDoc.getElementsByTagName('parsererror').length > 0) {
+        return [];
+      }
+
+      return findXmlElementsByLocalName(xmlDoc, 'det')
+        .map((det) => {
+          const prod = findFirstXmlElementByLocalName(det, 'prod');
+          if (!prod) return null;
+
+          const sku = getXmlNodeText(prod, 'cProd');
+          const name = getXmlNodeText(prod, 'xProd');
+          const quantityRaw = getXmlNodeText(prod, 'qCom') || getXmlNodeText(prod, 'qTrib') || '1';
+          const quantity = Number(String(quantityRaw).replace(',', '.'));
+
+          if (!sku && !name) return null;
+
+          return {
+            sku,
+            name,
+            quantity: Number.isFinite(quantity) && quantity > 0 ? quantity : 1,
+          };
+        })
+        .filter(Boolean) as Partial<Order['items_json'][number]>[];
+    } catch (error) {
+      console.warn('Falha ao interpretar XML da coleta para o romaneio:', error);
+      return [];
+    }
+  };
+
+  const buildPickupItemsForDeliverySheet = (
+    order: any,
+    fallbackReturnXml?: string
+  ): Order['items_json'] => {
+    const orderItems = Array.isArray(order?.items_json) ? order.items_json : [];
+    const parsedItems = parsePickupItemsFromReturnXml(order?.return_nfe_xml || fallbackReturnXml || '');
+    if (parsedItems.length === 0) return orderItems;
+
+    const rawProducts = Array.isArray(order?.raw_json?.produtos_locais)
+      ? order.raw_json.produtos_locais
+      : (Array.isArray(order?.raw_json?.produtos) ? order.raw_json.produtos : []);
+
+    const usedOrderItemIndexes = new Set<number>();
+    const findMatchingOrderItemIndex = (pickupItem: Partial<Order['items_json'][number]>) => {
+      const pickupSku = normalizeLookupText(pickupItem?.sku);
+      const pickupName = normalizeLookupText(pickupItem?.name);
+
+      const skuMatchIndex = orderItems.findIndex((candidate: any, idx: number) => {
+        if (usedOrderItemIndexes.has(idx)) return false;
+        return pickupSku && normalizeLookupText(candidate?.sku) === pickupSku;
+      });
+      if (skuMatchIndex >= 0) return skuMatchIndex;
+
+      const exactNameIndex = orderItems.findIndex((candidate: any, idx: number) => {
+        if (usedOrderItemIndexes.has(idx)) return false;
+        return pickupName && normalizeLookupText(candidate?.name) === pickupName;
+      });
+      if (exactNameIndex >= 0) return exactNameIndex;
+
+      return orderItems.findIndex((candidate: any, idx: number) => {
+        if (usedOrderItemIndexes.has(idx)) return false;
+        const candidateName = normalizeLookupText(candidate?.name);
+        return pickupName && candidateName && (
+          candidateName.includes(pickupName) || pickupName.includes(candidateName)
+        );
+      });
+    };
+
+    return parsedItems.map((pickupItem) => {
+      const matchIndex = findMatchingOrderItemIndex(pickupItem);
+      if (matchIndex >= 0) usedOrderItemIndexes.add(matchIndex);
+
+      const matchedOrderItem = matchIndex >= 0 ? orderItems[matchIndex] : null;
+      const rawMatch = Array.isArray(rawProducts)
+        ? rawProducts.find((product: any) => {
+          const productCode = normalizeLookupText(product?.codigo_produto);
+          const productName = normalizeLookupText(product?.nome_produto);
+          const pickupSku = normalizeLookupText(pickupItem?.sku);
+          const pickupName = normalizeLookupText(pickupItem?.name);
+
+          return (pickupSku && productCode === pickupSku)
+            || (pickupName && productName === pickupName)
+            || (pickupName && productName && (productName.includes(pickupName) || pickupName.includes(productName)));
+        })
+        : null;
+
+      const quantity = Number(pickupItem?.quantity ?? matchedOrderItem?.purchased_quantity ?? matchedOrderItem?.quantity ?? 1);
+
+      return {
+        ...(matchedOrderItem || {}),
+        sku: String(pickupItem?.sku || matchedOrderItem?.sku || rawMatch?.codigo_produto || ''),
+        name: String(pickupItem?.name || matchedOrderItem?.name || rawMatch?.nome_produto || ''),
+        quantity: Number.isFinite(quantity) && quantity > 0 ? quantity : 1,
+        purchased_quantity: Number.isFinite(quantity) && quantity > 0 ? quantity : 1,
+        location: matchedOrderItem?.location || rawMatch?.local_estocagem || '',
+        brand: matchedOrderItem?.brand || rawMatch?.marca || '',
+      };
+    }).filter((item) => String(item?.sku || item?.name || '').trim().length > 0) as Order['items_json'];
+  };
+
+  const fetchPickupSourceReturnXmlMap = async (routeOrders: any[]) => {
+    const cloneToOriginal = new Map<string, string>();
+
+    for (const row of routeOrders || []) {
+      const cloneOrderErp = String(row?.order?.order_id_erp || '').trim();
+      if (!cloneOrderErp.startsWith('C-')) continue;
+
+      const originalOrderErp = cloneOrderErp.slice(2).trim();
+      if (!originalOrderErp) continue;
+      cloneToOriginal.set(cloneOrderErp, originalOrderErp);
+    }
+
+    if (cloneToOriginal.size === 0) return new Map<string, string>();
+
+    try {
+      const { data, error } = await supabase
+        .from('orders')
+        .select('order_id_erp, return_nfe_xml')
+        .in('order_id_erp', Array.from(new Set(cloneToOriginal.values())));
+
+      if (error) throw error;
+
+      const originalXmlByOrderErp = new Map<string, string>();
+      for (const row of data || []) {
+        const orderErp = String(row?.order_id_erp || '').trim();
+        const xml = String(row?.return_nfe_xml || '').trim();
+        if (orderErp && xml) originalXmlByOrderErp.set(orderErp, xml);
+      }
+
+      const cloneXmlByOrderErp = new Map<string, string>();
+      for (const [cloneOrderErp, originalOrderErp] of cloneToOriginal.entries()) {
+        const xml = originalXmlByOrderErp.get(originalOrderErp);
+        if (xml) cloneXmlByOrderErp.set(cloneOrderErp, xml);
+      }
+
+      return cloneXmlByOrderErp;
+    } catch (error) {
+      console.warn('Falha ao buscar XML de devolução original para o romaneio de coleta:', error);
+      return new Map<string, string>();
+    }
+  };
+
+  const fetchOrderReturnFields = async (orderId: string) => {
+    try {
+      const { data, error } = await supabase
+        .from('orders')
+        .select('return_nfe_xml, return_nfe_key, return_nfe_number, return_date, return_type, return_danfe_base64')
+        .eq('id', orderId)
+        .single();
+
+      if (error) throw error;
+      return data;
+    } catch (error) {
+      console.warn('Falha ao buscar dados de devolução do pedido:', error);
+      return null;
+    }
+  };
+
+  const getStoredDanfeForRoute = (order: any, routeName: any) => {
+    const danfe = isCollectionRouteName(routeName)
+      ? (order?.return_danfe_base64 || order?.danfe_base64 || '')
+      : (order?.danfe_base64 || '');
+    return String(danfe || '');
+  };
+
+  const hasStoredDanfeForRoute = (order: any, routeName: any) => {
+    return getStoredDanfeForRoute(order, routeName).startsWith('JVBER');
+  };
+
+  const hasDanfeHintForRoute = (order: any, routeName: any) => {
+    return hasStoredDanfeForRoute(order, routeName) || !!order?.danfe_gerada_em;
+  };
+
+  const getRouteDanfeButtonLabel = (route: any) => {
+    const routeOrders = Array.isArray(route?.route_orders) ? route.route_orders : [];
+    const noun = routeOrders.length === 1 ? 'Nota Fiscal' : 'Notas Fiscais';
+    if (routeOrders.length === 0) return `Gerar ${noun}`;
+    return routeOrders.every((ro: any) => hasDanfeHintForRoute(ro.order, route?.name))
+      ? `Imprimir ${noun}`
+      : `Gerar ${noun}`;
+  };
+
+  const openDanfePdf = async (b64: string) => {
+    const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+    const source = await PDFDocument.load(bytes);
+    const merged = await PDFDocument.create();
+    const pages = await merged.copyPages(source, source.getPageIndices());
+    pages.forEach((page) => merged.addPage(page));
+    const out = await merged.save();
+    DeliverySheetGenerator.openPDFInNewTab(out);
+  };
+
+  const syncSelectedRouteOrderDanfe = (routeOrderId: string, orderPatch: Record<string, any>) => {
+    setSelectedRoute((previous: any) => {
+      if (!previous) return previous;
+      return {
+        ...previous,
+        route_orders: (previous.route_orders || []).map((item: any) =>
+          item.id === routeOrderId
+            ? { ...item, order: { ...(item.order || {}), ...orderPatch } }
+            : item
+        )
+      };
+    });
+  };
+
+  const resolveDanfeWebhookUrl = async (isReturnDanfe: boolean) => {
+    const fallbackUrl = isReturnDanfe
+      ? 'https://n8n.lojaodosmoveis.shop/webhook/gera_nf_devolucao'
+      : 'https://n8n.lojaodosmoveis.shop/webhook/gera_nf';
+    const settingKeys = isReturnDanfe ? ['gera_nf_devolucao', 'gera_nf'] : ['gera_nf'];
+
+    for (const key of settingKeys) {
+      try {
+        const { data } = await supabase
+          .from('webhook_settings')
+          .select('url')
+          .eq('key', key)
+          .eq('active', true)
+          .single();
+
+        if (data?.url) return String(data.url);
+      } catch { }
+    }
+
+    return fallbackUrl;
+  };
+
+  const mapOrderToDeliverySheetOrder = (
+    order: any,
+    routeOrder: any,
+    routeName: string,
+    pickupSourceXmlByOrderErp?: Map<string, string>
+  ) => {
+    const address = order?.address_json || {};
+    const prodLoc = order?.raw_json?.produtos_locais || [];
+    const baseItems = isCollectionRouteName(routeName)
+      ? buildPickupItemsForDeliverySheet(order, pickupSourceXmlByOrderErp?.get(String(order?.order_id_erp || '').trim()))
+      : (Array.isArray(order?.items_json) ? order.items_json : []);
+
+    const items = baseItems.map((item: any, idx: number) => {
+      if (!item || item.location) return item;
+
+      let location = '';
+      if (Array.isArray(prodLoc) && prodLoc.length > 0) {
+        const byCode = prodLoc.find((product: any) => normalizeLookupText(product?.codigo_produto) === normalizeLookupText(item?.sku));
+        const byName = prodLoc.find((product: any) => normalizeLookupText(product?.nome_produto) === normalizeLookupText(item?.name));
+        if (byCode?.local_estocagem) location = String(byCode.local_estocagem);
+        else if (byName?.local_estocagem) location = String(byName.local_estocagem);
+        else if (prodLoc[idx]?.local_estocagem) location = String(prodLoc[idx].local_estocagem);
+        else if (prodLoc[0]?.local_estocagem) location = String(prodLoc[0].local_estocagem);
+      }
+
+      return { ...item, location };
+    });
+
+    return {
+      id: order?.id || routeOrder?.order_id,
+      order_id_erp: String(order?.order_id_erp || routeOrder?.order_id || ''),
+      customer_name: String(order?.customer_name || (order?.raw_json?.nome_cliente ?? '')),
+      phone: String(order?.phone || (order?.raw_json?.cliente_celular ?? '')),
+      address_json: {
+        street: String(address.street || order?.raw_json?.destinatario_endereco || ''),
+        neighborhood: String(address.neighborhood || order?.raw_json?.destinatario_bairro || ''),
+        city: String(address.city || order?.raw_json?.destinatario_cidade || ''),
+        state: String(address.state || ''),
+        zip: String(address.zip || order?.raw_json?.destinatario_cep || ''),
+        complement: address.complement || order?.raw_json?.destinatario_complemento || '',
+      },
+      items_json: items,
+      raw_json: order?.raw_json || null,
+      data_venda: order?.data_venda || order?.raw_json?.data_venda,
+      previsao_entrega: order?.previsao_entrega || order?.raw_json?.previsao_entrega,
+      total: Number(order?.total || 0),
+      status: order?.status || 'imported',
+      observations: order?.observations || '',
+      created_at: order?.created_at || new Date().toISOString(),
+      updated_at: order?.updated_at || new Date().toISOString(),
+    } as any;
+  };
+
   // Verifica se o pedido tem Frete Full
   // Prioridade 1: Campo tem_frete_full
   // Prioridade 2: Observações internas contendo *frete full* (entre asteriscos)
@@ -2387,7 +2701,13 @@ function RouteCreationContent() {
 
     setPickupOrderLoading(true);
     try {
-      const order = selectedPickupOrder;
+      let order = selectedPickupOrder as any;
+      if (order?.id && (!order?.return_nfe_xml || !order?.return_nfe_key || !order?.return_type || !order?.return_date)) {
+        const returnFields = await fetchOrderReturnFields(String(order.id));
+        if (returnFields) {
+          order = { ...order, ...returnFields };
+        }
+      }
 
       // Buscar dados da equipe selecionada
       let teamData = teams.find(t => t.id === pickupTeam);
@@ -2433,20 +2753,17 @@ function RouteCreationContent() {
       // 1. Gerar DANFE da nota de devolução via webhook
       toast.info('Gerando nota fiscal de devolução...');
 
-      let nfWebhook = 'https://n8n.lojaodosmoveis.shop/webhook-test/gera_nf';
-      try {
-        const { data: s } = await supabase.from('webhook_settings').select('url').eq('key', 'gera_nf').eq('active', true).single();
-        if (s?.url) nfWebhook = s.url;
-      } catch { }
+      const nfWebhook = await resolveDanfeWebhookUrl(true);
 
       // Usar o XML de devolução que veio do ERP
-      const xmlDevolucao = order.return_nfe_xml || '';
+      const xmlDevolucao = String(order.return_nfe_xml || '');
       if (!xmlDevolucao) {
         toast.warning('XML de devolução não encontrado. Continuando sem DANFE.');
       }
 
-      let danfeBase64 = '';
-      if (xmlDevolucao) {
+      let danfeBase64 = String(order.return_danfe_base64 || '');
+      const shouldGenerateDanfeOnPickupCreation = false;
+      if (shouldGenerateDanfeOnPickupCreation && xmlDevolucao && !danfeBase64.startsWith('JVBER')) {
         try {
           const resp = await fetch(nfWebhook, {
             method: 'POST',
@@ -2463,6 +2780,11 @@ function RouteCreationContent() {
             const items = Array.isArray(payload) ? payload : [payload];
             if (items[0]?.pdf_base64) {
               danfeBase64 = items[0].pdf_base64;
+            } else if (typeof payload?.data === 'string' && payload.data.startsWith('JVBER')) {
+              danfeBase64 = payload.data;
+            } else if (Array.isArray(payload?.documentos)) {
+              const item = payload.documentos.find((entry: any) => String(entry?.order_id) === String(order.id));
+              if (item?.data?.startsWith('JVBER')) danfeBase64 = item.data;
             }
           }
         } catch (e) {
@@ -2497,12 +2819,15 @@ function RouteCreationContent() {
 
         // Campos específicos da coleta
         xml_documento: null, // Limpa XML de venda para evitar confusão
-        return_nfe_xml: order.return_nfe_xml, // XML da devolução no campo correto
+        return_nfe_xml: order.return_nfe_xml || null, // XML da devolução no campo correto
         return_nfe_number: order.return_nfe_number,
+        return_nfe_key: order.return_nfe_key || null,
+        return_date: order.return_date || null,
+        return_type: order.return_type || null,
 
         danfe_base64: null,
-        return_danfe_base64: danfeBase64, // Salva DANFE gerada no campo de retorno
-        danfe_gerada_em: new Date().toISOString(),
+        return_danfe_base64: danfeBase64 || null, // Salva DANFE gerada no campo de retorno
+        danfe_gerada_em: danfeBase64 ? new Date().toISOString() : null,
 
         filial_venda: order.filial_venda,
         data_venda: order.data_venda,
@@ -5127,11 +5452,16 @@ function RouteCreationContent() {
                           if (roErr) throw roErr;
 
                           // Verificar se é rota de coleta (usa DANFE de devolução)
-                          const isPickupRoute = String(selectedRoute.name || '').startsWith('COLETA-');
+                          const isPickupRoute = isCollectionRouteName(selectedRoute.name);
+                          const pickupSourceXmlByOrderErp = isPickupRoute
+                            ? await fetchPickupSourceReturnXmlMap(roData || [])
+                            : new Map<string, string>();
 
-                          // Para coletas, usar return_danfe_base64; se não tiver, tenta danfe_base64 (retrocompatibilidade ou caso tenha salvo no padrão)
-                          const getDanfe = (order: any) => isPickupRoute ? (order?.return_danfe_base64 || order?.danfe_base64) : order?.danfe_base64;
-                          const getXml = (order: any) => isPickupRoute ? order?.return_nfe_xml : (order?.xml_documento || '');
+                          const getDanfe = (order: any) => getStoredDanfeForRoute(order, selectedRoute.name);
+                          const getXml = (order: any) => {
+                            if (!isPickupRoute) return order?.xml_documento || '';
+                            return order?.return_nfe_xml || pickupSourceXmlByOrderErp.get(String(order?.order_id_erp || '').trim()) || '';
+                          };
 
                           const allHaveDanfe = (roData || []).every((ro: any) => !!getDanfe(ro.order));
                           if (allHaveDanfe) {
@@ -5162,12 +5492,10 @@ function RouteCreationContent() {
                             return { order_id: ro.order_id, numero: String(ro.order?.order_id_erp || ro.order_id || ''), xml: xmlText };
                           }).filter((d: any) => d.xml && d.xml.includes('<'));
                           if (docs.length === 0) { toast.error('Nenhum XML encontrado nos pedidos faltantes'); setNfLoading(false); return; }
-                          let nfWebhook = 'https://n8n.lojaodosmoveis.shop/webhook-test/gera_nf';
-                          try {
-                            const { data: s } = await supabase.from('webhook_settings').select('url').eq('key', 'gera_nf').eq('active', true).single();
-                            if (s?.url) nfWebhook = s.url;
-                          } catch { }
-                          const resp = await fetch(nfWebhook, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ route_id: routeId, documentos: docs, count: docs.length }) });
+                          const nfWebhook = await resolveDanfeWebhookUrl(isPickupRoute);
+                          const bodyPayload: any = { route_id: routeId, documentos: docs, count: docs.length };
+                          if (isPickupRoute) bodyPayload.tipo = 'devolucao';
+                          const resp = await fetch(nfWebhook, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(bodyPayload) });
                           const text = await resp.text();
                           let payload: any = null; try { payload = JSON.parse(text); } catch { payload = { error: text }; }
                           if (!resp.ok) { toast.error('Erro ao gerar notas fiscais'); setNfLoading(false); return; }
@@ -5186,15 +5514,13 @@ function RouteCreationContent() {
                             const danfeField = isPickupRoute ? 'return_danfe_base64' : 'danfe_base64';
                             if (mapByOrderId.size > 0) {
                               for (const [orderId, b64] of mapByOrderId.entries()) {
-                                const updateData: any = { [danfeField]: b64 };
-                                if (!isPickupRoute) updateData.danfe_gerada_em = new Date().toISOString();
+                                const updateData: any = { [danfeField]: b64, danfe_gerada_em: new Date().toISOString() };
                                 await supabase.from('orders').update(updateData).eq('id', orderId);
                               }
                             } else if (base64List.length === docs.length) {
                               for (let i = 0; i < docs.length; i++) {
                                 const orderId = docs[i].order_id; const b64 = base64List[i];
-                                const updateData: any = { [danfeField]: b64 };
-                                if (!isPickupRoute) updateData.danfe_gerada_em = new Date().toISOString();
+                                const updateData: any = { [danfeField]: b64, danfe_gerada_em: new Date().toISOString() };
                                 await supabase.from('orders').update(updateData).eq('id', orderId);
                               }
                             }
@@ -5216,7 +5542,7 @@ function RouteCreationContent() {
                       disabled={nfLoading}
                       className="flex items-center justify-center px-4 py-2 bg-gray-50 text-gray-700 hover:bg-gray-100 rounded-lg font-medium text-sm transition-colors border border-gray-200 disabled:opacity-50"
                     >
-                      <FileSpreadsheet className="h-4 w-4 mr-2" /> {nfLoading ? '...' : ((selectedRoute?.route_orders || []).every((ro: any) => !!(ro.order?.danfe_gerada_em)) ? 'Imprimir Notas' : 'Gerar Notas')}
+                      <FileSpreadsheet className="h-4 w-4 mr-2" /> {nfLoading ? '...' : getRouteDanfeButtonLabel(selectedRoute)}
                     </button>
 
                     {/* Relatório de Fechamento Button */}
@@ -5617,6 +5943,13 @@ function RouteCreationContent() {
                                       updated_at: order.updated_at || new Date().toISOString(),
                                     } as any;
 
+                                    const pickupSourceXmlByOrderErp = isCollectionRouteName(selectedRoute.name)
+                                      ? await fetchPickupSourceReturnXmlMap([{ order }])
+                                      : undefined;
+                                    const mappedOrderResolved = isCollectionRouteName(selectedRoute.name)
+                                      ? mapOrderToDeliverySheetOrder(order, ro, selectedRoute.name, pickupSourceXmlByOrderErp)
+                                      : mappedOrder;
+
                                     // Resolve Motorista e Equipe (pode usar os da rota ou vazios)
                                     let driverObj = selectedRoute.driver || { id: '', user_id: '', cpf: '', active: true, user: { id: '', email: '', name: '', role: 'driver', created_at: '' } };
                                     let vehicleObj = selectedRoute.vehicle || undefined;
@@ -5650,7 +5983,7 @@ function RouteCreationContent() {
                                       routeOrders: [ro], // Passa só esta routeOrder
                                       driver: driverObj as any,
                                       vehicle: vehicleObj,
-                                      orders: [mappedOrder], // Passa só este pedido
+                                      orders: [mappedOrderResolved], // Passa só este pedido
                                       generatedAt: new Date().toISOString(),
                                       teamName,
                                       helperName,
@@ -5668,23 +6001,21 @@ function RouteCreationContent() {
                                 <FileSpreadsheet className="h-4 w-4" />
                               </button>
 
-                              {ro.order?.danfe_gerada_em ? (
+                              {hasDanfeHintForRoute(ro.order, selectedRoute?.name) ? (
                                 <button
                                   className="p-1 text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded transition-colors"
                                   title="Imprimir DANFE"
                                   onClick={async () => {
                                     try {
-                                      // Fetch on-demand: busca somente danfe_base64 deste pedido
-                                      const { data: orderData } = await supabase.from('orders').select('danfe_base64').eq('id', ro.order_id).single();
-                                      const b64 = String(orderData?.danfe_base64 || '');
+                                      const { data: orderData } = await supabase.from('orders').select('danfe_base64, return_danfe_base64, danfe_gerada_em').eq('id', ro.order_id).single();
+                                      const b64 = getStoredDanfeForRoute(orderData, selectedRoute?.name);
                                       if (!b64.startsWith('JVBER')) { toast.error('DANFE não encontrada no banco'); return; }
-                                      const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
-                                      const doc = await PDFDocument.load(bytes);
-                                      const merged = await PDFDocument.create();
-                                      const pages = await merged.copyPages(doc, doc.getPageIndices());
-                                      pages.forEach((p) => merged.addPage(p));
-                                      const out = await merged.save();
-                                      DeliverySheetGenerator.openPDFInNewTab(out);
+                                      syncSelectedRouteOrderDanfe(ro.id, {
+                                        danfe_base64: orderData?.danfe_base64 || null,
+                                        return_danfe_base64: orderData?.return_danfe_base64 || null,
+                                        danfe_gerada_em: orderData?.danfe_gerada_em || new Date().toISOString()
+                                      });
+                                      await openDanfePdf(b64);
                                     } catch {
                                       toast.error('Falha ao abrir DANFE');
                                     }
@@ -5698,18 +6029,49 @@ function RouteCreationContent() {
                                   title="Gerar DANFE individual"
                                   onClick={async () => {
                                     try {
-                                      const xml = ro.order?.xml_documento
-                                        ? String(ro.order.xml_documento)
-                                        : (() => {
-                                          const arr = ro.order?.raw_json?.xmls_documentos || ro.order?.raw_json?.xmls || [];
-                                          const first = Array.isArray(arr) ? arr[0] : null;
-                                          return first ? (typeof first === 'string' ? first : (first?.xml || '')) : '';
-                                        })();
+                                      const { data: existingOrderData } = await supabase
+                                        .from('orders')
+                                        .select('danfe_base64, return_danfe_base64, danfe_gerada_em')
+                                        .eq('id', ro.order_id)
+                                        .single();
+                                      const existingB64 = getStoredDanfeForRoute(existingOrderData, selectedRoute?.name);
+                                      if (existingB64.startsWith('JVBER')) {
+                                        syncSelectedRouteOrderDanfe(ro.id, {
+                                          danfe_base64: existingOrderData?.danfe_base64 || null,
+                                          return_danfe_base64: existingOrderData?.return_danfe_base64 || null,
+                                          danfe_gerada_em: existingOrderData?.danfe_gerada_em || new Date().toISOString()
+                                        });
+                                        await openDanfePdf(existingB64);
+                                        return;
+                                      }
+                                      const isPickupDanfeRoute = isCollectionRouteName(selectedRoute?.name);
+                                      const pickupSourceXmlByOrderErp = isPickupDanfeRoute
+                                        ? await fetchPickupSourceReturnXmlMap([{ order: ro.order }])
+                                        : new Map<string, string>();
+                                      const xml = isPickupDanfeRoute
+                                        ? String(ro.order?.return_nfe_xml || pickupSourceXmlByOrderErp.get(String(ro.order?.order_id_erp || '').trim()) || '')
+                                        : (ro.order?.xml_documento
+                                          ? String(ro.order.xml_documento)
+                                          : (() => {
+                                            const arr = ro.order?.raw_json?.xmls_documentos || ro.order?.raw_json?.xmls || [];
+                                            const first = Array.isArray(arr) ? arr[0] : null;
+                                            return first ? (typeof first === 'string' ? first : (first?.xml || '')) : '';
+                                          })());
                                       if (!xml || !xml.includes('<')) { toast.error('XML não encontrado'); return; }
-                                      const webhookUrl = 'https://n8n.lojaodosmoveis.shop/webhook-test/gera_nf';
+                                      const webhookUrl = await resolveDanfeWebhookUrl(isPickupDanfeRoute);
+                                      const bodyPayload: any = {
+                                        route_id: selectedRoute.id,
+                                        documentos: [{
+                                          order_id: ro.order_id,
+                                          numero: String(ro.order?.order_id_erp || ro.order_id || ''),
+                                          xml
+                                        }],
+                                        count: 1
+                                      };
+                                      if (isPickupDanfeRoute) bodyPayload.tipo = 'devolucao';
                                       const resp = await fetch(webhookUrl, {
                                         method: 'POST', headers: { 'Content-Type': 'application/json' },
-                                        body: JSON.stringify({ route_id: selectedRoute.id, documentos: [{ order_id: ro.order_id, numero: String(ro.order?.order_id_erp || ro.order_id || ''), xml }], count: 1 })
+                                        body: JSON.stringify(bodyPayload)
                                       });
                                       const text = await resp.text();
                                       let payload: any = null; try { payload = JSON.parse(text); } catch { payload = { error: text }; }
@@ -5719,9 +6081,11 @@ function RouteCreationContent() {
                                       else if (Array.isArray(payload?.documentos)) { const item = payload.documentos.find((d: any) => String(d?.order_id) === String(ro.order_id)); if (item?.data?.startsWith('JVBER')) b64 = item.data; }
                                       else if (Array.isArray(payload)) { const item = payload.find((d: any) => String(d?.order_id) === String(ro.order_id)); if (item?.data?.startsWith('JVBER')) b64 = item.data; }
                                       if (!b64) { toast.error('DANFE não retornada pelo webhook'); return; }
-                                      await supabase.from('orders').update({ danfe_base64: b64, danfe_gerada_em: new Date().toISOString() }).eq('id', ro.order_id);
+                                      const danfeField = isPickupDanfeRoute ? 'return_danfe_base64' : 'danfe_base64';
+                                      const generatedAt = new Date().toISOString();
+                                      await supabase.from('orders').update({ [danfeField]: b64, danfe_gerada_em: generatedAt }).eq('id', ro.order_id);
                                       const updated = { ...selectedRoute } as any;
-                                      updated.route_orders = (updated.route_orders || []).map((x: any) => x.id === ro.id ? { ...x, order: { ...(x.order || {}), danfe_base64: b64, danfe_gerada_em: new Date().toISOString() } } : x);
+                                      updated.route_orders = (updated.route_orders || []).map((x: any) => x.id === ro.id ? { ...x, order: { ...(x.order || {}), [danfeField]: b64, danfe_gerada_em: generatedAt } } : x);
                                       setSelectedRoute(updated);
                                       const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
                                       const doc = await PDFDocument.load(bytes);
@@ -6047,6 +6411,18 @@ function RouteCreationContent() {
                         updated_at: o.updated_at || new Date().toISOString(),
                       } as any;
                     });
+
+                    if (isCollectionRouteName(route.name)) {
+                      const pickupSourceXmlByOrderErp = await fetchPickupSourceReturnXmlMap(roData || []);
+                      orders = (roData || []).map((ro: any) =>
+                        mapOrderToDeliverySheetOrder(
+                          ro.order || {},
+                          ro,
+                          route.name,
+                          pickupSourceXmlByOrderErp
+                        )
+                      );
+                    }
 
                     // Ordenar pedidos conforme opção selecionada
                     const parseDate = (d: any) => {

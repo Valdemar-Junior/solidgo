@@ -37,6 +37,7 @@ export default function Settings() {
   // State for webhooks
   const [enviaPedidos, setEnviaPedidos] = useState('');
   const [geraNf, setGeraNf] = useState('');
+  const [geraNfDevolucao, setGeraNfDevolucao] = useState('');
   const [enviaMensagem, setEnviaMensagem] = useState('');
   const [enviaGrupo, setEnviaGrupo] = useState('');
 
@@ -72,9 +73,10 @@ export default function Settings() {
   const load = async () => {
     try {
       setLoading(true);
-      const [p, n, m, g, l, confFlag, updateFlag, photoFlag, deliveryPhotoFlag, deliveryProofFlag, ruralKeys, generalDeadlines] = await Promise.all([
+      const [p, n, nd, m, g, l, confFlag, updateFlag, photoFlag, deliveryPhotoFlag, deliveryProofFlag, ruralKeys, generalDeadlines] = await Promise.all([
         getUrl('envia_pedidos'),
         getUrl('gera_nf'),
+        getUrl('gera_nf_devolucao'),
         getUrl('envia_mensagem'),
         getUrl('envia_grupo'),
         getUrl('consulta_lancamento'),
@@ -88,6 +90,7 @@ export default function Settings() {
       ]);
       setEnviaPedidos(p || '');
       setGeraNf(n || '');
+      setGeraNfDevolucao(nd || '');
       setEnviaMensagem(m || '');
       setEnviaGrupo(g || '');
       setConsultaLancamento(l || '');
@@ -164,6 +167,7 @@ export default function Settings() {
       const rows = [
         { key: 'envia_pedidos', url: enviaPedidos, active: true },
         { key: 'gera_nf', url: geraNf, active: true },
+        { key: 'gera_nf_devolucao', url: geraNfDevolucao, active: true },
         { key: 'envia_mensagem', url: enviaMensagem, active: true },
 
         { key: 'envia_grupo', url: enviaGrupo, active: true },
@@ -596,6 +600,24 @@ export default function Settings() {
                       />
                     </div>
                     <p className="text-xs text-gray-500">Acionado ao solicitar emissão de NF para um pedido.</p>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="flex items-center gap-2 text-sm font-medium text-gray-900">
+                      <FileText className="h-4 w-4 text-gray-500" />
+                      Gerar NF de Devolucao
+                    </label>
+                    <div className="relative">
+                      <Globe className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+                      <input
+                        type="text"
+                        value={geraNfDevolucao}
+                        onChange={e => setGeraNfDevolucao(e.target.value)}
+                        className="w-full pl-10 pr-4 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
+                        placeholder="https://webhook.n8n.io/..."
+                      />
+                    </div>
+                    <p className="text-xs text-gray-500">Usado apenas para DANFE de devolucao nas rotas de coleta.</p>
                   </div>
 
                   {/* Enviar WhatsApp */}
