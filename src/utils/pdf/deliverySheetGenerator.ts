@@ -269,10 +269,7 @@ export class DeliverySheetGenerator {
       // Data de Venda e Previsão na mesma linha
       if (isAssemblySheet) {
         // Data de Venda
-        const dataVenda = (order as any).data_venda
-          || (order as any).raw_json?.data_venda
-          || (order as any).raw_json?.data_emissao
-          || '';
+        const dataVenda = DeliverySheetGenerator.resolveSaleDateRaw(order);
         const dataVendaFormatted = DeliverySheetGenerator.formatDateBR(dataVenda);
         const dataVendaLabel = 'Data Venda: ';
         const dataVendaLabelW = helveticaBoldFont.widthOfTextAtSize(dataVendaLabel, 10);
@@ -293,10 +290,7 @@ export class DeliverySheetGenerator {
         y -= 14;
       } else {
         // Romaneio de Entrega: Data de Venda e Previsão de Entrega
-        const dataVenda = (order as any).data_venda
-          || (order as any).raw_json?.data_venda
-          || (order as any).raw_json?.data_emissao
-          || '';
+        const dataVenda = DeliverySheetGenerator.resolveSaleDateRaw(order);
         const dataVendaFormatted = DeliverySheetGenerator.formatDateBR(dataVenda);
         const dataVendaLabel = 'Data Venda: ';
         const dataVendaLabelW = helveticaBoldFont.widthOfTextAtSize(dataVendaLabel, 10);
@@ -357,10 +351,7 @@ export class DeliverySheetGenerator {
 
       const items = itemsPre;
       const filial = (order as any).raw_json?.filial_entrega || (order as any).raw_json?.filial_venda || '';
-      const saleDateRaw = (order as any).raw_json?.data_venda
-        || (order as any).raw_json?.data_emissao
-        || (order as any).sale_date
-        || '';
+      const saleDateRaw = DeliverySheetGenerator.resolveSaleDateRaw(order);
       const dataStr = DeliverySheetGenerator.formatDateBR(saleDateRaw);
 
       // Calculate total height
@@ -541,6 +532,14 @@ export class DeliverySheetGenerator {
   // Use centralized sanitization from pdfTextSanitizer.ts
   private static wrapText(text: string, maxWidth: number, font: any, size: number): string[] {
     return wrapTextSafe(text, maxWidth, font, size);
+  }
+
+  private static resolveSaleDateRaw(order: any): any {
+    return (order as any)?.data_venda
+      || (order as any)?.sale_date
+      || (order as any)?.raw_json?.data_venda
+      || (order as any)?.raw_json?.data_emissao
+      || '';
   }
 
   private static formatDateBR(input: any): string {

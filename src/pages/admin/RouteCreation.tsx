@@ -1851,6 +1851,12 @@ function RouteCreationContent() {
       return { ...item, location };
     });
 
+    const saleDate = order?.data_venda
+      || order?.raw_json?.data_venda
+      || order?.raw_json?.data_emissao
+      || order?.sale_date
+      || '';
+
     return {
       id: order?.id || routeOrder?.order_id,
       order_id_erp: String(order?.order_id_erp || routeOrder?.order_id || ''),
@@ -1866,8 +1872,11 @@ function RouteCreationContent() {
       },
       items_json: items,
       raw_json: order?.raw_json || null,
-      data_venda: order?.data_venda || order?.raw_json?.data_venda,
-      previsao_entrega: order?.previsao_entrega || order?.raw_json?.previsao_entrega,
+      data_venda: saleDate,
+      sale_date: order?.sale_date || saleDate,
+      previsao_entrega: order?.previsao_entrega || order?.raw_json?.previsao_entrega || order?.raw_json?.data_prevista_entrega,
+      observacoes_publicas: order?.observacoes_publicas ?? order?.raw_json?.observacoes_publicas ?? order?.raw_json?.Observacoes_publicas ?? order?.raw_json?.observacoes ?? '',
+      observacoes_internas: order?.observacoes_internas ?? order?.raw_json?.observacoes_internas ?? order?.raw_json?.Observacoes_internas ?? '',
       total: Number(order?.total || 0),
       status: order?.status || 'imported',
       observations: order?.observations || '',
@@ -5936,6 +5945,11 @@ function RouteCreationContent() {
                                       },
                                       items_json: items,
                                       raw_json: order.raw_json || null,
+                                      data_venda: (order as any).data_venda || (order as any).raw_json?.data_venda || (order as any).raw_json?.data_emissao || (order as any).sale_date || '',
+                                      sale_date: (order as any).sale_date || (order as any).data_venda || (order as any).raw_json?.data_venda || (order as any).raw_json?.data_emissao || '',
+                                      previsao_entrega: (order as any).previsao_entrega || (order as any).raw_json?.previsao_entrega || (order as any).raw_json?.data_prevista_entrega || '',
+                                      observacoes_publicas: (order as any).observacoes_publicas ?? (order as any).raw_json?.observacoes_publicas ?? (order as any).raw_json?.observacoes ?? '',
+                                      observacoes_internas: (order as any).observacoes_internas ?? (order as any).raw_json?.observacoes_internas ?? '',
                                       total: Number((order as any).total || 0),
                                       status: order.status || 'imported',
                                       observations: (order as any).observations || '',
@@ -6402,8 +6416,11 @@ function RouteCreationContent() {
                         },
                         items_json: items,
                         raw_json: o.raw_json || null,
-                        data_venda: o.data_venda || o.raw_json?.data_venda,
-                        previsao_entrega: o.previsao_entrega || o.raw_json?.previsao_entrega,
+                        data_venda: o.data_venda || o.raw_json?.data_venda || o.raw_json?.data_emissao || o.sale_date || '',
+                        sale_date: o.sale_date || o.data_venda || o.raw_json?.data_venda || o.raw_json?.data_emissao || '',
+                        previsao_entrega: o.previsao_entrega || o.raw_json?.previsao_entrega || o.raw_json?.data_prevista_entrega || '',
+                        observacoes_publicas: o.observacoes_publicas ?? o.raw_json?.observacoes_publicas ?? o.raw_json?.observacoes ?? '',
+                        observacoes_internas: o.observacoes_internas ?? o.raw_json?.observacoes_internas ?? '',
                         total: Number(o.total || 0),
                         status: o.status || 'imported',
                         observations: o.observations || '',
