@@ -931,11 +931,13 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
   };
 
   const handleFinalizeRoute = async () => {
-    // Verificar se todos foram processados
-    const pending = routeOrders.filter(r => r.status === 'pending');
-    if (pending.length > 0) {
-      toast.error(`Ainda existem ${pending.length} pedidos pendentes na rota.`);
-      return;
+    // Offline ainda depende do estado local; online valida novamente no banco.
+    if (!isOnline) {
+      const pending = routeOrders.filter(r => r.status === 'pending');
+      if (pending.length > 0) {
+        toast.error(`Ainda existem ${pending.length} pedidos pendentes na rota.`);
+        return;
+      }
     }
 
     if (!window.confirm('Confirma a finalização da rota? Os pedidos retornados serão liberados para roteirização.')) {
@@ -950,22 +952,90 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
       };
 
       if (isOnline) {
+        type FinalizeOrderItem = {
+          has_assembly?: unknown;
+          possui_montagem?: unknown;
+          purchased_quantity?: unknown;
+          quantity?: unknown;
+          sku?: string;
+          name?: string;
+        };
+
+        type FinalizeOrderData = {
+          id: string;
+          order_id_erp?: string;
+          items_json?: FinalizeOrderItem[] | null;
+          customer_name?: string;
+          phone?: string;
+          address_json?: unknown;
+        };
+
+        type FinalizeRouteOrderRow = {
+          id: string;
+          order_id: string;
+          status: RouteOrderWithDetails['status'];
+          order: FinalizeOrderData | FinalizeOrderData[] | null;
+        };
+
+        await backgroundSync.forceSync(true);
+
+        const pendingSyncItems = await SyncQueue.getPendingItems();
+        const routePendingSyncItems = pendingSyncItems.filter((item) =>
+          String(item.data?.route_id || '') === String(routeId) &&
+          ['delivery_confirmation', 'return_revert', 'delivery_revert'].includes(item.type)
+        );
+
+        if (routePendingSyncItems.length > 0) {
+          toast.error('Ainda existem alterações desta rota aguardando sincronização. Tente novamente em alguns segundos.');
+          return;
+        }
+
+        const { data: dbRouteOrders, error: dbRouteOrdersError } = await supabase
+          .from('route_orders')
+          .select(`
+            id,
+            order_id,
+            status,
+            order:orders!order_id (
+              id,
+              order_id_erp,
+              items_json,
+              customer_name,
+              phone,
+              address_json
+            )
+          `)
+          .eq('route_id', routeId);
+
+        if (dbRouteOrdersError) throw dbRouteOrdersError;
+
+        const routeOrdersFromDb = (dbRouteOrders || []) as FinalizeRouteOrderRow[];
+        const pendingFromDb = routeOrdersFromDb.filter((ro) => ro.status === 'pending');
+
+        if (pendingFromDb.length > 0) {
+          toast.error(`Ainda existem ${pendingFromDb.length} pedidos pendentes na rota.`);
+          return;
+        }
+
+        const returnedIds = routeOrdersFromDb
+          .filter((ro) => ro.status === 'returned')
+          .map((ro) => ro.order_id);
+
+        const deliveredRouteOrders = routeOrdersFromDb.filter((ro) => ro.status === 'delivered');
+        const deliveredIds = deliveredRouteOrders.map((ro) => ro.order_id);
+
+        // Garante delivered antes de concluir a rota, evitando que trigger legado gere montagem indevida.
+        if (deliveredIds.length > 0) {
+          await supabase
+            .from('orders')
+            .update({ status: 'delivered' })
+            .in('id', deliveredIds)
+            .neq('status', 'delivered');
+        }
+
         // 1. Marcar rota como concluída
         const { error } = await supabase.from('routes').update({ status: 'completed' }).eq('id', routeId);
         if (error) throw error;
-
-        // 2. Buscar pedidos retornados DIRETAMENTE do banco para garantir consistência
-        const { data: dbReturned } = await supabase
-          .from('route_orders')
-          .select('order_id')
-          .eq('route_id', routeId)
-          .eq('status', 'returned');
-
-        const returnedDefaults = routeOrders.filter(r => r.status === 'returned').map(r => r.order_id);
-        // Combine DB results with local state as fallback (though DB should be primary source of truth after update)
-        // Actually, if we just marked them returned, DB should have them. 
-        // Using distinct set of IDs.
-        const returnedIds = Array.from(new Set([...(dbReturned?.map(r => r.order_id) || []), ...returnedDefaults]));
 
         if (returnedIds.length > 0) {
           await supabase
@@ -977,30 +1047,19 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
             .in('id', returnedIds);
         }
 
-        // 3. (NOVO) GARANTIA FINAL: Assegurar que todos os ENTREGUES estejam com status 'delivered' na tabela orders
-        // Isso corrige qualquer divergência caso a atualização individual tenha falhado
-        const deliveredIds = routeOrders.filter(r => r.status === 'delivered').map(r => r.order_id);
-        if (deliveredIds.length > 0) {
-          await supabase
-            .from('orders')
-            .update({ status: 'delivered' })
-            .in('id', deliveredIds)
-            // Apenas atualiza se NÃO estiver delivered (opcional, mas o update direto é seguro)
-            .neq('status', 'delivered');
-        }
-
         // 4. Gerar tarefas de montagem para pedidos ENTREGUES (substitui o trigger removido)
         try {
-          const deliveredRouteOrders = routeOrders.filter(r => r.status === 'delivered');
-
           for (const ro of deliveredRouteOrders) {
-            const orderData = ro.order;
-            if (!orderData || !orderData.items_json) continue;
+            const orderData = Array.isArray(ro.order) ? ro.order[0] : ro.order;
+            if (!orderData || !orderData.items_json) {
+              console.warn('[FinalizeRoute] Pedido entregue sem dados de itens; montagem não avaliada:', ro.order_id);
+              continue;
+            }
 
-            const items: any[] = Array.isArray(orderData.items_json) ? orderData.items_json : [];
+            const items: FinalizeOrderItem[] = Array.isArray(orderData.items_json) ? orderData.items_json : [];
 
             // Filtra itens que possuem montagem 'SIM'
-            const produtosComMontagem = items.filter((item: any) =>
+            const produtosComMontagem = items.filter((item) =>
               ['SIM', 'sim', 'Sim', 'true', '1', 'yes', 'YES', 'Yes'].includes(String(item.has_assembly)) ||
               item.possui_montagem === true || item.possui_montagem === 'true'
             );
@@ -1008,7 +1067,7 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
             if (produtosComMontagem.length > 0) {
 
               // Gerar array final de produtos de montagem, respeitando purchased_quantity
-              const assemblyProductsToInsert: any[] = [];
+              const assemblyProductsToInsert: Array<Record<string, unknown>> = [];
 
               for (const item of produtosComMontagem) {
                 // Calcula a quantidade (qty)

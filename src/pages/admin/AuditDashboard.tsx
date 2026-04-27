@@ -361,11 +361,7 @@ export default function AuditDashboard() {
 
     const itemRequiresAssembly = (item: any) => {
         const hasAssemblyRaw = String(item?.has_assembly ?? '').trim().toLowerCase();
-        if (hasAssemblyRaw.length > 0) return hasAssemblyRaw === 'sim';
-
-        // Fallback para cargas legadas que ainda usam a flag antiga.
-        const legacyRaw = String(item?.produto_e_montavel ?? '').trim().toLowerCase();
-        return legacyRaw === 'sim';
+        return hasAssemblyRaw === 'sim';
     };
 
     const computeMissingAssemblyOrders = async () => {
@@ -951,7 +947,7 @@ export default function AuditDashboard() {
                 .eq('order_id', orderId);
 
             items.forEach((i: any) => {
-                if (String(i.has_assembly || '').toLowerCase() === 'sim' || String(i.produto_e_montavel || '').toLowerCase() === 'sim') {
+                if (String(i.has_assembly || '').toLowerCase() === 'sim') {
                     const expected = parseInt(i.purchased_quantity || i.quantity || 1);
                     const current = (existingAssemblies || []).filter(a => a.product_sku === i.sku).length;
                     const missing = expected - current;
