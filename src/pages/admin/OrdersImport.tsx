@@ -26,15 +26,14 @@ export default function OrdersImport() {
   const [loading, setLoading] = useState(false);
   const [lastImport, setLastImport] = useState<Date | null>(null);
   const [webhookStatus, setWebhookStatus] = useState<string | null>(null);
-  const [dbOrders, setDbOrders] = useState<any[]>([]);
   const [expandedManifests, setExpandedManifests] = useState<Record<string, boolean>>({});
+  const [manifestSummaries, setManifestSummaries] = useState<any[]>([]);
+  const [manifestDetails, setManifestDetails] = useState<Record<string, any[]>>({});
+  const [manifestLoading, setManifestLoading] = useState<Record<string, boolean>>({});
+  const [manifestTotalCount, setManifestTotalCount] = useState(0);
   const [manifestPage, setManifestPage] = useState(0);
   const [searchManifest, setSearchManifest] = useState('');
   const MANIFESTS_PER_PAGE = 10;
-
-  const toggleManifest = (manifestId: string) => {
-    setExpandedManifests(prev => ({ ...prev, [manifestId]: !prev[manifestId] }));
-  };
   const navigate = useNavigate();
 
   // Stats
@@ -57,38 +56,164 @@ export default function OrdersImport() {
       })
       .catch(err => console.error('[OrdersImport] Promise error:', err));
   }, []);
+  const buildManifestSummariesFromOrders = (orders: any[]) => {
+    const grouped = new Map<string, any>();
 
+    orders.forEach((order: any) => {
+      const manifestKey = order.manifest_id || 'avulsos';
+      const current = grouped.get(manifestKey);
 
+      if (!current) {
+        grouped.set(manifestKey, {
+          manifest_key: manifestKey,
+          manifest_id: order.manifest_id || null,
+          imported_at: order.created_at,
+          total_orders: 1,
+          is_avulso: !order.manifest_id,
+          orders: [order],
+        });
+        return;
+      }
 
-  const fetchImportedOrders = async () => {
-    const { data, count, error } = await supabase
+      current.total_orders += 1;
+      current.orders.push(order);
+      if (new Date(order.created_at).getTime() > new Date(current.imported_at).getTime()) {
+        current.imported_at = order.created_at;
+      }
+    });
+
+    return Array.from(grouped.values()).sort((a, b) => {
+      if (a.is_avulso) return 1;
+      if (b.is_avulso) return -1;
+      const aNum = /^\d+$/.test(String(a.manifest_id || '')) ? Number(a.manifest_id) : Number.NEGATIVE_INFINITY;
+      const bNum = /^\d+$/.test(String(b.manifest_id || '')) ? Number(b.manifest_id) : Number.NEGATIVE_INFINITY;
+      if (aNum !== bNum) return bNum - aNum;
+      return new Date(b.imported_at).getTime() - new Date(a.imported_at).getTime();
+    });
+  };
+
+  const fetchImportStats = async () => {
+    const now = new Date();
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+    const startOfTomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).toISOString();
+
+    const [
+      { count: totalCount, error: totalError },
+      { count: pendingCount, error: pendingError },
+      { count: todayCount, error: todayError }
+    ] = await Promise.all([
+      supabase.from('orders').select('*', { count: 'exact', head: true }),
+      supabase.from('orders').select('*', { count: 'exact', head: true }).eq('status', 'pending'),
+      supabase.from('orders').select('*', { count: 'exact', head: true }).gte('created_at', startOfToday).lt('created_at', startOfTomorrow),
+    ]);
+
+    if (totalError || pendingError || todayError) {
+      console.error('Erro ao carregar estatisticas de importacao:', { totalError, pendingError, todayError });
+      return;
+    }
+
+    setStats({
+      total: totalCount || 0,
+      pending: pendingCount || 0,
+      today: todayCount || 0,
+    });
+  };
+
+  const fetchManifestSummaries = async (page = manifestPage, search = searchManifest) => {
+    const trimmedSearch = search.trim();
+    const offset = page * MANIFESTS_PER_PAGE;
+
+    const { data, error } = await supabase.rpc('get_import_history_summary', {
+      p_search: trimmedSearch || null,
+      p_limit: MANIFESTS_PER_PAGE,
+      p_offset: offset,
+    });
+
+    if (!error) {
+      const summaries = data || [];
+      setManifestSummaries(summaries);
+      setManifestTotalCount(Number(summaries[0]?.total_groups || 0));
+      return;
+    }
+
+    console.warn('[OrdersImport] Falha ao carregar resumo por romaneio. Usando fallback legado.', error);
+
+    const { data: legacyData, error: legacyError } = await supabase
       .from('orders')
-      .select('id, created_at, status, customer_name, order_id_erp, manifest_id, address_json', { count: 'exact' })
+      .select('id, created_at, status, customer_name, order_id_erp, manifest_id, address_json')
       .order('created_at', { ascending: false })
       .limit(500);
 
-    if (error) {
-      console.error('Erro ao carregar pedidos do banco:', error);
-    } else {
-      setDbOrders(data || []);
+    if (legacyError) {
+      console.error('Erro ao carregar pedidos do banco:', legacyError);
+      return;
+    }
 
-      // Calc stats
-      const today = new Date().toISOString().split('T')[0];
-      const todayCount = (data || []).filter((o: any) => o.created_at.startsWith(today)).length;
-      const pending = (data || []).filter((o: any) => o.status === 'pending').length;
-      // Use the true count from DB for total, fall back to current list length if null
-      setStats({ total: count || data?.length || 0, pending, today: todayCount });
+    const summaries = buildManifestSummariesFromOrders(legacyData || []);
+    const filteredSummaries = trimmedSearch
+      ? summaries.filter((summary: any) => String(summary.manifest_key || '').toLowerCase().includes(trimmedSearch.toLowerCase()))
+      : summaries;
+
+    setManifestTotalCount(filteredSummaries.length);
+    setManifestSummaries(filteredSummaries.slice(offset, offset + MANIFESTS_PER_PAGE));
+
+    const preloadedDetails = filteredSummaries.reduce((acc: Record<string, any[]>, summary: any) => {
+      acc[summary.manifest_key] = summary.orders || [];
+      return acc;
+    }, {});
+    setManifestDetails(prev => ({ ...preloadedDetails, ...prev }));
+  };
+
+  const fetchManifestOrders = async (manifestKey: string, isAvulso: boolean) => {
+    setManifestLoading(prev => ({ ...prev, [manifestKey]: true }));
+
+    let query = supabase
+      .from('orders')
+      .select('id, created_at, status, customer_name, order_id_erp, manifest_id, address_json')
+      .order('created_at', { ascending: false });
+
+    query = isAvulso ? query.is('manifest_id', null) : query.eq('manifest_id', manifestKey);
+
+    const { data, error } = await query;
+
+    setManifestLoading(prev => ({ ...prev, [manifestKey]: false }));
+
+    if (error) {
+      console.error(`Erro ao carregar pedidos do romaneio ${manifestKey}:`, error);
+      toast.error(`Erro ao carregar pedidos do romaneio ${manifestKey}.`);
+      return;
+    }
+
+    setManifestDetails(prev => ({ ...prev, [manifestKey]: data || [] }));
+  };
+
+  const toggleManifest = async (summary: any) => {
+    const manifestKey = summary.manifest_key;
+    const willExpand = !expandedManifests[manifestKey];
+
+    setExpandedManifests(prev => ({ ...prev, [manifestKey]: willExpand }));
+
+    if (willExpand && !manifestDetails[manifestKey] && !manifestLoading[manifestKey]) {
+      await fetchManifestOrders(manifestKey, Boolean(summary.is_avulso));
     }
   };
 
   useEffect(() => {
+    void fetchImportStats();
+    void fetchManifestSummaries(manifestPage, searchManifest);
+  }, [manifestPage, searchManifest]);
+
+  useEffect(() => {
     const handler = () => {
-      if (document.visibilityState === 'visible') fetchImportedOrders();
+      if (document.visibilityState === 'visible') {
+        void fetchImportStats();
+        void fetchManifestSummaries(manifestPage, searchManifest);
+      }
     };
-    fetchImportedOrders();
+
     document.addEventListener('visibilitychange', handler);
     return () => document.removeEventListener('visibilitychange', handler);
-  }, []);
+  }, [manifestPage, searchManifest]);
 
 
 
@@ -493,7 +618,12 @@ export default function OrdersImport() {
         style: { background: '#10B981', color: 'white' }
       });
 
-      await fetchImportedOrders();
+      await Promise.all([
+        fetchImportStats(),
+        fetchManifestSummaries(0, searchManifest),
+      ]);
+      setExpandedManifests({});
+      setManifestDetails({});
       setManifestPage(0);
       setLastImport(new Date());
       setLoading(false); // Libera a UI
@@ -666,62 +796,34 @@ export default function OrdersImport() {
 
           {
             (() => {
-              if (dbOrders.length === 0) {
+              if (manifestSummaries.length === 0) {
                 return (
                   <div className="p-12 text-center">
                     <Package className="h-12 w-12 text-gray-300 mx-auto mb-4" />
                     <h3 className="text-lg font-medium text-gray-900">Nenhum pedido encontrado</h3>
-                    <p className="text-gray-500">Clique em importar para sincronizar os dados.</p>
+                    <p className="text-gray-500">
+                      {searchManifest.trim() ? `Nenhum romaneio encontrado para "${searchManifest}"` : 'Clique em importar para sincronizar os dados.'}
+                    </p>
                   </div>
                 );
               }
-
-              const groupedOrders: Record<string, any[]> = {};
-              dbOrders.forEach(o => {
-                const key = o.manifest_id || 'avulsos';
-                if (!groupedOrders[key]) groupedOrders[key] = [];
-                groupedOrders[key].push(o);
-              });
-
-              const allManifestKeys = Object.keys(groupedOrders).sort((a, b) => {
-                if (a === 'avulsos') return 1;
-                if (b === 'avulsos') return -1;
-                return b.localeCompare(a);
-              });
-
-              const filteredManifestKeys = searchManifest.trim()
-                ? allManifestKeys.filter(k => k.toLowerCase().includes(searchManifest.trim().toLowerCase()))
-                : allManifestKeys;
-
-              const totalManifestPages = Math.ceil(filteredManifestKeys.length / MANIFESTS_PER_PAGE);
-              const manifestKeys = filteredManifestKeys.slice(
-                manifestPage * MANIFESTS_PER_PAGE,
-                (manifestPage + 1) * MANIFESTS_PER_PAGE
-              );
-
-              if (filteredManifestKeys.length === 0 && searchManifest.trim()) {
-                return (
-                  <div className="p-8 text-center">
-                    <Search className="h-10 w-10 text-gray-300 mx-auto mb-3" />
-                    <p className="text-gray-500">Nenhum romaneio encontrado para "{searchManifest}"</p>
-                  </div>
-                );
-              }
+              const totalManifestPages = Math.ceil(manifestTotalCount / MANIFESTS_PER_PAGE);
 
               return (
                 <div className="overflow-x-auto p-4 space-y-4">
-                  {manifestKeys.map(key => {
-                    const group = groupedOrders[key];
-                    const isExpanded = expandedManifests[key];
-                    const isAvulso = key === 'avulsos';
-                    const title = isAvulso ? 'Pedidos Individuais (Sem Romaneio / Antigos)' : `Romaneio #${key}`;
-                    const groupDate = group[0]?.created_at ? formatDateBR(group[0].created_at) : '-';
-                    const totalItems = group.length;
+                  {manifestSummaries.map(summary => {
+                    const manifestKey = summary.manifest_key;
+                    const group = manifestDetails[manifestKey] || [];
+                    const isExpanded = expandedManifests[manifestKey];
+                    const isAvulso = Boolean(summary.is_avulso);
+                    const title = isAvulso ? 'Pedidos Individuais (Sem Romaneio / Antigos)' : `Romaneio #${summary.manifest_id || manifestKey}`;
+                    const groupDate = summary.imported_at ? formatDateBR(summary.imported_at) : '-';
+                    const totalItems = Number(summary.total_orders || 0);
 
                     return (
-                      <div key={key} className="bg-white border text-sm border-gray-200 rounded-xl shadow-sm overflow-hidden">
+                      <div key={manifestKey} className="bg-white border text-sm border-gray-200 rounded-xl shadow-sm overflow-hidden">
                         <button
-                          onClick={() => toggleManifest(key)}
+                          onClick={() => { void toggleManifest(summary); }}
                           className="w-full flex items-center justify-between p-4 bg-gray-50 hover:bg-gray-100 transition-colors"
                         >
                           <div className="flex items-center gap-4">
@@ -740,6 +842,9 @@ export default function OrdersImport() {
 
                         {isExpanded && (
                           <div className="border-t border-gray-100 p-2">
+                            {manifestLoading[manifestKey] ? (
+                              <div className="p-6 text-center text-sm text-gray-500">Carregando pedidos do romaneio...</div>
+                            ) : (
                             <table className="min-w-full divide-y divide-gray-100">
                               <thead className="bg-white">
                                 <tr>
@@ -783,6 +888,7 @@ export default function OrdersImport() {
                                 })}
                               </tbody>
                             </table>
+                            )}
                           </div>
                         )}
                       </div>
@@ -800,7 +906,7 @@ export default function OrdersImport() {
                         Anterior
                       </button>
                       <span className="text-sm text-gray-500">
-                        Página {manifestPage + 1} de {totalManifestPages} ({filteredManifestKeys.length} romaneios)
+                        Página {manifestPage + 1} de {totalManifestPages} ({manifestTotalCount} romaneios)
                       </span>
                       <button
                         onClick={() => setManifestPage(p => Math.min(totalManifestPages - 1, p + 1))}
