@@ -240,6 +240,19 @@ export class DeliverySheetGenerator {
         y -= 18; // extra breathing between header line and first item
       }
 
+      if (this.hasFreteFull(order)) {
+        const watermarkY = Math.max(margin + 44, y - (totalBlockHeight * 0.58));
+        page.drawText('FULL', {
+          x: margin + 85,
+          y: watermarkY,
+          size: 78,
+          font: helveticaBoldFont,
+          color: rgb(0.86, 0.1, 0.1),
+          opacity: 0.22,
+          rotate: degrees(35),
+        });
+      }
+
       this.drawText(page, `Item: ${itemIndex}`, margin, y, { font: helveticaBoldFont, size: 10, color: { r: 0, g: 0, b: 0 } });
       const vendedorNome = String((order as any).vendedor_nome || (order as any).raw_json?.nome_vendedor || (order as any).raw_json?.vendedor || (order as any).raw_json?.vendedor_nome || '').trim();
       const rightColX = margin + 280;
@@ -540,6 +553,19 @@ export class DeliverySheetGenerator {
       || (order as any)?.raw_json?.data_venda
       || (order as any)?.raw_json?.data_emissao
       || '';
+  }
+
+  private static hasFreteFull(order: any): boolean {
+    const normalize = (value: any) => String(value ?? '').trim().toLowerCase();
+    const isTrueFlag = (value: any) => ['true', '1', 'sim', 's', 'y', 'yes', 't'].includes(normalize(value));
+    const raw = (order as any)?.raw_json || {};
+
+    if (isTrueFlag((order as any)?.tem_frete_full) || isTrueFlag(raw?.tem_frete_full)) {
+      return true;
+    }
+
+    const obsInternas = normalize((order as any)?.observacoes_internas || raw?.observacoes_internas);
+    return obsInternas.includes('*frete full*');
   }
 
   private static formatDateBR(input: any): string {
