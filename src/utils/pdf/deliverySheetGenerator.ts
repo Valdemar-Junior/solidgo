@@ -241,9 +241,9 @@ export class DeliverySheetGenerator {
       }
 
       if (this.hasFreteFull(order)) {
-        const watermarkY = Math.max(margin + 44, y - (totalBlockHeight * 0.58));
+        const watermarkY = Math.max(margin + 48, y - (totalBlockHeight * 0.86));
         page.drawText('FULL', {
-          x: margin + 85,
+          x: width - margin - 180,
           y: watermarkY,
           size: 78,
           font: helveticaBoldFont,
