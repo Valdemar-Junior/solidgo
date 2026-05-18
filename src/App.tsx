@@ -198,6 +198,14 @@ function App() {
             }
           />
           <Route
+            path="/fleet"
+            element={
+              <ProtectedRoute allowedRoles={['driver']}>
+                <Navigate to="/fleet/driver" replace />
+              </ProtectedRoute>
+            }
+          />
+          <Route
             path="/fleet/driver"
             element={
               <ProtectedRoute allowedRoles={['driver']}>
