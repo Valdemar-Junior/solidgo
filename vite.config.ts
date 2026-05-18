@@ -107,6 +107,20 @@ export default defineConfig({
         ]
       }
     }),
+    {
+      name: 'fleet-manifest-isolation',
+      generateBundle(_, bundle) {
+        const fleetEntry = bundle['fleet/index.html'];
+        if (!fleetEntry || fleetEntry.type !== 'asset' || typeof fleetEntry.source !== 'string') {
+          return;
+        }
+
+        fleetEntry.source = fleetEntry.source.replace(
+          /\s*<link rel="manifest" href="\/manifest\.webmanifest">/g,
+          ''
+        );
+      },
+    },
     tsconfigPaths()
   ],
 })
