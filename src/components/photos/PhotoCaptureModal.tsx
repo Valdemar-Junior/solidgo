@@ -77,23 +77,30 @@ export default function PhotoCaptureModal({
             setIsProcessing(true);
             setError(null);
 
-            // Comprimir imagem
-            const compressed = await compressImage(file, {
-                maxWidth: 1200,
-                quality: 0.75,
-                mimeType: 'image/jpeg',
-            });
+            let processedBlob: Blob = file;
+            let outputMimeType = file.type || 'image/jpeg';
+
+            try {
+                processedBlob = await compressImage(file, {
+                    maxWidth: 1200,
+                    quality: 0.75,
+                    mimeType: 'image/jpeg',
+                });
+                outputMimeType = 'image/jpeg';
+            } catch (compressionError) {
+                console.warn('Falha na compressão da imagem, usando arquivo original:', compressionError);
+            }
 
             // Converter para base64
-            const base64 = await blobToBase64(compressed);
+            const base64 = await blobToBase64(processedBlob);
 
             // Criar objeto da foto
             const photo: CapturedPhoto = {
                 id: generatePhotoId(),
                 base64,
                 fileName: generatePhotoFileName('montagem'),
-                fileSize: compressed.size,
-                mimeType: 'image/jpeg',
+                fileSize: processedBlob.size,
+                mimeType: outputMimeType,
             };
 
             setPhotos((prev) => [...prev, photo]);
