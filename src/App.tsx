@@ -29,6 +29,8 @@ import VerificarColunasOrders from './pages/verificar-colunas';
 import AuditDashboard from './pages/admin/AuditDashboard';
 import Diary from './pages/admin/Diary';
 import FleetManagement from './pages/admin/FleetManagement';
+import DriverFleetInspections from './pages/fleet/DriverFleetInspections';
+import DriverFleetInspectionForm from './pages/fleet/DriverFleetInspectionForm';
 import AdminLayout from './layouts/AdminLayout';
 
 import ProtectedRoute from './components/ProtectedRoute';
@@ -192,6 +194,22 @@ function App() {
             element={
               <ProtectedRoute allowedRoles={['driver']}>
                 <DriverDashboard />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/fleet/driver"
+            element={
+              <ProtectedRoute allowedRoles={['driver']}>
+                <DriverFleetInspections />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/fleet/driver/inspection/:inspectionId"
+            element={
+              <ProtectedRoute allowedRoles={['driver']}>
+                <DriverFleetInspectionForm />
               </ProtectedRoute>
             }
           />

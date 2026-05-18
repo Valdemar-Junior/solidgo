@@ -26,7 +26,17 @@ export default defineConfig({
     }),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['favicon.svg', 'favicon.ico', 'apple-touch-icon.png', 'mask-icon.svg'],
+      includeAssets: [
+        'favicon.svg',
+        'favicon.ico',
+        'apple-touch-icon.png',
+        'mask-icon.svg',
+        'fleet-apple-touch-icon.png',
+        'fleet-pwa-64x64.png',
+        'fleet-pwa-192x192.png',
+        'fleet-pwa-512x512.png',
+        'manifest-fleet.webmanifest'
+      ],
       manifest: {
         name: 'solidgo',
         short_name: 'solidgo',
@@ -63,7 +73,7 @@ export default defineConfig({
       },
       workbox: {
         maximumFileSizeToCacheInBytes: 5 * 1024 * 1024, // 5MB
-        globPatterns: ['**/*.{js,css,html,png,svg,ico,woff2}'],
+        globPatterns: ['**/*.{js,css,html,png,svg,ico,woff2,webmanifest}'],
         navigateFallback: '/index.html', // garante app-shell para rotas SPA quando offline
         navigateFallbackDenylist: [/^\/api\//],
         cleanupOutdatedCaches: true,

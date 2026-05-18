@@ -1,0 +1,35 @@
+{
+  "id": "/fleet/driver",
+  "name": "SOLIDGO Frota",
+  "short_name": "Frota",
+  "description": "Inspeções de frota para motoristas",
+  "theme_color": "#0f172a",
+  "background_color": "#0f172a",
+  "display": "standalone",
+  "scope": "/fleet/",
+  "start_url": "/fleet/driver",
+  "icons": [
+    {
+      "src": "/fleet-pwa-64x64.png",
+      "sizes": "64x64",
+      "type": "image/png"
+    },
+    {
+      "src": "/fleet-pwa-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/fleet-pwa-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/fleet-pwa-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

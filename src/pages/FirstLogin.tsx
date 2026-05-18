@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../stores/authStore';
 import { supabase } from '../supabase/client';
 import { Loader2, Lock } from 'lucide-react';
@@ -7,6 +7,7 @@ import { toast } from 'sonner';
 
 export default function FirstLogin() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { user } = useAuthStore();
 
   const [newPassword, setNewPassword] = useState('');
@@ -74,12 +75,13 @@ export default function FirstLogin() {
           }
         });
         const role = String(refreshed.role || '').toLowerCase();
-        target = role === 'admin' ? '/admin'
+        const redirectTarget = new URLSearchParams(location.search).get('redirect');
+        target = redirectTarget || (role === 'admin' ? '/admin'
           : role === 'driver' ? '/driver'
             : role === 'conferente' ? '/conferente'
               : role === 'montador' ? '/montador'
                 : role === 'consultor' ? '/consultor'
-                  : '/';
+                  : '/');
       } else {
         await useAuthStore.getState().checkAuth();
       }

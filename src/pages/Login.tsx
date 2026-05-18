@@ -47,19 +47,20 @@ export default function Login() {
   useEffect(() => {
     const params = new URLSearchParams(location.search);
     const stay = params.has('stay') || params.has('forceLogin');
+    const redirectTarget = params.get('redirect');
     if (stay) return;
 
     if (isAuthenticated && user) {
       if (user.must_change_password) {
-        navigate('/first-login');
+        navigate(redirectTarget ? `/first-login?redirect=${encodeURIComponent(redirectTarget)}` : '/first-login');
         return;
       }
-      const path = user.role === 'admin' ? '/admin'
+      const path = redirectTarget || (user.role === 'admin' ? '/admin'
         : user.role === 'driver' ? '/driver'
           : user.role === 'conferente' ? '/conferente'
             : user.role === 'montador' ? '/montador'
               : user.role === 'consultor' ? '/consultor'
-                : '/driver';
+                : '/driver');
       navigate(path);
       setTimeout(() => { try { window.location.replace(path); } catch { } }, 100);
     }

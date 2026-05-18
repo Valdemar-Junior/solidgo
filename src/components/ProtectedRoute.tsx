@@ -1,6 +1,6 @@
-import { Navigate } from 'react-router-dom';
-import { useAuthStore } from '../stores/authStore';
 import { useEffect } from 'react';
+import { Navigate, useLocation } from 'react-router-dom';
+import { useAuthStore } from '../stores/authStore';
 
 interface ProtectedRouteProps {
   children: React.ReactNode;
@@ -9,19 +9,20 @@ interface ProtectedRouteProps {
 
 export default function ProtectedRoute({ children, allowedRoles }: ProtectedRouteProps) {
   const { user, isAuthenticated, isLoading, checkAuth } = useAuthStore();
+  const location = useLocation();
   const isOffline = typeof navigator !== 'undefined' && navigator.onLine === false;
 
   useEffect(() => {
     if (!isAuthenticated && !isLoading && !isOffline) {
-      checkAuth();
+      void checkAuth();
     }
   }, [isAuthenticated, isLoading, isOffline, checkAuth]);
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
         <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+          <div className="mx-auto mb-4 h-12 w-12 animate-spin rounded-full border-b-2 border-blue-600" />
           <p className="text-gray-600">Verificando autenticação...</p>
         </div>
       </div>
@@ -29,11 +30,12 @@ export default function ProtectedRoute({ children, allowedRoles }: ProtectedRout
   }
 
   if (!isAuthenticated) {
-    // Offline com usuário em cache: manter na tela
     if (isOffline && user) {
       return <>{children}</>;
     }
-    return <Navigate to="/login" replace />;
+
+    const redirect = `${location.pathname}${location.search}`;
+    return <Navigate to={`/login?redirect=${encodeURIComponent(redirect)}`} replace />;
   }
 
   if (user?.must_change_password) {

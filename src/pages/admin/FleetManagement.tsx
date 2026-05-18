@@ -1,10 +1,9 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { toast } from 'sonner';
 import supabase from '../../supabase/client';
 import {
   AlertTriangle,
   CalendarRange,
-  Camera,
   CarFront,
   CheckCircle2,
   ClipboardList,
@@ -15,20 +14,22 @@ import {
   Plus,
   Search,
   ShieldAlert,
+  UserCircle2,
   Wrench,
   X,
 } from 'lucide-react';
-import { PhotoCaptureModal, PhotoGallery, type CapturedPhoto, type PhotoItem } from '../../components/photos';
-import { FLEET_INSPECTION_CHECKLIST, calculateFleetInspectionOverallStatus } from '../../constants/fleetInspectionChecklist';
+import { PhotoGallery, type PhotoItem } from '../../components/photos';
 import FleetPhotoService from '../../services/fleetPhotoService';
 import type {
   FleetInspection,
   FleetInspectionItem,
-  FleetInspectionItemStatus,
+  FleetInspectionOverallStatus,
+  FleetInspectionWorkflowStatus,
   FleetOccurrence,
   FleetOccurrenceStatus,
   FleetVehicle,
   FleetVehicleStatus,
+  User,
 } from '../../types/database';
 
 type FleetTab = 'vehicles' | 'inspections' | 'occurrences';
@@ -47,13 +48,11 @@ interface FleetVehicleFormState {
   notes: string;
 }
 
-interface InspectionDraftItem {
-  item_code: string;
-  category: string;
-  label: string;
-  sort_order: number;
-  status: FleetInspectionItemStatus;
-  notes: string;
+interface InspectionAssignmentFormState {
+  vehicle_id: string;
+  assigned_driver_user_id: string;
+  scheduled_at: string;
+  general_notes: string;
 }
 
 const EMPTY_VEHICLE_FORM: FleetVehicleFormState = {
@@ -70,6 +69,13 @@ const EMPTY_VEHICLE_FORM: FleetVehicleFormState = {
   notes: '',
 };
 
+const EMPTY_INSPECTION_ASSIGNMENT_FORM: InspectionAssignmentFormState = {
+  vehicle_id: '',
+  assigned_driver_user_id: '',
+  scheduled_at: '',
+  general_notes: '',
+};
+
 const VEHICLE_STATUS_LABELS: Record<FleetVehicleStatus, string> = {
   available: 'Disponível',
   maintenance: 'Em manutenção',
@@ -82,19 +88,33 @@ const VEHICLE_STATUS_CLASSES: Record<FleetVehicleStatus, string> = {
   inactive: 'bg-gray-100 text-gray-600',
 };
 
-const INSPECTION_STATUS_LABELS = {
+const INSPECTION_WORKFLOW_LABELS: Record<FleetInspectionWorkflowStatus, string> = {
+  pending: 'Pendente',
+  in_progress: 'Em andamento',
+  completed: 'Finalizada',
+  cancelled: 'Cancelada',
+};
+
+const INSPECTION_WORKFLOW_CLASSES: Record<FleetInspectionWorkflowStatus, string> = {
+  pending: 'bg-sky-100 text-sky-700',
+  in_progress: 'bg-amber-100 text-amber-700',
+  completed: 'bg-emerald-100 text-emerald-700',
+  cancelled: 'bg-gray-100 text-gray-600',
+};
+
+const INSPECTION_RESULT_LABELS: Record<FleetInspectionOverallStatus, string> = {
   approved: 'Aprovada',
   attention: 'Atenção',
   critical: 'Crítica',
-} as const;
+};
 
-const INSPECTION_STATUS_CLASSES = {
+const INSPECTION_RESULT_CLASSES: Record<FleetInspectionOverallStatus, string> = {
   approved: 'bg-emerald-100 text-emerald-700',
   attention: 'bg-amber-100 text-amber-700',
   critical: 'bg-red-100 text-red-700',
-} as const;
+};
 
-const ITEM_STATUS_LABELS: Record<FleetInspectionItemStatus, string> = {
+const ITEM_STATUS_LABELS: Record<FleetInspectionItem['status'], string> = {
   ok: 'OK',
   attention: 'Atenção',
   critical: 'Crítico',
@@ -115,12 +135,8 @@ const OCCURRENCE_STATUS_CLASSES: Record<FleetOccurrenceStatus, string> = {
   cancelled: 'bg-gray-100 text-gray-600',
 };
 
-function buildInspectionItems(): InspectionDraftItem[] {
-  return FLEET_INSPECTION_CHECKLIST.map((item) => ({
-    ...item,
-    status: 'ok' as FleetInspectionItemStatus,
-    notes: '',
-  }));
+function sortInspectionItems(items?: FleetInspectionItem[]) {
+  return [...(items || [])].sort((a, b) => a.sort_order - b.sort_order);
 }
 
 function formatDateTime(value?: string | null) {
@@ -135,18 +151,12 @@ function formatDateInput(value?: string | null) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
 
-function formatDateTimeLocal(value?: string | null) {
-  const date = value ? new Date(value) : new Date();
-  const pad = (num: number) => String(num).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
-}
-
 function normalizePlate(value: string) {
   return value.toUpperCase().replace(/\s+/g, '').trim();
 }
 
-function sortInspectionItems(items?: FleetInspectionItem[]) {
-  return [...(items || [])].sort((a, b) => a.sort_order - b.sort_order);
+function emptyPhotoState() {
+  return [] as PhotoItem[];
 }
 
 function ModalShell({
@@ -160,14 +170,14 @@ function ModalShell({
   title: string;
   description?: string;
   onClose: () => void;
-  children: React.ReactNode;
-  footer?: React.ReactNode;
+  children: ReactNode;
+  footer?: ReactNode;
   size?: string;
 }) {
   return (
-    <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm">
       <div className={`w-full ${size} max-h-[92vh] overflow-hidden rounded-2xl bg-white shadow-2xl`}>
-        <div className="flex items-start justify-between gap-4 border-b border-gray-100 px-6 py-4 bg-gray-50">
+        <div className="flex items-start justify-between gap-4 border-b border-gray-100 bg-gray-50 px-6 py-4">
           <div>
             <h3 className="text-lg font-bold text-gray-900">{title}</h3>
             {description && <p className="mt-1 text-sm text-gray-500">{description}</p>}
@@ -225,17 +235,22 @@ function MetricCard({
   );
 }
 
+function inspectionReferenceDate(inspection: FleetInspection) {
+  return inspection.scheduled_at || inspection.inspection_at || inspection.created_at;
+}
+
 export default function FleetManagement() {
-  const [activeTab, setActiveTab] = useState<FleetTab>('vehicles');
+  const [activeTab, setActiveTab] = useState<FleetTab>('inspections');
   const [loading, setLoading] = useState(true);
 
   const [vehicles, setVehicles] = useState<FleetVehicle[]>([]);
+  const [drivers, setDrivers] = useState<User[]>([]);
   const [inspections, setInspections] = useState<FleetInspection[]>([]);
   const [occurrences, setOccurrences] = useState<FleetOccurrence[]>([]);
 
   const [searchTerm, setSearchTerm] = useState('');
   const [vehicleStatusFilter, setVehicleStatusFilter] = useState<'all' | FleetVehicleStatus>('all');
-  const [inspectionStatusFilter, setInspectionStatusFilter] = useState<'all' | FleetInspection['overall_status']>('all');
+  const [inspectionStatusFilter, setInspectionStatusFilter] = useState<'all' | FleetInspectionWorkflowStatus>('all');
   const [occurrenceStatusFilter, setOccurrenceStatusFilter] = useState<'all' | FleetOccurrenceStatus>('all');
   const [inspectionDateFrom, setInspectionDateFrom] = useState('');
   const [inspectionDateTo, setInspectionDateTo] = useState('');
@@ -247,17 +262,15 @@ export default function FleetManagement() {
 
   const [showInspectionModal, setShowInspectionModal] = useState(false);
   const [inspectionSaving, setInspectionSaving] = useState(false);
-  const [inspectionVehicleId, setInspectionVehicleId] = useState('');
-  const [inspectionAt, setInspectionAt] = useState(formatDateTimeLocal());
-  const [inspectionOdometer, setInspectionOdometer] = useState('');
-  const [inspectionNotes, setInspectionNotes] = useState('');
-  const [inspectionItems, setInspectionItems] = useState<InspectionDraftItem[]>(buildInspectionItems());
-  const [inspectionPhotos, setInspectionPhotos] = useState<CapturedPhoto[]>([]);
-  const [showPhotoCaptureModal, setShowPhotoCaptureModal] = useState(false);
+  const [inspectionForm, setInspectionForm] = useState<InspectionAssignmentFormState>(EMPTY_INSPECTION_ASSIGNMENT_FORM);
 
   const [selectedInspection, setSelectedInspection] = useState<FleetInspection | null>(null);
-  const [selectedInspectionPhotoItems, setSelectedInspectionPhotoItems] = useState<PhotoItem[]>([]);
+  const [selectedInspectionPhotoItems, setSelectedInspectionPhotoItems] = useState<PhotoItem[]>(emptyPhotoState);
   const [inspectionDetailLoading, setInspectionDetailLoading] = useState(false);
+
+  const [inspectionCancelTarget, setInspectionCancelTarget] = useState<FleetInspection | null>(null);
+  const [inspectionCancelReason, setInspectionCancelReason] = useState('');
+  const [inspectionCancelling, setInspectionCancelling] = useState(false);
 
   const [occurrenceTarget, setOccurrenceTarget] = useState<FleetOccurrence | null>(null);
   const [occurrenceNextStatus, setOccurrenceNextStatus] = useState<'resolved' | 'cancelled'>('resolved');
@@ -265,28 +278,34 @@ export default function FleetManagement() {
   const [occurrenceSubmitting, setOccurrenceSubmitting] = useState(false);
 
   useEffect(() => {
-    loadFleetData();
+    void loadFleetData();
   }, []);
 
   const loadFleetData = async () => {
     try {
       setLoading(true);
 
-      const [vehiclesRes, inspectionsRes, occurrencesRes] = await Promise.all([
+      const [vehiclesRes, driversRes, inspectionsRes, occurrencesRes] = await Promise.all([
         supabase
           .from('fleet_vehicles')
           .select('*')
           .order('active', { ascending: false })
           .order('display_name'),
         supabase
+          .from('users')
+          .select('id,email,name,role,phone,must_change_password,created_at')
+          .eq('role', 'driver')
+          .order('name'),
+        supabase
           .from('fleet_inspections')
           .select(`
             *,
             vehicle:fleet_vehicles(*),
+            assigned_driver:users!assigned_driver_user_id(id,email,name,role,phone,must_change_password,created_at),
             items:fleet_inspection_items(*),
             photos:fleet_inspection_photos(*)
           `)
-          .order('inspection_at', { ascending: false }),
+          .order('created_at', { ascending: false }),
         supabase
           .from('fleet_occurrences')
           .select(`
@@ -297,6 +316,7 @@ export default function FleetManagement() {
       ]);
 
       if (vehiclesRes.error) throw vehiclesRes.error;
+      if (driversRes.error) throw driversRes.error;
       if (inspectionsRes.error) throw inspectionsRes.error;
       if (occurrencesRes.error) throw occurrencesRes.error;
 
@@ -307,6 +327,7 @@ export default function FleetManagement() {
       }));
 
       setVehicles((vehiclesRes.data || []) as FleetVehicle[]);
+      setDrivers((driversRes.data || []) as User[]);
       setInspections(inspectionsData);
       setOccurrences((occurrencesRes.data || []) as FleetOccurrence[]);
     } catch (error) {
@@ -319,20 +340,15 @@ export default function FleetManagement() {
 
   const metrics = useMemo(() => ({
     activeVehicles: vehicles.filter((vehicle) => vehicle.active).length,
-    inspections: inspections.length,
-    openOccurrences: occurrences.filter((occurrence) => ['open', 'in_progress'].includes(occurrence.status)).length,
-  }), [vehicles, inspections, occurrences]);
+    pendingInspections: inspections.filter((inspection) => ['pending', 'in_progress'].includes(inspection.status)).length,
+    completedInspections: inspections.filter((inspection) => inspection.status === 'completed').length,
+  }), [vehicles, inspections]);
 
   const filteredVehicles = useMemo(() => {
     const term = searchTerm.trim().toLowerCase();
     return vehicles.filter((vehicle) => {
       const matchesStatus = vehicleStatusFilter === 'all' ? true : vehicle.status === vehicleStatusFilter;
-      const haystack = [
-        vehicle.display_name,
-        vehicle.plate,
-        vehicle.brand,
-        vehicle.model,
-      ].join(' ').toLowerCase();
+      const haystack = [vehicle.display_name, vehicle.plate, vehicle.brand, vehicle.model].join(' ').toLowerCase();
       const matchesSearch = term ? haystack.includes(term) : true;
       return matchesStatus && matchesSearch;
     });
@@ -341,18 +357,17 @@ export default function FleetManagement() {
   const filteredInspections = useMemo(() => {
     const term = searchTerm.trim().toLowerCase();
     return inspections.filter((inspection) => {
-      const vehicle = inspection.vehicle;
       const haystack = [
-        vehicle?.display_name,
-        vehicle?.plate,
-        vehicle?.brand,
-        vehicle?.model,
+        inspection.vehicle?.display_name,
+        inspection.vehicle?.plate,
+        inspection.assigned_driver?.name,
+        inspection.general_notes,
       ].join(' ').toLowerCase();
       const matchesSearch = term ? haystack.includes(term) : true;
-      const matchesStatus = inspectionStatusFilter === 'all' ? true : inspection.overall_status === inspectionStatusFilter;
-      const inspectionDate = formatDateInput(inspection.inspection_at);
-      const matchesDateFrom = inspectionDateFrom ? inspectionDate >= inspectionDateFrom : true;
-      const matchesDateTo = inspectionDateTo ? inspectionDate <= inspectionDateTo : true;
+      const matchesStatus = inspectionStatusFilter === 'all' ? true : inspection.status === inspectionStatusFilter;
+      const referenceDate = formatDateInput(inspectionReferenceDate(inspection));
+      const matchesDateFrom = inspectionDateFrom ? referenceDate >= inspectionDateFrom : true;
+      const matchesDateTo = inspectionDateTo ? referenceDate <= inspectionDateTo : true;
       return matchesSearch && matchesStatus && matchesDateFrom && matchesDateTo;
     });
   }, [inspections, searchTerm, inspectionStatusFilter, inspectionDateFrom, inspectionDateTo]);
@@ -360,12 +375,11 @@ export default function FleetManagement() {
   const filteredOccurrences = useMemo(() => {
     const term = searchTerm.trim().toLowerCase();
     return occurrences.filter((occurrence) => {
-      const vehicle = occurrence.vehicle;
       const haystack = [
         occurrence.title,
         occurrence.description,
-        vehicle?.display_name,
-        vehicle?.plate,
+        occurrence.vehicle?.display_name,
+        occurrence.vehicle?.plate,
       ].join(' ').toLowerCase();
       const matchesSearch = term ? haystack.includes(term) : true;
       const matchesStatus = occurrenceStatusFilter === 'all' ? true : occurrence.status === occurrenceStatusFilter;
@@ -376,11 +390,6 @@ export default function FleetManagement() {
   const activeFleetVehicles = useMemo(
     () => vehicles.filter((vehicle) => vehicle.active),
     [vehicles]
-  );
-
-  const inspectionDraftStatus = useMemo(
-    () => calculateFleetInspectionOverallStatus(inspectionItems),
-    [inspectionItems]
   );
 
   const resetVehicleForm = () => {
@@ -481,119 +490,52 @@ export default function FleetManagement() {
     }
   };
 
-  const resetInspectionForm = () => {
-    setInspectionVehicleId('');
-    setInspectionAt(formatDateTimeLocal());
-    setInspectionOdometer('');
-    setInspectionNotes('');
-    setInspectionItems(buildInspectionItems());
-    setInspectionPhotos([]);
-  };
-
   const openInspectionModal = () => {
     if (activeFleetVehicles.length === 0) {
       toast.error('Cadastre um veículo no módulo antes de criar inspeções');
       setActiveTab('vehicles');
       return;
     }
-    resetInspectionForm();
+    if (drivers.length === 0) {
+      toast.error('Cadastre ao menos um motorista antes de criar inspeções');
+      return;
+    }
+    setInspectionForm(EMPTY_INSPECTION_ASSIGNMENT_FORM);
     setShowInspectionModal(true);
   };
 
   const closeInspectionModal = () => {
     setShowInspectionModal(false);
-    resetInspectionForm();
+    setInspectionForm(EMPTY_INSPECTION_ASSIGNMENT_FORM);
   };
 
-  const handleInspectionVehicleChange = (vehicleId: string) => {
-    setInspectionVehicleId(vehicleId);
-    const vehicle = activeFleetVehicles.find((item) => item.id === vehicleId);
-    setInspectionOdometer(vehicle ? String(vehicle.current_odometer || 0) : '');
-  };
-
-  const updateInspectionItem = (itemCode: string, field: 'status' | 'notes', value: string) => {
-    setInspectionItems((current) =>
-      current.map((item) =>
-        item.item_code === itemCode
-          ? { ...item, [field]: value }
-          : item
-      )
-    );
-  };
-
-  const removeInspectionPhoto = (photoId: string) => {
-    setInspectionPhotos((current) => current.filter((photo) => photo.id !== photoId));
-  };
-
-  const saveInspection = async () => {
-    if (!inspectionVehicleId) {
-      toast.error('Selecione um veículo');
+  const saveInspectionAssignment = async () => {
+    if (!inspectionForm.vehicle_id) {
+      toast.error('Selecione o veículo');
       return;
     }
-
-    const odometer = Number(inspectionOdometer);
-    if (Number.isNaN(odometer) || odometer < 0) {
-      toast.error('Informe um hodômetro válido');
+    if (!inspectionForm.assigned_driver_user_id) {
+      toast.error('Selecione o motorista responsável');
       return;
     }
-
-    if (inspectionPhotos.length === 0) {
-      toast.error('A inspeção precisa ter ao menos uma foto');
-      return;
-    }
-
-    const invalidItem = inspectionItems.find((item) =>
-      ['attention', 'critical'].includes(item.status) && !item.notes.trim()
-    );
-
-    if (invalidItem) {
-      toast.error(`O item "${invalidItem.label}" exige observação`);
-      return;
-    }
-
-    const inspectionId = crypto.randomUUID();
-    let uploadedPaths: string[] = [];
 
     setInspectionSaving(true);
     try {
-      const uploadedPhotos = await FleetPhotoService.uploadInspectionPhotos(
-        inspectionVehicleId,
-        inspectionId,
-        inspectionPhotos
-      );
-      uploadedPaths = uploadedPhotos.map((photo) => photo.storage_path);
-
-      const { error } = await supabase.rpc('create_fleet_inspection', {
-        p_inspection_id: inspectionId,
-        p_vehicle_id: inspectionVehicleId,
-        p_inspection_at: new Date(inspectionAt).toISOString(),
-        p_odometer: odometer,
-        p_general_notes: inspectionNotes.trim() || null,
-        p_items: inspectionItems.map((item) => ({
-          item_code: item.item_code,
-          category: item.category,
-          label: item.label,
-          status: item.status,
-          notes: item.notes.trim() || null,
-          sort_order: item.sort_order,
-        })),
-        p_photos: uploadedPhotos,
+      const { error } = await supabase.rpc('create_fleet_inspection_assignment', {
+        p_vehicle_id: inspectionForm.vehicle_id,
+        p_assigned_driver_user_id: inspectionForm.assigned_driver_user_id,
+        p_scheduled_at: inspectionForm.scheduled_at ? new Date(inspectionForm.scheduled_at).toISOString() : null,
+        p_general_notes: inspectionForm.general_notes.trim() || null,
       });
 
-      if (error) {
-        await FleetPhotoService.removePaths(uploadedPaths);
-        throw error;
-      }
+      if (error) throw error;
 
-      toast.success('Inspeção registrada com sucesso');
+      toast.success('Inspeção pendente criada com sucesso');
       closeInspectionModal();
       await loadFleetData();
     } catch (error: any) {
       console.error(error);
-      if (uploadedPaths.length > 0) {
-        await FleetPhotoService.removePaths(uploadedPaths);
-      }
-      toast.error(error.message || 'Falha ao registrar inspeção');
+      toast.error(error.message || 'Falha ao criar inspeção pendente');
     } finally {
       setInspectionSaving(false);
     }
@@ -616,7 +558,7 @@ export default function FleetManagement() {
     } catch (error) {
       console.error(error);
       toast.error('Falha ao carregar fotos da inspeção');
-      setSelectedInspectionPhotoItems([]);
+      setSelectedInspectionPhotoItems(emptyPhotoState());
     } finally {
       setInspectionDetailLoading(false);
     }
@@ -624,8 +566,41 @@ export default function FleetManagement() {
 
   const closeInspectionDetails = () => {
     setSelectedInspection(null);
-    setSelectedInspectionPhotoItems([]);
+    setSelectedInspectionPhotoItems(emptyPhotoState());
     setInspectionDetailLoading(false);
+  };
+
+  const openInspectionCancellation = (inspection: FleetInspection) => {
+    setInspectionCancelTarget(inspection);
+    setInspectionCancelReason('');
+  };
+
+  const closeInspectionCancellation = () => {
+    setInspectionCancelTarget(null);
+    setInspectionCancelReason('');
+    setInspectionCancelling(false);
+  };
+
+  const submitInspectionCancellation = async () => {
+    if (!inspectionCancelTarget) return;
+
+    setInspectionCancelling(true);
+    try {
+      const { error } = await supabase.rpc('cancel_fleet_inspection', {
+        p_inspection_id: inspectionCancelTarget.id,
+        p_reason: inspectionCancelReason.trim() || null,
+      });
+      if (error) throw error;
+
+      toast.success('Inspeção cancelada com sucesso');
+      closeInspectionCancellation();
+      await loadFleetData();
+    } catch (error: any) {
+      console.error(error);
+      toast.error(error.message || 'Falha ao cancelar inspeção');
+    } finally {
+      setInspectionCancelling(false);
+    }
   };
 
   const advanceOccurrence = async (occurrence: FleetOccurrence, nextStatus: FleetOccurrenceStatus) => {
@@ -658,7 +633,6 @@ export default function FleetManagement() {
 
   const submitOccurrenceResolution = async () => {
     if (!occurrenceTarget) return;
-
     if (!occurrenceResolutionNotes.trim()) {
       toast.error('Informe a nota de resolução');
       return;
@@ -694,18 +668,18 @@ export default function FleetManagement() {
     inspections.find((inspection) => inspection.id === occurrence.inspection_id) || null;
 
   return (
-    <div className="w-full px-4 py-6 sm:px-6 lg:px-8 space-y-6">
+    <div className="w-full space-y-6 px-4 py-6 sm:px-6 lg:px-8">
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
         <MetricCard label="Veículos ativos" value={metrics.activeVehicles} icon={CarFront} bgClass="bg-gradient-to-br from-sky-500 to-blue-600" />
-        <MetricCard label="Inspeções" value={metrics.inspections} icon={ClipboardList} bgClass="bg-gradient-to-br from-emerald-500 to-green-600" />
-        <MetricCard label="Ocorrências abertas" value={metrics.openOccurrences} icon={ShieldAlert} bgClass="bg-gradient-to-br from-rose-500 to-red-600" />
+        <MetricCard label="Inspeções abertas" value={metrics.pendingInspections} icon={ClipboardList} bgClass="bg-gradient-to-br from-amber-500 to-orange-600" />
+        <MetricCard label="Inspeções finalizadas" value={metrics.completedInspections} icon={CheckCircle2} bgClass="bg-gradient-to-br from-emerald-500 to-green-600" />
       </div>
 
       <div className="rounded-2xl border border-gray-200 bg-white p-2 shadow-sm">
         <div className="flex flex-wrap gap-2">
           {[
-            { key: 'vehicles', label: 'Veículos' },
             { key: 'inspections', label: 'Inspeções' },
+            { key: 'vehicles', label: 'Veículos' },
             { key: 'occurrences', label: 'Ocorrências' },
           ].map((tab) => (
             <button
@@ -735,7 +709,7 @@ export default function FleetManagement() {
                 activeTab === 'vehicles'
                   ? 'Buscar veículos por nome, placa ou modelo...'
                   : activeTab === 'inspections'
-                    ? 'Buscar inspeções por veículo...'
+                    ? 'Buscar inspeções por veículo, motorista ou observação...'
                     : 'Buscar ocorrências por veículo ou descrição...'
               }
               className="w-full rounded-xl border border-gray-200 py-2.5 pl-10 pr-4 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
@@ -760,13 +734,14 @@ export default function FleetManagement() {
               <>
                 <select
                   value={inspectionStatusFilter}
-                  onChange={(event) => setInspectionStatusFilter(event.target.value as 'all' | FleetInspection['overall_status'])}
+                  onChange={(event) => setInspectionStatusFilter(event.target.value as 'all' | FleetInspectionWorkflowStatus)}
                   className="rounded-xl border border-gray-200 px-3 py-2.5 text-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
                 >
                   <option value="all">Todos os status</option>
-                  <option value="approved">Aprovada</option>
-                  <option value="attention">Atenção</option>
-                  <option value="critical">Crítica</option>
+                  <option value="pending">Pendentes</option>
+                  <option value="in_progress">Em andamento</option>
+                  <option value="completed">Finalizadas</option>
+                  <option value="cancelled">Canceladas</option>
                 </select>
                 <input
                   type="date"
@@ -798,7 +773,7 @@ export default function FleetManagement() {
             )}
 
             <button
-              onClick={activeTab === 'vehicles' ? () => openVehicleModal() : openInspectionModal}
+              onClick={activeTab === 'vehicles' ? () => openVehicleModal() : activeTab === 'inspections' ? openInspectionModal : undefined}
               disabled={activeTab === 'occurrences'}
               className={`inline-flex items-center justify-center rounded-xl px-4 py-2.5 text-sm font-semibold shadow-sm transition ${
                 activeTab === 'occurrences'
@@ -921,28 +896,48 @@ export default function FleetManagement() {
                         <div className="flex flex-wrap items-center gap-2">
                           <h3 className="text-lg font-bold text-gray-900">{inspection.vehicle?.display_name || 'Veículo'}</h3>
                           <StatusBadge
-                            label={INSPECTION_STATUS_LABELS[inspection.overall_status]}
-                            className={INSPECTION_STATUS_CLASSES[inspection.overall_status]}
+                            label={INSPECTION_WORKFLOW_LABELS[inspection.status]}
+                            className={INSPECTION_WORKFLOW_CLASSES[inspection.status]}
                           />
+                          {inspection.status === 'completed' && inspection.overall_status && (
+                            <StatusBadge
+                              label={INSPECTION_RESULT_LABELS[inspection.overall_status]}
+                              className={INSPECTION_RESULT_CLASSES[inspection.overall_status]}
+                            />
+                          )}
                         </div>
                         <div className="flex flex-wrap gap-x-6 gap-y-2 text-sm text-gray-600">
                           <span className="font-mono">{inspection.vehicle?.plate || '-'}</span>
-                          <span>{formatDateTime(inspection.inspection_at)}</span>
-                          <span>{inspection.odometer.toLocaleString('pt-BR')} km</span>
-                          <span>{inspection.photos?.length || 0} foto(s)</span>
+                          <span className="inline-flex items-center gap-2">
+                            <UserCircle2 className="h-4 w-4" />
+                            {inspection.assigned_driver?.name || 'Sem motorista'}
+                          </span>
+                          <span>{formatDateTime(inspectionReferenceDate(inspection))}</span>
+                          <span>{inspection.status === 'completed' ? `${inspection.photos?.length || 0} foto(s)` : 'Aguardando execução'}</span>
                         </div>
                         {inspection.general_notes && (
                           <p className="max-w-3xl text-sm text-gray-600">{inspection.general_notes}</p>
                         )}
                       </div>
 
-                      <button
-                        onClick={() => openInspectionDetails(inspection)}
-                        className="inline-flex items-center rounded-xl border border-gray-200 px-4 py-2.5 text-sm font-semibold text-gray-700 hover:bg-gray-50"
-                      >
-                        <Eye className="mr-2 h-4 w-4" />
-                        Ver detalhes
-                      </button>
+                      <div className="flex flex-wrap gap-2 lg:justify-end">
+                        <button
+                          onClick={() => openInspectionDetails(inspection)}
+                          className="inline-flex items-center rounded-xl border border-gray-200 px-4 py-2.5 text-sm font-semibold text-gray-700 hover:bg-gray-50"
+                        >
+                          <Eye className="mr-2 h-4 w-4" />
+                          Ver detalhes
+                        </button>
+                        {['pending', 'in_progress'].includes(inspection.status) && (
+                          <button
+                            onClick={() => openInspectionCancellation(inspection)}
+                            className="inline-flex items-center rounded-xl bg-gray-100 px-4 py-2.5 text-sm font-semibold text-gray-700 hover:bg-gray-200"
+                          >
+                            <AlertTriangle className="mr-2 h-4 w-4" />
+                            Cancelar
+                          </button>
+                        )}
+                      </div>
                     </div>
                   </div>
                 ))
@@ -1174,162 +1169,76 @@ export default function FleetManagement() {
       {showInspectionModal && (
         <ModalShell
           title="Nova inspeção"
-          description="A inspeção fica imutável após o envio e exige pelo menos uma foto."
+          description="O admin cria a inspeção pendente e atribui o motorista responsável. O preenchimento acontece no app mobile isolado."
           onClose={closeInspectionModal}
           footer={(
-            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-              <div className="flex items-center gap-2 text-sm text-gray-500">
-                <CalendarRange className="h-4 w-4" />
-                Status calculado: <StatusBadge label={INSPECTION_STATUS_LABELS[inspectionDraftStatus]} className={INSPECTION_STATUS_CLASSES[inspectionDraftStatus]} />
-              </div>
-              <div className="flex justify-end gap-3">
-                <button
-                  onClick={closeInspectionModal}
-                  className="rounded-xl px-4 py-2.5 font-medium text-gray-700 hover:bg-gray-100"
-                >
-                  Cancelar
-                </button>
-                <button
-                  onClick={saveInspection}
-                  disabled={inspectionSaving}
-                  className="inline-flex items-center rounded-xl bg-blue-600 px-4 py-2.5 font-semibold text-white hover:bg-blue-700 disabled:opacity-60"
-                >
-                  {inspectionSaving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                  Registrar inspeção
-                </button>
-              </div>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={closeInspectionModal}
+                className="rounded-xl px-4 py-2.5 font-medium text-gray-700 hover:bg-gray-100"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={saveInspectionAssignment}
+                disabled={inspectionSaving}
+                className="inline-flex items-center rounded-xl bg-blue-600 px-4 py-2.5 font-semibold text-white hover:bg-blue-700 disabled:opacity-60"
+              >
+                {inspectionSaving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                Criar inspeção pendente
+              </button>
             </div>
           )}
         >
-          <div className="space-y-6">
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-              <div>
-                <label className="mb-1 block text-sm font-medium text-gray-700">Veículo</label>
-                <select
-                  value={inspectionVehicleId}
-                  onChange={(event) => handleInspectionVehicleChange(event.target.value)}
-                  className="w-full rounded-xl border border-gray-200 px-3 py-2.5 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                >
-                  <option value="">Selecione...</option>
-                  {activeFleetVehicles.map((vehicle) => (
-                    <option key={vehicle.id} value={vehicle.id}>
-                      {vehicle.display_name} • {vehicle.plate}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="mb-1 block text-sm font-medium text-gray-700">Data e hora</label>
-                <input
-                  type="datetime-local"
-                  value={inspectionAt}
-                  onChange={(event) => setInspectionAt(event.target.value)}
-                  className="w-full rounded-xl border border-gray-200 px-3 py-2.5 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                />
-              </div>
-              <div>
-                <label className="mb-1 block text-sm font-medium text-gray-700">Hodômetro</label>
-                <input
-                  type="number"
-                  min="0"
-                  value={inspectionOdometer}
-                  onChange={(event) => setInspectionOdometer(event.target.value)}
-                  className="w-full rounded-xl border border-gray-200 px-3 py-2.5 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                />
-              </div>
-              <div className="md:col-span-3">
-                <label className="mb-1 block text-sm font-medium text-gray-700">Observação geral</label>
-                <textarea
-                  value={inspectionNotes}
-                  onChange={(event) => setInspectionNotes(event.target.value)}
-                  rows={3}
-                  className="w-full rounded-xl border border-gray-200 px-3 py-2.5 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                  placeholder="Contexto geral da inspeção"
-                />
-              </div>
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <div>
+              <label className="mb-1 block text-sm font-medium text-gray-700">Veículo</label>
+              <select
+                value={inspectionForm.vehicle_id}
+                onChange={(event) => setInspectionForm((current) => ({ ...current, vehicle_id: event.target.value }))}
+                className="w-full rounded-xl border border-gray-200 px-3 py-2.5 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+              >
+                <option value="">Selecione...</option>
+                {activeFleetVehicles.map((vehicle) => (
+                  <option key={vehicle.id} value={vehicle.id}>
+                    {vehicle.display_name} • {vehicle.plate}
+                  </option>
+                ))}
+              </select>
             </div>
-
-            <div className="rounded-2xl border border-gray-200 bg-gray-50 p-4">
-              <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <h4 className="text-sm font-semibold text-gray-900">Fotos da inspeção</h4>
-                  <p className="text-sm text-gray-500">Obrigatório anexar pelo menos uma foto do veículo no momento da inspeção.</p>
-                </div>
-                <button
-                  onClick={() => setShowPhotoCaptureModal(true)}
-                  disabled={inspectionPhotos.length >= 10}
-                  className="inline-flex items-center rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-60"
-                >
-                  <Camera className="mr-2 h-4 w-4" />
-                  {inspectionPhotos.length === 0 ? 'Adicionar fotos' : 'Adicionar mais'}
-                </button>
-              </div>
-
-              {inspectionPhotos.length > 0 ? (
-                <PhotoGallery
-                  photos={inspectionPhotos.map((photo) => ({
-                    id: photo.id,
-                    src: photo.base64,
-                    fileName: photo.fileName,
-                    isLocal: true,
-                    isSynced: false,
-                  }))}
-                  canDelete
-                  onDelete={removeInspectionPhoto}
-                  emptyMessage="Nenhuma foto anexada"
-                  columns={4}
-                  thumbnailSize="md"
-                />
-              ) : (
-                <div className="rounded-xl border border-dashed border-gray-200 bg-white p-6 text-center text-sm text-gray-500">
-                  Nenhuma foto adicionada ainda.
-                </div>
-              )}
+            <div>
+              <label className="mb-1 block text-sm font-medium text-gray-700">Motorista responsável</label>
+              <select
+                value={inspectionForm.assigned_driver_user_id}
+                onChange={(event) => setInspectionForm((current) => ({ ...current, assigned_driver_user_id: event.target.value }))}
+                className="w-full rounded-xl border border-gray-200 px-3 py-2.5 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+              >
+                <option value="">Selecione...</option>
+                {drivers.map((driver) => (
+                  <option key={driver.id} value={driver.id}>
+                    {driver.name}
+                  </option>
+                ))}
+              </select>
             </div>
-
-            <div className="space-y-4">
-              <div>
-                <h4 className="text-sm font-semibold text-gray-900">Checklist fixo</h4>
-                <p className="text-sm text-gray-500">Itens marcados como atenção ou crítico exigem observação.</p>
-              </div>
-
-              {inspectionItems.map((item) => (
-                <div key={item.item_code} className="rounded-2xl border border-gray-200 bg-white p-4">
-                  <div className="grid grid-cols-1 gap-4 md:grid-cols-[1.4fr,220px]">
-                    <div>
-                      <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">{item.category}</p>
-                      <p className="mt-1 font-semibold text-gray-900">{item.label}</p>
-                    </div>
-                    <div>
-                      <label className="mb-1 block text-sm font-medium text-gray-700">Status</label>
-                      <select
-                        value={item.status}
-                        onChange={(event) => updateInspectionItem(item.item_code, 'status', event.target.value)}
-                        className="w-full rounded-xl border border-gray-200 px-3 py-2.5 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                      >
-                        <option value="ok">OK</option>
-                        <option value="attention">Atenção</option>
-                        <option value="critical">Crítico</option>
-                        <option value="na">N/A</option>
-                      </select>
-                    </div>
-                  </div>
-                  <div className="mt-4">
-                    <label className="mb-1 block text-sm font-medium text-gray-700">Observação do item</label>
-                    <textarea
-                      value={item.notes}
-                      onChange={(event) => updateInspectionItem(item.item_code, 'notes', event.target.value)}
-                      rows={2}
-                      className="w-full rounded-xl border border-gray-200 px-3 py-2.5 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                      placeholder={
-                        ['attention', 'critical'].includes(item.status)
-                          ? 'Obrigatório para este status'
-                          : 'Opcional'
-                      }
-                    />
-                  </div>
-                </div>
-              ))}
+            <div className="md:col-span-2">
+              <label className="mb-1 block text-sm font-medium text-gray-700">Agendamento</label>
+              <input
+                type="datetime-local"
+                value={inspectionForm.scheduled_at}
+                onChange={(event) => setInspectionForm((current) => ({ ...current, scheduled_at: event.target.value }))}
+                className="w-full rounded-xl border border-gray-200 px-3 py-2.5 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+              />
+            </div>
+            <div className="md:col-span-2">
+              <label className="mb-1 block text-sm font-medium text-gray-700">Observação inicial</label>
+              <textarea
+                value={inspectionForm.general_notes}
+                onChange={(event) => setInspectionForm((current) => ({ ...current, general_notes: event.target.value }))}
+                rows={4}
+                className="w-full rounded-xl border border-gray-200 px-3 py-2.5 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                placeholder="Instruções ou contexto para o motorista"
+              />
             </div>
           </div>
         </ModalShell>
@@ -1338,7 +1247,7 @@ export default function FleetManagement() {
       {selectedInspection && (
         <ModalShell
           title={`Inspeção • ${selectedInspection.vehicle?.display_name || 'Veículo'}`}
-          description={`${selectedInspection.vehicle?.plate || '-'} • ${formatDateTime(selectedInspection.inspection_at)}`}
+          description={`${selectedInspection.vehicle?.plate || '-'} • ${selectedInspection.assigned_driver?.name || 'Sem motorista'}`}
           onClose={closeInspectionDetails}
           size="max-w-5xl"
           footer={(
@@ -1353,25 +1262,36 @@ export default function FleetManagement() {
           )}
         >
           <div className="space-y-6">
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
               <div className="rounded-2xl bg-gray-50 px-4 py-3">
-                <p className="text-xs uppercase tracking-wide text-gray-400">Status geral</p>
+                <p className="text-xs uppercase tracking-wide text-gray-400">Workflow</p>
                 <div className="mt-2">
                   <StatusBadge
-                    label={INSPECTION_STATUS_LABELS[selectedInspection.overall_status]}
-                    className={INSPECTION_STATUS_CLASSES[selectedInspection.overall_status]}
+                    label={INSPECTION_WORKFLOW_LABELS[selectedInspection.status]}
+                    className={INSPECTION_WORKFLOW_CLASSES[selectedInspection.status]}
                   />
                 </div>
               </div>
               <div className="rounded-2xl bg-gray-50 px-4 py-3">
-                <p className="text-xs uppercase tracking-wide text-gray-400">Hodômetro</p>
-                <p className="mt-2 font-semibold text-gray-900">
-                  {selectedInspection.odometer.toLocaleString('pt-BR')} km
-                </p>
+                <p className="text-xs uppercase tracking-wide text-gray-400">Resultado</p>
+                <div className="mt-2">
+                  {selectedInspection.overall_status ? (
+                    <StatusBadge
+                      label={INSPECTION_RESULT_LABELS[selectedInspection.overall_status]}
+                      className={INSPECTION_RESULT_CLASSES[selectedInspection.overall_status]}
+                    />
+                  ) : (
+                    <span className="text-sm font-medium text-gray-500">Aguardando execução</span>
+                  )}
+                </div>
               </div>
               <div className="rounded-2xl bg-gray-50 px-4 py-3">
-                <p className="text-xs uppercase tracking-wide text-gray-400">Criada em</p>
-                <p className="mt-2 font-semibold text-gray-900">{formatDateTime(selectedInspection.created_at)}</p>
+                <p className="text-xs uppercase tracking-wide text-gray-400">Agendada para</p>
+                <p className="mt-2 font-semibold text-gray-900">{formatDateTime(selectedInspection.scheduled_at)}</p>
+              </div>
+              <div className="rounded-2xl bg-gray-50 px-4 py-3">
+                <p className="text-xs uppercase tracking-wide text-gray-400">Concluída em</p>
+                <p className="mt-2 font-semibold text-gray-900">{formatDateTime(selectedInspection.completed_at)}</p>
               </div>
             </div>
 
@@ -1381,35 +1301,65 @@ export default function FleetManagement() {
               </div>
             )}
 
-            <div>
-              <h4 className="mb-3 text-sm font-semibold text-gray-900">Itens avaliados</h4>
-              <div className="space-y-3">
-                {sortInspectionItems(selectedInspection.items).map((item) => (
-                  <div key={item.id} className="rounded-2xl border border-gray-200 bg-white p-4">
-                    <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                      <div>
-                        <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">{item.category}</p>
-                        <p className="mt-1 font-semibold text-gray-900">{item.label}</p>
-                      </div>
-                      <StatusBadge
-                        label={ITEM_STATUS_LABELS[item.status]}
-                        className={
-                          item.status === 'critical'
-                            ? 'bg-red-100 text-red-700'
-                            : item.status === 'attention'
-                              ? 'bg-amber-100 text-amber-700'
-                              : item.status === 'na'
-                                ? 'bg-gray-100 text-gray-600'
-                                : 'bg-emerald-100 text-emerald-700'
-                        }
-                      />
-                    </div>
-                    {item.notes && (
-                      <p className="mt-3 text-sm text-gray-600">{item.notes}</p>
-                    )}
-                  </div>
-                ))}
+            {selectedInspection.cancellation_reason && (
+              <div className="rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-700">
+                <p className="font-semibold text-gray-900">Motivo do cancelamento</p>
+                <p className="mt-1">{selectedInspection.cancellation_reason}</p>
               </div>
+            )}
+
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+              <div className="rounded-2xl bg-gray-50 px-4 py-3">
+                <p className="text-xs uppercase tracking-wide text-gray-400">Motorista</p>
+                <p className="mt-2 font-semibold text-gray-900">{selectedInspection.assigned_driver?.name || '-'}</p>
+              </div>
+              <div className="rounded-2xl bg-gray-50 px-4 py-3">
+                <p className="text-xs uppercase tracking-wide text-gray-400">Hodômetro</p>
+                <p className="mt-2 font-semibold text-gray-900">
+                  {selectedInspection.odometer != null ? `${selectedInspection.odometer.toLocaleString('pt-BR')} km` : '-'}
+                </p>
+              </div>
+              <div className="rounded-2xl bg-gray-50 px-4 py-3">
+                <p className="text-xs uppercase tracking-wide text-gray-400">Criada em</p>
+                <p className="mt-2 font-semibold text-gray-900">{formatDateTime(selectedInspection.created_at)}</p>
+              </div>
+            </div>
+
+            <div>
+              <h4 className="mb-3 text-sm font-semibold text-gray-900">Checklist</h4>
+              {selectedInspection.items && selectedInspection.items.length > 0 ? (
+                <div className="space-y-3">
+                  {sortInspectionItems(selectedInspection.items).map((item) => (
+                    <div key={item.id} className="rounded-2xl border border-gray-200 bg-white p-4">
+                      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                        <div>
+                          <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">{item.category}</p>
+                          <p className="mt-1 font-semibold text-gray-900">{item.label}</p>
+                        </div>
+                        <StatusBadge
+                          label={ITEM_STATUS_LABELS[item.status]}
+                          className={
+                            item.status === 'critical'
+                              ? 'bg-red-100 text-red-700'
+                              : item.status === 'attention'
+                                ? 'bg-amber-100 text-amber-700'
+                                : item.status === 'na'
+                                  ? 'bg-gray-100 text-gray-600'
+                                  : 'bg-emerald-100 text-emerald-700'
+                          }
+                        />
+                      </div>
+                      {item.notes && (
+                        <p className="mt-3 text-sm text-gray-600">{item.notes}</p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50 p-6 text-sm text-gray-500">
+                  Essa inspeção ainda não foi preenchida pelo motorista.
+                </div>
+              )}
             </div>
 
             <div>
@@ -1427,6 +1377,49 @@ export default function FleetManagement() {
                   thumbnailSize="md"
                 />
               )}
+            </div>
+          </div>
+        </ModalShell>
+      )}
+
+      {inspectionCancelTarget && (
+        <ModalShell
+          title="Cancelar inspeção"
+          description={`${inspectionCancelTarget.vehicle?.display_name || 'Veículo'} • ${inspectionCancelTarget.assigned_driver?.name || 'Sem motorista'}`}
+          onClose={closeInspectionCancellation}
+          size="max-w-2xl"
+          footer={(
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={closeInspectionCancellation}
+                className="rounded-xl px-4 py-2.5 font-medium text-gray-700 hover:bg-gray-100"
+              >
+                Voltar
+              </button>
+              <button
+                onClick={submitInspectionCancellation}
+                disabled={inspectionCancelling}
+                className="inline-flex items-center rounded-xl bg-blue-600 px-4 py-2.5 font-semibold text-white hover:bg-blue-700 disabled:opacity-60"
+              >
+                {inspectionCancelling && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                Confirmar cancelamento
+              </button>
+            </div>
+          )}
+        >
+          <div className="space-y-4">
+            <div className="rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+              Inspeções canceladas deixam de aparecer para o motorista e permanecem apenas no histórico do admin.
+            </div>
+            <div>
+              <label className="mb-1 block text-sm font-medium text-gray-700">Motivo do cancelamento</label>
+              <textarea
+                value={inspectionCancelReason}
+                onChange={(event) => setInspectionCancelReason(event.target.value)}
+                rows={5}
+                className="w-full rounded-xl border border-gray-200 px-3 py-2.5 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                placeholder="Opcional, mas recomendado para histórico"
+              />
             </div>
           </div>
         </ModalShell>
@@ -1474,20 +1467,6 @@ export default function FleetManagement() {
           </div>
         </ModalShell>
       )}
-
-      <PhotoCaptureModal
-        isOpen={showPhotoCaptureModal}
-        onClose={() => setShowPhotoCaptureModal(false)}
-        onConfirm={(photos) => {
-          setInspectionPhotos((current) => [...current, ...photos].slice(0, 10));
-          setShowPhotoCaptureModal(false);
-        }}
-        minPhotos={1}
-        maxPhotos={Math.max(1, 10 - inspectionPhotos.length)}
-        productName={activeFleetVehicles.find((vehicle) => vehicle.id === inspectionVehicleId)?.display_name}
-        title="Fotos da inspeção"
-        confirmLabel="Adicionar fotos"
-      />
     </div>
   );
 }

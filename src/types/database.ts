@@ -31,6 +31,7 @@ export interface Vehicle {
 }
 
 export type FleetVehicleStatus = 'available' | 'maintenance' | 'inactive';
+export type FleetInspectionWorkflowStatus = 'pending' | 'in_progress' | 'completed' | 'cancelled';
 
 export interface FleetVehicle {
   id: string;
@@ -56,13 +57,23 @@ export type FleetInspectionItemStatus = 'ok' | 'attention' | 'critical' | 'na';
 export interface FleetInspection {
   id: string;
   vehicle_id: string;
-  inspection_at: string;
-  odometer: number;
-  overall_status: FleetInspectionOverallStatus;
+  inspection_at?: string | null;
+  odometer?: number | null;
+  overall_status?: FleetInspectionOverallStatus | null;
+  status: FleetInspectionWorkflowStatus;
   general_notes?: string | null;
+  assigned_driver_user_id?: string | null;
+  scheduled_at?: string | null;
+  started_at?: string | null;
+  completed_at?: string | null;
+  completed_by?: string | null;
+  cancelled_at?: string | null;
+  cancelled_by?: string | null;
+  cancellation_reason?: string | null;
   created_by?: string | null;
   created_at: string;
   vehicle?: FleetVehicle;
+  assigned_driver?: User | null;
   items?: FleetInspectionItem[];
   photos?: FleetInspectionPhoto[];
 }
