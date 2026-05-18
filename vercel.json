@@ -1,6 +1,18 @@
 {
   "rewrites": [
     {
+      "source": "/fleet",
+      "destination": "/fleet/index.html"
+    },
+    {
+      "source": "/fleet/",
+      "destination": "/fleet/index.html"
+    },
+    {
+      "source": "/fleet/:path*",
+      "destination": "/fleet/index.html"
+    },
+    {
       "source": "/:path((?!api/).*)",
       "destination": "/"
     }
