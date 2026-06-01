@@ -2,13 +2,14 @@ import { useEffect, useState } from 'react';
 import { useAuthStore } from '../../stores/authStore';
 import { supabase } from '../../supabase/client';
 import type { RouteWithDetails } from '../../types/database';
-import { Truck, MapPin, Package, Clock, Users, LogOut, ArrowLeft } from 'lucide-react';
+import { Truck, MapPin, Clock, Users, LogOut, Search } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
 export default function DriverDashboard() {
   const { user, logout } = useAuthStore();
   const [routes, setRoutes] = useState<RouteWithDetails[]>([]);
   const [loading, setLoading] = useState(true);
+  const [searchTerm, setSearchTerm] = useState('');
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -74,6 +75,19 @@ export default function DriverDashboard() {
     }
   };
 
+  const normalizeText = (value: unknown) =>
+    String(value || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .trim();
+
+  const normalizedSearch = normalizeText(searchTerm);
+  const filteredRoutes = routes.filter((route) => {
+    if (!normalizedSearch) return true;
+    return [route.route_code, route.name].some((field) => normalizeText(field).includes(normalizedSearch));
+  });
+
   if (loading) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
@@ -125,8 +139,28 @@ export default function DriverDashboard() {
             </p>
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {routes.map((route) => (
+          <>
+            <div className="bg-white rounded-lg shadow p-4 mb-6">
+              <div className="relative">
+                <Search className="h-4 w-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  placeholder="Buscar por número do romaneio"
+                />
+              </div>
+            </div>
+
+            {filteredRoutes.length === 0 && (
+              <div className="bg-white rounded-lg shadow p-8 text-center text-gray-500">
+                Nenhuma rota encontrada para a busca informada.
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {filteredRoutes.map((route) => (
               <div key={route.id} className="bg-white rounded-lg shadow hover:shadow-lg transition-shadow p-6">
                 <div className="flex items-start justify-between mb-4">
                   <div className="flex items-center">
@@ -141,6 +175,9 @@ export default function DriverDashboard() {
                 </div>
 
                 <div className="space-y-3 mb-6">
+                  <div className="text-sm text-gray-600">
+                    Romaneio: <span className="font-semibold text-blue-600">{route.route_code || '-'}</span>
+                  </div>
                   <div className="flex items-center text-sm text-gray-600">
                     <Truck className="h-4 w-4 mr-2" />
                     <span>
@@ -170,8 +207,9 @@ export default function DriverDashboard() {
                   Ver Rota
                 </button>
               </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          </>
         )}
       </div>
     </div>

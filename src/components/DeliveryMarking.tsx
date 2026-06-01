@@ -3,7 +3,7 @@ import { supabase } from '../supabase/client';
 import { OfflineStorage, SyncQueue, NetworkStatus } from '../utils/offline/storage';
 import { backgroundSync } from '../utils/offline/backgroundSync';
 import type { RouteOrderWithDetails, Order, ReturnReason } from '../types/database';
-import { Package, CheckCircle, XCircle, Clock, MapPin, Users } from 'lucide-react';
+import { Package, CheckCircle, XCircle, MapPin, Users, Search } from 'lucide-react';
 import { buildFullAddress, geocodeAddress, openWazeWithLL } from '../utils/maps';
 import { toast } from 'sonner';
 import { useDeliveryPhotos } from '../hooks/useDeliveryPhotos';
@@ -49,12 +49,16 @@ interface DeliveryMarkingProps {
   onUpdated?: () => void;
 }
 
+type StatusFilter = 'pending' | 'delivered' | 'returned';
+
 export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingProps) {
   const [routeOrders, setRouteOrders] = useState<RouteOrderWithDetails[]>([]);
   const [returnReasons, setReturnReasons] = useState<ReturnReason[]>([]);
   const [loading, setLoading] = useState(true);
   const [isOnline, setIsOnline] = useState(NetworkStatus.isOnline());
   const [processingIds, setProcessingIds] = useState<Set<string>>(new Set());
+  const [searchTerm, setSearchTerm] = useState('');
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('pending');
   // Seleção por pedido para evitar pré-seleção global
   const [returnReasonByOrder, setReturnReasonByOrder] = useState<Record<string, string>>({});
   const [returnObservationsByOrder, setReturnObservationsByOrder] = useState<Record<string, string>>({});
@@ -1158,6 +1162,42 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
     return 'Pendente';
   };
 
+  const normalizeText = (value: unknown) =>
+    String(value || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .trim();
+
+  const normalizedSearch = normalizeText(searchTerm);
+
+  const statusCounts = {
+    pending: routeOrders.filter((ro) => ro.status === 'pending').length,
+    delivered: routeOrders.filter((ro) => ro.status === 'delivered').length,
+    returned: routeOrders.filter((ro) => ro.status === 'returned').length,
+  };
+
+  const filteredRouteOrders = routeOrders.filter((routeOrder) => {
+    if (routeOrder.status !== statusFilter) return false;
+    if (!normalizedSearch) return true;
+
+    const order = routeOrder.order as any;
+    const launchNumber =
+      order?.numero_lancamento ??
+      order?.raw_json?.numero_lancamento ??
+      order?.raw_json?.lancamento_venda ??
+      order?.raw_json?.lancamento ??
+      order?.raw_json?.pedido;
+
+    const fields = [
+      order?.order_id_erp,
+      order?.customer_name,
+      launchNumber,
+    ];
+
+    return fields.some((field) => normalizeText(field).includes(normalizedSearch));
+  });
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12">
@@ -1205,8 +1245,60 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
         </span>
       </div>
 
+      <div className="bg-white rounded-lg shadow p-4 space-y-3">
+        <div className="relative">
+          <Search className="h-4 w-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
+          <input
+            type="text"
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            className="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            placeholder="Buscar por lançamento, pedido ou cliente"
+          />
+        </div>
+
+        <div className="grid grid-cols-3 gap-2">
+          <button
+            type="button"
+            onClick={() => setStatusFilter('pending')}
+            className={`px-3 py-2 rounded-md text-sm font-medium border transition-colors ${statusFilter === 'pending'
+              ? 'bg-yellow-100 text-yellow-800 border-yellow-300'
+              : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'
+              }`}
+          >
+            Pendentes ({statusCounts.pending})
+          </button>
+          <button
+            type="button"
+            onClick={() => setStatusFilter('delivered')}
+            className={`px-3 py-2 rounded-md text-sm font-medium border transition-colors ${statusFilter === 'delivered'
+              ? 'bg-green-100 text-green-800 border-green-300'
+              : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'
+              }`}
+          >
+            Entregues ({statusCounts.delivered})
+          </button>
+          <button
+            type="button"
+            onClick={() => setStatusFilter('returned')}
+            className={`px-3 py-2 rounded-md text-sm font-medium border transition-colors ${statusFilter === 'returned'
+              ? 'bg-red-100 text-red-800 border-red-300'
+              : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'
+              }`}
+          >
+            Retornados ({statusCounts.returned})
+          </button>
+        </div>
+      </div>
+
       {/* Orders List */}
-      {routeOrders.map((routeOrder) => {
+      {filteredRouteOrders.length === 0 && (
+        <div className="bg-white rounded-lg shadow p-6 text-center text-sm text-gray-500">
+          Nenhum pedido encontrado para o filtro atual.
+        </div>
+      )}
+
+      {filteredRouteOrders.map((routeOrder) => {
         const order = routeOrder.order;
         if (!order) return null;
         const selectedReason = returnReasonByOrder[routeOrder.id] || '';
@@ -1253,7 +1345,10 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
                       ) : null;
                     })()}
                   </div>
-                  <div>Pedido: {order.order_id_erp}</div>
+                  <div>
+                    Pedido:{' '}
+                    <span className="font-bold text-blue-600">{order.order_id_erp}</span>
+                  </div>
                   {(() => {
                     const items: any[] = Array.isArray(order.items_json) ? order.items_json as any[] : [];
                     const v = items.reduce((sum: number, it: any) => sum + Number(it.total_price_real ?? it.total_price ?? (Number(it.unit_price_real ?? it.unit_price ?? 0) * Number(it.purchased_quantity ?? 1))), 0);
