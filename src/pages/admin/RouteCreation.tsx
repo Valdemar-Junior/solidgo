@@ -665,12 +665,23 @@ function RouteCreationContent() {
 
       const refreshedManifest = data?.manifest as RouteMdfeManifest | undefined;
       const pdfUrl = refreshedManifest?.pdf_url || routeMdfeManifest.pdf_url;
+      const nextStatus = refreshedManifest?.status || routeMdfeManifest.status;
+
+      if (!ACTIVE_MDFE_STATUSES.has(nextStatus)) {
+        setRouteMdfeManifest(null);
+        toast.info(
+          nextStatus === 'error'
+            ? 'O MDF-e anterior retornou com erro. A rota voltou a permitir nova emissao.'
+            : 'O MDF-e anterior nao esta mais ativo. A rota voltou a permitir nova emissao.'
+        );
+        return;
+      }
 
       setRouteMdfeManifest((previous) =>
         previous
           ? {
               ...previous,
-              status: refreshedManifest?.status || previous.status,
+              status: nextStatus,
               pdf_url: pdfUrl || previous.pdf_url,
             }
           : previous

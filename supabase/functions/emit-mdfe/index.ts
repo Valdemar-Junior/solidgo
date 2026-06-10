@@ -1,5 +1,14 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.49.8';
 import { corsHeaders } from '../_shared/cors.ts';
+import {
+  getFocusBaseUrl,
+  getFocusToken,
+  mapFocusMdfeStatus,
+  normalizeEnvironment,
+  resolveFocusMessage,
+  resolveFocusUserMessage,
+  safeJson,
+} from '../_shared/focus.ts';
 
 type EmitRequest = {
   routeId?: string;
@@ -7,6 +16,7 @@ type EmitRequest = {
   vehicleId?: string;
   driverId?: string;
   routeOrderIds?: string[];
+  manualGrossWeight?: number | string | null;
 };
 
 type ParsedDocument = {
@@ -78,6 +88,7 @@ Deno.serve(async (request) => {
     const selectedRouteOrderIds = Array.isArray(body.routeOrderIds)
       ? body.routeOrderIds.map((value) => String(value || '').trim()).filter(Boolean)
       : [];
+    const manualGrossWeight = parseOptionalDecimal(body.manualGrossWeight);
 
     if (!routeId || !emitterId || !vehicleId || !driverId) {
       return jsonResponse(
@@ -117,7 +128,7 @@ Deno.serve(async (request) => {
           .single(),
         adminClient
           .from('mdfe_manifests')
-          .select('id, status, focus_reference')
+          .select('id, status, focus_reference, response_json, error_message')
           .eq('route_id', routeId)
           .in('status', ['draft', 'processing', 'issued'])
           .limit(1)
@@ -143,27 +154,36 @@ Deno.serve(async (request) => {
     if (!driver) return jsonResponse({ error: 'Condutor MDF-e nao encontrado ou inativo.', user_message: 'O condutor selecionado nao esta disponivel. Revise o cadastro de condutores MDF-e.' }, 422);
 
     const environment = normalizeEnvironment(settings.environment);
-    const focusToken =
-      environment === 'production'
-        ? Deno.env.get('FOCUS_NFE_PRODUCTION_TOKEN') || Deno.env.get('FOCUS_NFE_TOKEN')
-        : Deno.env.get('FOCUS_NFE_HOMOLOGATION_TOKEN') || Deno.env.get('FOCUS_NFE_TOKEN');
+    const focusToken = getFocusToken(environment);
 
     if (!focusToken) {
       return jsonResponse({ error: 'Token da Focus nao configurado no backend.', user_message: 'O token da Focus nao esta configurado no servidor. Fale com o administrador do sistema.' }, 500);
     }
 
-    const configuredBaseUrl = Deno.env.get('FOCUS_NFE_BASE_URL')?.trim();
-    const focusBaseUrl =
-      configuredBaseUrl ||
-      (environment === 'production'
-        ? 'https://api.focusnfe.com.br'
-        : 'https://homologacao.focusnfe.com.br');
+    const focusBaseUrl = getFocusBaseUrl(environment);
 
     if (duplicateResponse.data) {
       const duplicateStatus = String(duplicateResponse.data.status || '');
       const duplicateReference = String(duplicateResponse.data.focus_reference || '').trim();
+      const localDerivedStatus = mapFocusMdfeStatus(duplicateResponse.data.response_json, duplicateStatus as any);
 
-      if (duplicateStatus === 'processing' && duplicateReference) {
+      if (localDerivedStatus && localDerivedStatus !== duplicateStatus) {
+        await adminClient
+          .from('mdfe_manifests')
+          .update({
+            status: localDerivedStatus,
+            error_message: localDerivedStatus === 'error'
+              ? resolveFocusMessage(duplicateResponse.data.response_json)
+              : null,
+            issued_at: localDerivedStatus === 'issued' ? new Date().toISOString() : null,
+            closed_at: localDerivedStatus === 'closed' ? new Date().toISOString() : null,
+          })
+          .eq('id', String(duplicateResponse.data.id));
+      }
+
+      if (localDerivedStatus === 'error' || localDerivedStatus === 'cancelled' || localDerivedStatus === 'closed') {
+        // libera nova tentativa
+      } else if (duplicateReference) {
         const remoteStatus = await reconcileManifestStatus({
           manifestId: String(duplicateResponse.data.id),
           reference: duplicateReference,
@@ -356,7 +376,10 @@ Deno.serve(async (request) => {
     const totalGrossWeight = documents.reduce((acc, document) => acc + Number(document.grossWeight || 0), 0);
     const lastDocument = documents[documents.length - 1];
     const reference = buildFocusReference(route.route_code || route.id);
-    const payloadGrossWeight = environment === 'homologation' ? 5 : totalGrossWeight;
+    const resolvedGrossWeight = manualGrossWeight > 0 ? manualGrossWeight : totalGrossWeight;
+    const payloadGrossWeight = environment === 'homologation' ? Math.max(resolvedGrossWeight, 5) : resolvedGrossWeight;
+    const normalizedPlate = cleanVehiclePlate(vehicle.plate);
+    const normalizedRenavam = cleanDigits(vehicle.renavam);
     const conflictingManifestResponse = await adminClient
       .from('mdfe_manifests')
       .select(`
@@ -364,6 +387,7 @@ Deno.serve(async (request) => {
         route_id,
         status,
         focus_reference,
+        response_json,
         loading_uf,
         unloading_uf,
         route:routes!mdfe_manifests_route_id_fkey(route_code, name)
@@ -383,8 +407,25 @@ Deno.serve(async (request) => {
       const conflictingManifest = conflictingManifestResponse.data as any;
       const conflictingStatus = String(conflictingManifest.status || '');
       const conflictingReference = String(conflictingManifest.focus_reference || '').trim();
+      const localDerivedStatus = mapFocusMdfeStatus(conflictingManifest.response_json, conflictingStatus as any);
 
-      if (conflictingStatus === 'processing' && conflictingReference) {
+      if (localDerivedStatus && localDerivedStatus !== conflictingStatus) {
+        await adminClient
+          .from('mdfe_manifests')
+          .update({
+            status: localDerivedStatus,
+            error_message: localDerivedStatus === 'error'
+              ? resolveFocusMessage(conflictingManifest.response_json)
+              : null,
+            issued_at: localDerivedStatus === 'issued' ? new Date().toISOString() : null,
+            closed_at: localDerivedStatus === 'closed' ? new Date().toISOString() : null,
+          })
+          .eq('id', String(conflictingManifest.id));
+      }
+
+      if (localDerivedStatus === 'error' || localDerivedStatus === 'cancelled' || localDerivedStatus === 'closed') {
+        // nao bloqueia
+      } else if (conflictingReference) {
         const remoteStatus = await reconcileManifestStatus({
           manifestId: String(conflictingManifest.id),
           reference: conflictingReference,
@@ -431,6 +472,7 @@ Deno.serve(async (request) => {
         route_id,
         status,
         focus_reference,
+        response_json,
         route:routes!mdfe_manifests_route_id_fkey(route_code, name)
       `)
       .eq('driver_id', driverId)
@@ -446,8 +488,25 @@ Deno.serve(async (request) => {
       const conflictingManifest = driverConflictResponse.data as any;
       const conflictingStatus = String(conflictingManifest.status || '');
       const conflictingReference = String(conflictingManifest.focus_reference || '').trim();
+      const localDerivedStatus = mapFocusMdfeStatus(conflictingManifest.response_json, conflictingStatus as any);
 
-      if (conflictingStatus === 'processing' && conflictingReference) {
+      if (localDerivedStatus && localDerivedStatus !== conflictingStatus) {
+        await adminClient
+          .from('mdfe_manifests')
+          .update({
+            status: localDerivedStatus,
+            error_message: localDerivedStatus === 'error'
+              ? resolveFocusMessage(conflictingManifest.response_json)
+              : null,
+            issued_at: localDerivedStatus === 'issued' ? new Date().toISOString() : null,
+            closed_at: localDerivedStatus === 'closed' ? new Date().toISOString() : null,
+          })
+          .eq('id', String(conflictingManifest.id));
+      }
+
+      if (localDerivedStatus === 'error' || localDerivedStatus === 'cancelled' || localDerivedStatus === 'closed') {
+        // nao bloqueia
+      } else if (conflictingReference) {
         const remoteStatus = await reconcileManifestStatus({
           manifestId: String(conflictingManifest.id),
           reference: conflictingReference,
@@ -518,11 +577,11 @@ Deno.serve(async (request) => {
       tipo_carga: '05',
       descricao_produto: 'Moveis',
       veiculo_tracao: {
-        placa: vehicle.plate,
+        placa: normalizedPlate,
       },
       modal_rodoviario: {
-        placa_veiculo: vehicle.plate,
-        ...(vehicle.renavam ? { renavam_veiculo: vehicle.renavam } : {}),
+        placa_veiculo: normalizedPlate,
+        ...(normalizedRenavam.length >= 9 ? { renavam_veiculo: normalizedRenavam } : {}),
         tara_veiculo: Number(vehicle.tara_kg || 0),
         ...(vehicle.capacity_kg ? { capacidade_kg_veiculo: Number(vehicle.capacity_kg) } : {}),
         ...(vehicle.capacity_m3 ? { capacidade_m3_veiculo: Number(vehicle.capacity_m3) } : {}),
@@ -569,6 +628,8 @@ Deno.serve(async (request) => {
       );
     }
 
+    const focusDerivedStatus = mapFocusMdfeStatus(focusJson, 'processing');
+
     const { data: manifest, error: manifestError } = await adminClient
       .from('mdfe_manifests')
       .insert({
@@ -576,7 +637,7 @@ Deno.serve(async (request) => {
         emitter_id: emitterId,
         vehicle_id: vehicleId,
         driver_id: driverId,
-        status: 'processing',
+        status: focusDerivedStatus || 'processing',
         environment,
         operation_type: settings.operation_type || 'cargo_propria',
         loading_city_code: loadingCityCode,
@@ -589,10 +650,17 @@ Deno.serve(async (request) => {
         total_value: totalValue,
         total_gross_weight: payloadGrossWeight,
         focus_reference: reference,
+        mdfe_number: focusJson?.numero ? String(focusJson.numero) : null,
+        mdfe_key: focusJson?.chave ? String(focusJson.chave) : null,
+        protocol: focusJson?.protocolo ? String(focusJson.protocolo) : null,
+        pdf_url: focusJson?.caminho_damdfe || null,
         payload_json: payload,
         response_json: focusJson ?? { raw: responseText },
-        issued_at: null,
-        error_message: null,
+        issued_at:
+          focusDerivedStatus === 'issued' || focusDerivedStatus === 'closed' || focusDerivedStatus === 'cancelled'
+            ? new Date().toISOString()
+            : null,
+        error_message: focusDerivedStatus === 'error' ? resolveFocusMessage(focusJson) : null,
       })
       .select('id')
       .single();
@@ -620,6 +688,22 @@ Deno.serve(async (request) => {
       .insert(manifestDocuments);
 
     if (documentsError) throw documentsError;
+
+    if (focusDerivedStatus === 'error') {
+      return jsonResponse(
+        {
+          error: 'A Focus rejeitou a emissao do MDF-e.',
+          user_message:
+            resolveFocusUserMessage(focusJson) ||
+            'A Focus recusou a emissao. Revise os dados fiscais do manifesto e tente novamente.',
+          manifest_id: manifest.id,
+          reference,
+          focus_response: focusJson ?? responseText,
+          payload,
+        },
+        422
+      );
+    }
 
     return jsonResponse({
       ok: true,
@@ -752,21 +836,26 @@ function parseDecimal(value: string) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function parseOptionalDecimal(value: unknown) {
+  const normalized = String(value ?? '').trim().replace(',', '.');
+  if (!normalized) return 0;
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
 function cleanDigits(value: string | null | undefined) {
   return String(value || '').replace(/\D/g, '');
+}
+
+function cleanVehiclePlate(value: string | null | undefined) {
+  return String(value || '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '');
 }
 
 function buildFocusReference(routeCode: string) {
   const base = String(routeCode || 'mdfe').replace(/[^a-zA-Z0-9_-]/g, '-');
   return `${base}-${Date.now()}`;
-}
-
-function safeJson(value: string) {
-  try {
-    return JSON.parse(value);
-  } catch {
-    return null;
-  }
 }
 
 async function reconcileManifestStatus({
@@ -794,7 +883,29 @@ async function reconcileManifestStatus({
 
     const responseText = await response.text();
     const focusJson = safeJson(responseText) ?? { raw: responseText };
-    const mappedStatus = mapFocusStatusToLocal(focusJson);
+
+    if (response.status === 404) {
+      await adminClient
+        .from('mdfe_manifests')
+        .update({
+          status: 'error',
+          response_json: focusJson,
+          mdfe_number: null,
+          mdfe_key: null,
+          protocol: null,
+          pdf_url: null,
+          issued_at: null,
+          closed_at: null,
+          error_message:
+            resolveFocusMessage(focusJson) ||
+            'Manifesto nao encontrado na Focus. O registro local foi marcado como erro.',
+        })
+        .eq('id', manifestId);
+
+      return 'error';
+    }
+
+    const mappedStatus = mapFocusMdfeStatus(focusJson);
 
     if (mappedStatus) {
       await adminClient
@@ -802,7 +913,16 @@ async function reconcileManifestStatus({
         .update({
           status: mappedStatus,
           response_json: focusJson,
+          mdfe_number: focusJson?.numero ? String(focusJson.numero) : null,
+          mdfe_key: focusJson?.chave ? String(focusJson.chave) : null,
+          protocol: focusJson?.protocolo ? String(focusJson.protocolo) : null,
+          pdf_url: focusJson?.caminho_damdfe || null,
           error_message: mappedStatus === 'error' ? resolveFocusMessage(focusJson) : null,
+          issued_at:
+            mappedStatus === 'issued' || mappedStatus === 'closed' || mappedStatus === 'cancelled'
+              ? new Date().toISOString()
+              : null,
+          closed_at: mappedStatus === 'closed' ? new Date().toISOString() : null,
         })
         .eq('id', manifestId);
     }
@@ -812,66 +932,6 @@ async function reconcileManifestStatus({
     console.warn('Falha ao reconciliar status do MDF-e na Focus:', error);
     return null;
   }
-}
-
-function mapFocusStatusToLocal(payload: any) {
-  const status = normalizeStatus(
-    payload?.status ||
-      payload?.situacao ||
-      payload?.status_sefaz ||
-      payload?.descricao_status ||
-      payload?.codigo_status
-  );
-
-  if (!status) return null;
-  if (status.includes('autoriz')) return 'issued';
-  if (status.includes('encerr')) return 'closed';
-  if (status.includes('cancel')) return 'cancelled';
-  if (
-    status.includes('erro') ||
-    status.includes('rejei') ||
-    status.includes('deneg') ||
-    status.includes('nao autoriz')
-  ) {
-    return 'error';
-  }
-  if (status.includes('process')) return 'processing';
-  return null;
-}
-
-function resolveFocusMessage(payload: any) {
-  return (
-    payload?.mensagem ||
-    payload?.message ||
-    payload?.descricao ||
-    payload?.status_sefaz ||
-    payload?.codigo_status ||
-    null
-  );
-}
-
-function resolveFocusUserMessage(payload: any) {
-  return (
-    payload?.mensagem_sefaz ||
-    payload?.mensagem ||
-    payload?.message ||
-    payload?.descricao ||
-    null
-  );
-}
-
-function normalizeStatus(value: unknown) {
-  return String(value || '')
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .trim()
-    .toLowerCase();
-}
-
-function normalizeEnvironment(value: unknown) {
-  const normalized = normalizeStatus(value);
-  if (normalized === 'production' || normalized === 'producao') return 'production';
-  return 'homologation';
 }
 
 function jsonResponse(body: unknown, status = 200) {

@@ -7,6 +7,7 @@ import { supabase } from '../../supabase/client';
 type MdfeSettingsRow = {
   id: string;
   enabled: boolean;
+  auto_close_on_route_complete: boolean;
   environment: 'homologation' | 'production';
   operation_type: 'cargo_propria';
   emit_type: number;
@@ -27,6 +28,7 @@ type EmitterOption = {
 const emptyForm: MdfeSettingsRow = {
   id: '',
   enabled: false,
+  auto_close_on_route_complete: false,
   environment: 'homologation',
   operation_type: 'cargo_propria',
   emit_type: 2,
@@ -86,6 +88,7 @@ export default function MdfeSettings() {
       const payload = {
         id: form.id || undefined,
         enabled: form.enabled,
+        auto_close_on_route_complete: form.auto_close_on_route_complete,
         environment: form.environment,
         operation_type: 'cargo_propria',
         emit_type: 2,
@@ -172,6 +175,26 @@ export default function MdfeSettings() {
                   type="checkbox"
                   checked={form.enabled}
                   onChange={(e) => setForm((current) => ({ ...current, enabled: e.target.checked }))}
+                  className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                />
+              </div>
+            </label>
+
+            <label className="rounded-2xl border border-slate-200 p-4">
+              <span className="block text-sm font-medium text-slate-700">Encerrar MDF-e ao finalizar rota</span>
+              <span className="mt-1 block text-xs text-slate-500">
+                Quando ligado, a finalizacao da rota pelo motorista tentara encerrar automaticamente o MDF-e emitido daquela viagem.
+              </span>
+              <div className="mt-4">
+                <input
+                  type="checkbox"
+                  checked={form.auto_close_on_route_complete}
+                  onChange={(e) =>
+                    setForm((current) => ({
+                      ...current,
+                      auto_close_on_route_complete: e.target.checked,
+                    }))
+                  }
                   className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
                 />
               </div>

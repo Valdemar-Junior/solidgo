@@ -236,6 +236,22 @@ export class BackgroundSyncService {
     const { error } = await supabase.from('routes').update({ status: 'completed' }).eq('id', route_id);
     if (error) throw error;
 
+    try {
+      const { data: mdfeData, error: mdfeError } = await supabase.functions.invoke('auto-close-route-mdfe', {
+        body: { routeId: route_id },
+      });
+
+      if (mdfeError) {
+        console.warn('[BackgroundSync] Failed to auto-close MDF-e after route completion:', mdfeError);
+      } else if (mdfeData?.closed) {
+        console.log('[BackgroundSync] MDF-e auto-closed after route completion:', route_id);
+      } else if (mdfeData?.reason) {
+        console.log('[BackgroundSync] MDF-e auto-close skipped:', mdfeData.reason, route_id);
+      }
+    } catch (mdfeAutoCloseError) {
+      console.warn('[BackgroundSync] Unexpected MDF-e auto-close error:', mdfeAutoCloseError);
+    }
+
     // 2. Release returned orders for routing
     const { data: returnedOrders } = await supabase
       .from('route_orders')

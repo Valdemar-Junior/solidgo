@@ -1,5 +1,14 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.49.8';
 import { corsHeaders } from '../_shared/cors.ts';
+import {
+  getFocusBaseUrl,
+  getFocusToken,
+  mapFocusMdfeStatus,
+  normalizeEnvironment,
+  resolveFocusMessage,
+  resolveFocusUserMessage,
+  safeJson,
+} from '../_shared/focus.ts';
 
 const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
 const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY')!;
@@ -68,21 +77,13 @@ Deno.serve(async (request) => {
     }
 
     const environment = normalizeEnvironment(manifest.environment);
-    const focusToken =
-      environment === 'production'
-        ? Deno.env.get('FOCUS_NFE_PRODUCTION_TOKEN') || Deno.env.get('FOCUS_NFE_TOKEN')
-        : Deno.env.get('FOCUS_NFE_HOMOLOGATION_TOKEN') || Deno.env.get('FOCUS_NFE_TOKEN');
+    const focusToken = getFocusToken(environment);
 
     if (!focusToken) {
       return jsonResponse({ error: 'Token da Focus nao configurado no backend.', user_message: 'O token da Focus nao esta configurado no servidor. Fale com o administrador do sistema.' }, 500);
     }
 
-    const configuredBaseUrl = Deno.env.get('FOCUS_NFE_BASE_URL')?.trim();
-    const focusBaseUrl =
-      configuredBaseUrl ||
-      (environment === 'production'
-        ? 'https://api.focusnfe.com.br'
-        : 'https://homologacao.focusnfe.com.br');
+    const focusBaseUrl = getFocusBaseUrl(environment);
 
     const focusResponse = await fetch(
       `${focusBaseUrl.replace(/\/$/, '')}/v2/mdfe/${encodeURIComponent(manifest.focus_reference)}`,
@@ -99,6 +100,41 @@ Deno.serve(async (request) => {
     const focusJson = safeJson(responseText);
 
     if (!focusResponse.ok) {
+      if (focusResponse.status === 404) {
+        const notFoundPayload: Record<string, unknown> = {
+          status: 'error',
+          response_json: focusJson ?? { raw: responseText },
+          error_message:
+            resolveFocusUserMessage(focusJson) ||
+            'Manifesto nao encontrado na Focus. O registro local sera tratado como erro.',
+          issued_at: null,
+          closed_at: null,
+          mdfe_number: null,
+          mdfe_key: null,
+          protocol: null,
+          pdf_url: null,
+          xml_content: null,
+        };
+
+        const { data: updatedManifest, error: updateError } = await adminClient
+          .from('mdfe_manifests')
+          .update(notFoundPayload)
+          .eq('id', manifestId)
+          .select(
+            'id, status, mdfe_number, mdfe_key, protocol, pdf_url, issued_at, closed_at, error_message'
+          )
+          .single();
+
+        if (updateError) throw updateError;
+
+        return jsonResponse({
+          ok: true,
+          manifest: updatedManifest,
+          focus_response: focusJson ?? responseText,
+          warning: 'Manifesto nao localizado na Focus e ajustado para erro no cadastro local.',
+        });
+      }
+
       return jsonResponse(
         {
           error: 'A Focus rejeitou a consulta do MDF-e.',
@@ -113,7 +149,7 @@ Deno.serve(async (request) => {
     }
 
     const remote = focusJson ?? {};
-    const nextStatus = mapFocusStatusToLocal(remote);
+    const nextStatus = mapFocusMdfeStatus(remote, manifest.status as any) || 'processing';
     const xmlContent = remote.caminho_xml ? await fetchText(remote.caminho_xml) : null;
 
     const updatePayload: Record<string, unknown> = {
@@ -165,60 +201,6 @@ async function fetchText(url: string) {
     const response = await fetch(url, { method: 'GET' });
     if (!response.ok) return null;
     return await response.text();
-  } catch {
-    return null;
-  }
-}
-
-function mapFocusStatusToLocal(payload: any) {
-  const status = normalizeStatus(payload?.status);
-  const sefazCode = String(payload?.status_sefaz || '').trim();
-
-  if (status.includes('process')) return 'processing';
-  if (status.includes('encerr')) return 'closed';
-  if (status.includes('cancel')) return 'cancelled';
-  if (status.includes('autoriz') || sefazCode === '100') return 'issued';
-  if (status.includes('erro') || status.includes('rejei')) return 'error';
-  return 'processing';
-}
-
-function resolveFocusMessage(payload: any) {
-  return (
-    payload?.mensagem_sefaz ||
-    payload?.mensagem ||
-    payload?.message ||
-    payload?.status_sefaz ||
-    null
-  );
-}
-
-function resolveFocusUserMessage(payload: any) {
-  return (
-    payload?.mensagem_sefaz ||
-    payload?.mensagem ||
-    payload?.message ||
-    payload?.descricao ||
-    null
-  );
-}
-
-function normalizeStatus(value: unknown) {
-  return String(value || '')
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .trim()
-    .toLowerCase();
-}
-
-function normalizeEnvironment(value: unknown) {
-  const normalized = normalizeStatus(value);
-  if (normalized === 'production' || normalized === 'producao') return 'production';
-  return 'homologation';
-}
-
-function safeJson(value: string) {
-  try {
-    return JSON.parse(value);
   } catch {
     return null;
   }

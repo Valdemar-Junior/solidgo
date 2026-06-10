@@ -1,5 +1,13 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.49.8';
 import { corsHeaders } from '../_shared/cors.ts';
+import {
+  getFocusBaseUrl,
+  getFocusToken,
+  normalizeEnvironment,
+  normalizeStatus,
+  resolveFocusUserMessage,
+  safeJson,
+} from '../_shared/focus.ts';
 
 const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
 const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY')!;
@@ -93,21 +101,13 @@ Deno.serve(async (request) => {
     }
 
     const environment = normalizeEnvironment(manifest.environment);
-    const focusToken =
-      environment === 'production'
-        ? Deno.env.get('FOCUS_NFE_PRODUCTION_TOKEN') || Deno.env.get('FOCUS_NFE_TOKEN')
-        : Deno.env.get('FOCUS_NFE_HOMOLOGATION_TOKEN') || Deno.env.get('FOCUS_NFE_TOKEN');
+    const focusToken = getFocusToken(environment);
 
     if (!focusToken) {
       return jsonResponse({ error: 'Token da Focus nao configurado no backend.', user_message: 'O token da Focus nao esta configurado no servidor. Fale com o administrador do sistema.' }, 500);
     }
 
-    const configuredBaseUrl = Deno.env.get('FOCUS_NFE_BASE_URL')?.trim();
-    const focusBaseUrl =
-      configuredBaseUrl ||
-      (environment === 'production'
-        ? 'https://api.focusnfe.com.br'
-        : 'https://homologacao.focusnfe.com.br');
+    const focusBaseUrl = getFocusBaseUrl(environment);
 
     const focusResponse = await fetch(
       `${focusBaseUrl.replace(/\/$/, '')}/v2/mdfe/${encodeURIComponent(manifest.focus_reference)}/encerrar`,
@@ -183,38 +183,6 @@ function getCurrentDate() {
     month: '2-digit',
     day: '2-digit',
   }).format(new Date());
-}
-
-function normalizeStatus(value: unknown) {
-  return String(value || '')
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .trim()
-    .toLowerCase();
-}
-
-function normalizeEnvironment(value: unknown) {
-  const normalized = normalizeStatus(value);
-  if (normalized === 'production' || normalized === 'producao') return 'production';
-  return 'homologation';
-}
-
-function safeJson(value: string) {
-  try {
-    return JSON.parse(value);
-  } catch {
-    return null;
-  }
-}
-
-function resolveFocusUserMessage(payload: any) {
-  return (
-    payload?.mensagem_sefaz ||
-    payload?.mensagem ||
-    payload?.message ||
-    payload?.descricao ||
-    null
-  );
 }
 
 function jsonResponse(body: unknown, status = 200) {

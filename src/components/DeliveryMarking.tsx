@@ -1041,6 +1041,24 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
         const { error } = await supabase.from('routes').update({ status: 'completed' }).eq('id', routeId);
         if (error) throw error;
 
+        try {
+          const { data: mdfeData, error: mdfeError } = await supabase.functions.invoke('auto-close-route-mdfe', {
+            body: { routeId },
+          });
+
+          if (mdfeError) {
+            console.warn('[FinalizeRoute] Falha ao encerrar MDF-e automaticamente:', mdfeError);
+            toast.warning('Rota finalizada, mas o MDF-e nao foi encerrado automaticamente. Revise o historico MDF-e.');
+          } else if (mdfeData?.closed) {
+            toast.success('MDF-e encerrado automaticamente ao finalizar a rota.');
+          } else if (mdfeData?.reason === 'manifest_not_issued') {
+            toast.warning('Rota finalizada, mas o MDF-e ainda nao estava autorizado para encerramento automatico.');
+          }
+        } catch (mdfeAutoCloseError) {
+          console.warn('[FinalizeRoute] Erro no encerramento automatico do MDF-e:', mdfeAutoCloseError);
+          toast.warning('Rota finalizada, mas houve falha ao encerrar o MDF-e automaticamente.');
+        }
+
         if (returnedIds.length > 0) {
           await supabase
             .from('orders')

@@ -544,24 +544,28 @@ export default function MdfeManifests() {
                               <FileDown className="h-4 w-4" />
                               Imprimir
                             </button>
-                            <button
-                              type="button"
-                              onClick={() => void closeManifest(manifest)}
-                              disabled={!canClose || isActing}
-                              className="inline-flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 disabled:opacity-60"
-                            >
-                              {isActing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-                              Encerrar
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => void cancelManifest(manifest)}
-                              disabled={!canCancel || isActing}
-                              className="inline-flex items-center gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700 hover:bg-rose-100 disabled:opacity-60"
-                            >
-                              {isActing ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />}
-                              Cancelar
-                            </button>
+                            {canClose && (
+                              <button
+                                type="button"
+                                onClick={() => void closeManifest(manifest)}
+                                disabled={isActing}
+                                className="inline-flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 disabled:opacity-60"
+                              >
+                                {isActing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                                Encerrar
+                              </button>
+                            )}
+                            {canCancel && (
+                              <button
+                                type="button"
+                                onClick={() => void cancelManifest(manifest)}
+                                disabled={isActing}
+                                className="inline-flex items-center gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700 hover:bg-rose-100 disabled:opacity-60"
+                              >
+                                {isActing ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />}
+                                Cancelar
+                              </button>
+                            )}
                           </div>
                         </td>
                       </tr>

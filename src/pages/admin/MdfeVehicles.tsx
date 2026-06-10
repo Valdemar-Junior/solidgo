@@ -138,11 +138,14 @@ export default function MdfeVehicles() {
 
     try {
       setSaving(true);
+      const normalizedPlate = form.plate.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+      const normalizedRenavam = String(form.renavam || '').replace(/\D/g, '');
+
       const payload = {
         id: editingId || undefined,
         display_name: form.display_name.trim(),
-        plate: form.plate.trim().toUpperCase(),
-        renavam: form.renavam?.trim() || null,
+        plate: normalizedPlate,
+        renavam: normalizedRenavam || null,
         tara_kg: Number(form.tara_kg || 0),
         capacity_kg: form.capacity_kg === null || form.capacity_kg === undefined || String(form.capacity_kg) === '' ? null : Number(form.capacity_kg),
         capacity_m3: form.capacity_m3 === null || form.capacity_m3 === undefined || String(form.capacity_m3) === '' ? null : Number(form.capacity_m3),
