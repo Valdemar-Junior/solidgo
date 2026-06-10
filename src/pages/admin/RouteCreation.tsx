@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+﻿import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { supabase } from '../../supabase/client';
 import type { DeliveryRouteCatalog, Order, DriverWithUser, Vehicle, RouteWithDetails } from '../../types/database';
@@ -137,7 +137,7 @@ class RouteCreationErrorBoundary extends React.Component<
             </div>
             <h2 className="text-xl font-bold text-gray-900 mb-2">Ops! Algo deu errado.</h2>
             <p className="text-gray-500 mb-6">
-              Ocorreu um erro ao carregar a tela de rotas. Isso geralmente acontece devido a uma configuração antiga salva no navegador.
+              Ocorreu um erro ao carregar a tela de rotas. Isso geralmente acontece devido a uma configuraÃ§Ã£o antiga salva no navegador.
             </p>
             <div className="bg-red-50 p-3 rounded-lg text-left text-xs font-mono text-red-700 mb-6 overflow-auto max-h-32">
               {this.state.error?.message || 'Erro desconhecido'}
@@ -147,7 +147,7 @@ class RouteCreationErrorBoundary extends React.Component<
               className="w-full flex items-center justify-center px-4 py-3 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 transition-colors shadow-sm"
             >
               <RefreshCcw className="h-4 w-4 mr-2" />
-              Limpar Configurações e Recarregar
+              Limpar ConfiguraÃ§Ãµes e Recarregar
             </button>
           </div>
         </div>
@@ -184,7 +184,7 @@ function RouteCreationContent() {
   const [helpers, setHelpers] = useState<any[]>([]);
   const [selectedTeam, setSelectedTeam] = useState<string>('');
   const [selectedHelper, setSelectedHelper] = useState<string>(''); // helper_id
-  const [pickupTeam, setPickupTeam] = useState<string>(''); // Novo estado para seleção de equipe na coleta
+  const [pickupTeam, setPickupTeam] = useState<string>(''); // Novo estado para seleÃ§Ã£o de equipe na coleta
 
   // UI States
   const [loading, setLoading] = useState(true);
@@ -341,8 +341,8 @@ function RouteCreationContent() {
 
     const hasFreteFull = (o: any) => {
       const raw = o.raw_json || {};
-      // Verifica se existe tag "FULL" ou similar nas observações ou campo específico
-      // Adapte conforme sua lógica original se "hasFreteFull" existir fora
+      // Verifica se existe tag "FULL" ou similar nas observaÃ§Ãµes ou campo especÃ­fico
+      // Adapte conforme sua lÃ³gica original se "hasFreteFull" existir fora
       const obs = String(o.observacoes_internas || raw.observacoes_internas || '').toUpperCase();
       const obsPub = String(o.observacoes || raw.observacoes || '').toUpperCase();
       return (o.tem_frete_full === 'SIM') || obs.includes('FULL') || obsPub.includes('FULL');
@@ -387,7 +387,7 @@ function RouteCreationContent() {
       if (filterCity && !city.includes(filterCity.toLowerCase())) return false;
       if (filterNeighborhood && !nb.includes(filterNeighborhood.toLowerCase())) return false;
 
-      // Busca rápida
+      // Busca rÃ¡pida
       if (clientQuery) {
         const q = clientQuery.toLowerCase().trim();
         const orderIdErp = String(o.order_id_erp || raw.lancamento_venda || '').toLowerCase();
@@ -576,6 +576,14 @@ function RouteCreationContent() {
     });
   }, [filteredRows, sortColumn, sortDirection]);
 
+  const visibleUniqueOrderIds = useMemo(() => {
+    const ids = new Set<string>();
+    sortedRows.forEach(({ order }) => {
+      if (order?.id) ids.add(String(order.id));
+    });
+    return ids;
+  }, [sortedRows]);
+
 
   // Pickup Modal State
   const [showPickupModal, setShowPickupModal] = useState(false);
@@ -758,7 +766,7 @@ function RouteCreationContent() {
     const finalRouteName = shouldUseCatalogName ? selectedCatalogRouteName : editRouteName.trim();
 
     if (!finalRouteName) {
-      toast.error(shouldUseCatalogName ? 'Por favor, selecione uma rota cadastrada' : 'Nome da rota é obrigatório');
+      toast.error(shouldUseCatalogName ? 'Por favor, selecione uma rota cadastrada' : 'Nome da rota Ã© obrigatÃ³rio');
       return;
     }
 
@@ -780,7 +788,7 @@ function RouteCreationContent() {
       if (error) throw error;
       await loadData(false);
 
-      // OTIMIZAÇÃO: Excluindo campos pesados (danfe_base64, return_danfe_base64, xml_documento, raw_json, return_nfe_xml)
+      // OTIMIZAÃ‡ÃƒO: Excluindo campos pesados (danfe_base64, return_danfe_base64, xml_documento, raw_json, return_nfe_xml)
       const ORDERS_SAFE_COLS = 'id,order_id_erp,customer_name,phone,address_json,items_json,status,created_at,updated_at,filial_venda,data_venda,previsao_entrega,tem_frete_full,observacoes_publicas,observacoes_internas,customer_cpf,vendedor_nome,return_flag,last_return_reason,last_return_notes,brand,department,service_type,erp_status,blocked_at,blocked_reason,requires_pickup,pickup_created_at,return_nfe_number,return_nfe_key,return_date,return_type,import_source,previsao_montagem,product_group,product_subgroup,danfe_gerada_em';
       const { data: refreshed } = await supabase.from('routes')
         .select(`*, driver:drivers!driver_id(*, user:users!user_id(*)), vehicle:vehicles!vehicle_id(*), route_orders(*, order:orders!order_id(${ORDERS_SAFE_COLS}))`)
@@ -792,13 +800,13 @@ function RouteCreationContent() {
     })();
 
     toast.promise(updatePromise, {
-      pending: 'Salvando alterações...',
+      pending: 'Salvando alteraÃ§Ãµes...',
       success: 'Rota atualizada com sucesso!',
       error: 'Erro ao atualizar rota'
     } as any);
   };
 
-  // Motorista placeholder para retiradas - não será mostrado na UI
+  // Motorista placeholder para retiradas - nÃ£o serÃ¡ mostrado na UI
   const PICKUP_PLACEHOLDER_DRIVER_ID = '6bb1d41b-0a88-4468-8902-c42402fc0aeb';
 
   const filteredRoutesList = useMemo(() => {
@@ -819,7 +827,7 @@ function RouteCreationContent() {
       const tabMatch = activeRoutesTab === 'pickups' ? isPkp : !isPkp;
       if (!tabMatch) return false;
 
-      // Busca rápida por nome, motorista ou código
+      // Busca rÃ¡pida por nome, motorista ou cÃ³digo
       if (routeSearchQuery) {
         const q = routeSearchQuery.toLowerCase().trim();
         const routeName = String(r.name || '').toLowerCase();
@@ -840,7 +848,7 @@ function RouteCreationContent() {
   const [launchType, setLaunchType] = useState<'troca' | 'assistencia' | 'venda'>('troca');
   const [launchLoading, setLaunchLoading] = useState(false);
 
-  // --- NOVO: Estados para Preview de Lançamento Avulso (RouteCreation) ---
+  // --- NOVO: Estados para Preview de LanÃ§amento Avulso (RouteCreation) ---
   const [previewLaunchData, setPreviewLaunchData] = useState<any>(null); // Dados brutos do N8N
   const [showLaunchPreview, setShowLaunchPreview] = useState(false);
   const [selectedItemsForImport, setSelectedItemsForImport] = useState<{
@@ -851,7 +859,7 @@ function RouteCreationContent() {
 
   const handleLaunchSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!launchNumber.trim()) { toast.error('Digite o número do lançamento'); return; }
+    if (!launchNumber.trim()) { toast.error('Digite o nÃºmero do lanÃ§amento'); return; }
 
     setLaunchLoading(true);
     try {
@@ -881,20 +889,20 @@ function RouteCreationContent() {
 
       const text = await response.text();
       let data: any;
-      try { data = JSON.parse(text); } catch { throw new Error('Resposta inválida do servidor (não é JSON)'); }
+      try { data = JSON.parse(text); } catch { throw new Error('Resposta invÃ¡lida do servidor (nÃ£o Ã© JSON)'); }
 
       const items = Array.isArray(data) ? data : [data];
       if (items.length === 0 || !items[0]) {
-        toast.error('Nenhum pedido encontrado com este lançamento');
+        toast.error('Nenhum pedido encontrado com este lanÃ§amento');
         setLaunchLoading(false);
         return;
       }
 
-      // Parar na Prévia em vez de salvar direto na DB
-      setPreviewLaunchData(items[0]); // Considera apenas 1 lançamento retornado
+      // Parar na PrÃ©via em vez de salvar direto na DB
+      setPreviewLaunchData(items[0]); // Considera apenas 1 lanÃ§amento retornado
       setShowLaunchPreview(true);
 
-      // Inicia com todos marcados para importar, e usa as flags e strings das observações nativas para marcar 'has_assembly' previstos.
+      // Inicia com todos marcados para importar, e usa as flags e strings das observaÃ§Ãµes nativas para marcar 'has_assembly' previstos.
       const initialSelection: Record<string, { import: boolean; has_assembly: boolean }> = {};
       const o = items[0];
       const produtos = Array.isArray(o.produtos) ? o.produtos : (Array.isArray(o.produtos_locais) ? o.produtos_locais : []);
@@ -906,7 +914,7 @@ function RouteCreationContent() {
         const predictedAssembly = (explicitFlag === 'Sim' || hasKeywordMontagem || String(p.produto_e_montavel ?? '').toLowerCase() === 'sim');
         
         initialSelection[index] = {
-          import: true, // Por padrão sugere trazer todas as peças daquela importação do Tiny
+          import: true, // Por padrÃ£o sugere trazer todas as peÃ§as daquela importaÃ§Ã£o do Tiny
           has_assembly: predictedAssembly
         };
       });
@@ -928,7 +936,7 @@ function RouteCreationContent() {
       const o = previewLaunchData;
       const rawProducts = Array.isArray(o.produtos) ? o.produtos : (Array.isArray(o.produtos_locais) ? o.produtos_locais : []);
       
-      // Filtrar apenas os produtos que o operador deixou marcado `import: true` (por padrão é true se não houver registro)
+      // Filtrar apenas os produtos que o operador deixou marcado `import: true` (por padrÃ£o Ã© true se nÃ£o houver registro)
       const produtosParaImportar = rawProducts.filter((p: any, index: number) => {
         const itemState = selectedItemsForImport[index];
         return itemState ? itemState.import : true;
@@ -955,7 +963,7 @@ function RouteCreationContent() {
 
       const itemsJson = produtosParaImportar.map((p: any, index: number) => {
         const itemState = selectedItemsForImport[index] || { import: true, has_assembly: false };
-        const isAssemblyRequiredCheckbox = itemState.has_assembly ? 'Sim' : 'Não'; // Força Sim ou Não com base na UI
+        const isAssemblyRequiredCheckbox = itemState.has_assembly ? 'Sim' : 'NÃ£o'; // ForÃ§a Sim ou NÃ£o com base na UI
 
         return {
           sku: getVal(p.codigo_produto),
@@ -969,7 +977,7 @@ function RouteCreationContent() {
           total_price: Number(p.valor_total_real ?? p.valor_total_item ?? 0),
           price: Number(p.valor_unitario_real ?? p.valor_unitario ?? 0),
           location: getVal(p.local_estocagem),
-          // AQUI ESTÁ O CARIMBO QUE O BANCO DE DADOS VAI LER NO FUTURO! (backgroundSync)
+          // AQUI ESTÃ O CARIMBO QUE O BANCO DE DADOS VAI LER NO FUTURO! (backgroundSync)
           has_assembly: isAssemblyRequiredCheckbox,
           produto_e_montavel: getVal(p.produto_e_montavel),
           labels: Array.isArray(p.etiquetas) ? p.etiquetas : [],
@@ -985,25 +993,25 @@ function RouteCreationContent() {
       // LOGICA 100% BLINDADA PARA SEQUENCIAIS
       if (launchType !== 'venda') {
         const suffixType = launchType === 'troca' ? '-T' : '-A';
-        // Remove sufixos existentes por precaução se por acaso vierem sujos do tiny (`12345-T-1` -> `12345`)
+        // Remove sufixos existentes por precauÃ§Ã£o se por acaso vierem sujos do tiny (`12345-T-1` -> `12345`)
         let baseId = erpId.replace(/-(T|A)(-\d+)?$/i, ''); 
 
-        // Vamos procurar no banco quantos já existem com essa Base
-        // Padrões de busca: '12345-A', '12345-A-1', '12345-A-2', etc.. e suas variações T.
+        // Vamos procurar no banco quantos jÃ¡ existem com essa Base
+        // PadrÃµes de busca: '12345-A', '12345-A-1', '12345-A-2', etc.. e suas variaÃ§Ãµes T.
         const { data: siblingOrders } = await supabase
           .from('orders')
           .select('order_id_erp')
           .ilike('order_id_erp', `${baseId}%`);
 
         if (!siblingOrders || siblingOrders.length === 0) {
-           erpId = `${baseId}${suffixType}-1`; // O primeiríssimo
+           erpId = `${baseId}${suffixType}-1`; // O primeirÃ­ssimo
         } else {
-           // Descobrir o número mais alto
+           // Descobrir o nÃºmero mais alto
            let highestSeq = 0;
            siblingOrders.forEach((so: any) => {
              const m = so.order_id_erp.match(/-(T|A)(?:-(\d+))?$/i);
              if (m) {
-               // Se é apenas "12345-A", o Match grupo 2 (o numero) vem undef. Consideramos sequencia 1.
+               // Se Ã© apenas "12345-A", o Match grupo 2 (o numero) vem undef. Consideramos sequencia 1.
                let seqNum = m[2] ? parseInt(m[2], 10) : 1;
                if (!isNaN(seqNum) && seqNum > highestSeq) {
                  highestSeq = seqNum;
@@ -1012,7 +1020,7 @@ function RouteCreationContent() {
            });
            
            if (highestSeq === 0 && siblingOrders.length > 0) {
-             // Caso raríssimo em que encontrou "12345", mas não tinha "-A" ou "-T" no final. Era a venda original solta.
+             // Caso rarÃ­ssimo em que encontrou "12345", mas nÃ£o tinha "-A" ou "-T" no final. Era a venda original solta.
              highestSeq = 0;
            }
 
@@ -1053,7 +1061,7 @@ function RouteCreationContent() {
         xml_documento: xmlDanfe.conteudo_xml || null,
       }];
 
-      // Para vendas, verificar se o pedido já existe ANTES de importar
+      // Para vendas, verificar se o pedido jÃ¡ existe ANTES de importar
       if (launchType === 'venda') {
         const erpIds = toDb.map((itemDb: any) => itemDb.order_id_erp);
         const { data: existingOrders } = await supabase
@@ -1063,7 +1071,7 @@ function RouteCreationContent() {
 
         if (existingOrders && existingOrders.length > 0) {
           const existingIds = existingOrders.map((o: any) => o.order_id_erp).join(', ');
-          toast.error(`Pedido(s) já existe(m) no sistema: ${existingIds}`);
+          toast.error(`Pedido(s) jÃ¡ existe(m) no sistema: ${existingIds}`);
           setLaunchLoading(false);
           return;
         }
@@ -1071,10 +1079,10 @@ function RouteCreationContent() {
 
       let insertedCount = 0;
       let errors = 0;
-      const importedOrderIds: string[] = []; // Rastrear IDs dos pedidos importados para seleção automática
+      const importedOrderIds: string[] = []; // Rastrear IDs dos pedidos importados para seleÃ§Ã£o automÃ¡tica
 
       for (const order of toDb) {
-        // Para vendas, usar insert ao invés de upsert para garantir que não sobrescreve
+        // Para vendas, usar insert ao invÃ©s de upsert para garantir que nÃ£o sobrescreve
         if (launchType === 'venda') {
           const { data: insertedOrder, error } = await supabase.from('orders').insert(order).select('id').single();
           if (error) {
@@ -1108,7 +1116,7 @@ function RouteCreationContent() {
           });
         }
       } else if (insertedCount > 0) {
-        const tipoLabel = launchType === 'venda' ? 'pedido(s) de venda' : `lançamento(s) avulso(s) de ${launchType}`;
+        const tipoLabel = launchType === 'venda' ? 'pedido(s) de venda' : `lanÃ§amento(s) avulso(s) de ${launchType}`;
         toast.success(`${insertedCount} ${tipoLabel} importado(s)!`);
         setShowLaunchModal(false);
         setLaunchNumber('');
@@ -1151,16 +1159,16 @@ function RouteCreationContent() {
     { id: 'quantidade', label: 'Qtd.', visible: true },
     { id: 'department', label: 'Depto.', visible: true },
     { id: 'brand', label: 'Marca', visible: true },
-    { id: 'localEstocagem', label: 'Local Saída', visible: true },
+    { id: 'localEstocagem', label: 'Local SaÃ­da', visible: true },
     { id: 'cidade', label: 'Cidade', visible: true },
     { id: 'bairro', label: 'Bairro', visible: true },
     { id: 'filialVenda', label: 'Filial', visible: true },
-    { id: 'operacao', label: 'Operação', visible: true },
+    { id: 'operacao', label: 'OperaÃ§Ã£o', visible: true },
     { id: 'vendedor', label: 'Vendedor', visible: true },
-    { id: 'situacao', label: 'Situação', visible: true },
+    { id: 'situacao', label: 'SituaÃ§Ã£o', visible: true },
     { id: 'obsPublicas', label: 'Obs.', visible: true },
     { id: 'obsInternas', label: 'Obs. Int.', visible: true },
-    { id: 'endereco', label: 'Endereço', visible: true },
+    { id: 'endereco', label: 'EndereÃ§o', visible: true },
     { id: 'outrosLocs', label: 'Outros Locais', visible: true },
   ]);
 
@@ -1235,7 +1243,7 @@ function RouteCreationContent() {
       localStorage.removeItem('rc_showRouteModal');
 
       // Fetch route details to populate modal
-      // OTIMIZAÇÃO: Excluindo danfe_base64 e campos pesados
+      // OTIMIZAÃ‡ÃƒO: Excluindo danfe_base64 e campos pesados
       const ORDERS_SAFE_COLS_AO = 'id,order_id_erp,customer_name,phone,address_json,items_json,status,created_at,updated_at,filial_venda,data_venda,previsao_entrega,tem_frete_full,observacoes_publicas,observacoes_internas,customer_cpf,vendedor_nome,return_flag,last_return_reason,last_return_notes,brand,department,service_type,erp_status,blocked_at,blocked_reason,requires_pickup,pickup_created_at,return_nfe_number,return_nfe_key,return_date,return_type,import_source,previsao_montagem,product_group,product_subgroup,danfe_gerada_em';
       supabase
         .from('routes')
@@ -1302,16 +1310,16 @@ function RouteCreationContent() {
         { id: 'quantidade', label: 'Qtd.', visible: true },
         { id: 'department', label: 'Depto.', visible: true },
         { id: 'brand', label: 'Marca', visible: true },
-        { id: 'localEstocagem', label: 'Local Saída', visible: true },
+        { id: 'localEstocagem', label: 'Local SaÃ­da', visible: true },
         { id: 'cidade', label: 'Cidade', visible: true },
         { id: 'bairro', label: 'Bairro', visible: true },
         { id: 'filialVenda', label: 'Filial', visible: true },
-        { id: 'operacao', label: 'Operação', visible: true },
+        { id: 'operacao', label: 'OperaÃ§Ã£o', visible: true },
         { id: 'vendedor', label: 'Vendedor', visible: true },
-        { id: 'situacao', label: 'Situação', visible: true },
+        { id: 'situacao', label: 'SituaÃ§Ã£o', visible: true },
         { id: 'obsPublicas', label: 'Obs.', visible: true },
         { id: 'obsInternas', label: 'Obs. Int.', visible: true },
-        { id: 'endereco', label: 'Endereço', visible: true },
+        { id: 'endereco', label: 'EndereÃ§o', visible: true },
         { id: 'outrosLocs', label: 'Outros Locais', visible: true },
       ];
 
@@ -1589,7 +1597,7 @@ function RouteCreationContent() {
     const map = new Map<string, { id: string; pedido: string; otherLocs: string[]; reasons: string[] }>();
     // Base from local storage filter
     for (const m of selectedMixedOrders as any[]) {
-      map.set(m.id, { id: m.id, pedido: m.pedido, otherLocs: m.otherLocs || [], reasons: ['outro local de saída'] });
+      map.set(m.id, { id: m.id, pedido: m.pedido, otherLocs: m.otherLocs || [], reasons: ['outro local de saÃ­da'] });
     }
     const isTrue = (v: any) => { const s = String(v || '').toLowerCase(); return s === 'true' || s === '1' || s === 'sim' || s === 's' || s === 'y' || s === 'yes' || s === 't'; };
     // Assembly reason
@@ -1622,19 +1630,19 @@ function RouteCreationContent() {
 
       // If some items are filtered out by current combination, add a generic reason
       if (visibleItems.length < items.length) {
-        if (!cur.reasons.includes('há itens fora dos filtros')) cur.reasons.push('há itens fora dos filtros');
+        if (!cur.reasons.includes('hÃ¡ itens fora dos filtros')) cur.reasons.push('hÃ¡ itens fora dos filtros');
       }
       // Specific reasons
       if (filterHasAssembly && items.some((it: any) => !isTrue(it?.has_assembly))) {
-        if (!cur.reasons.includes('há itens sem montagem')) cur.reasons.push('há itens sem montagem');
+        if (!cur.reasons.includes('hÃ¡ itens sem montagem')) cur.reasons.push('hÃ¡ itens sem montagem');
       }
       if (filterDepartment && items.some((it: any) => String(it?.department || '').toLowerCase() !== String(filterDepartment || '').toLowerCase())) {
-        if (!cur.reasons.includes('há itens de outro departamento')) cur.reasons.push('há itens de outro departamento');
+        if (!cur.reasons.includes('hÃ¡ itens de outro departamento')) cur.reasons.push('hÃ¡ itens de outro departamento');
       }
       if (otherLocs.length > 0) {
         const merged = Array.from(new Set<string>([...(cur.otherLocs || [] as string[]), ...otherLocs]));
         cur.otherLocs = merged;
-        if (!cur.reasons.includes('outro local de saída')) cur.reasons.push('outro local de saída');
+        if (!cur.reasons.includes('outro local de saÃ­da')) cur.reasons.push('outro local de saÃ­da');
       }
 
       // Save
@@ -1853,7 +1861,7 @@ function RouteCreationContent() {
 
       return cloneXmlByOrderErp;
     } catch (error) {
-      console.warn('Falha ao buscar XML de devolução original para o romaneio de coleta:', error);
+      console.warn('Falha ao buscar XML de devoluÃ§Ã£o original para o romaneio de coleta:', error);
       return new Map<string, string>();
     }
   };
@@ -1869,7 +1877,7 @@ function RouteCreationContent() {
       if (error) throw error;
       return data;
     } catch (error) {
-      console.warn('Falha ao buscar dados de devolução do pedido:', error);
+      console.warn('Falha ao buscar dados de devoluÃ§Ã£o do pedido:', error);
       return null;
     }
   };
@@ -2008,14 +2016,14 @@ function RouteCreationContent() {
 
   // Verifica se o pedido tem Frete Full
   // Prioridade 1: Campo tem_frete_full
-  // Prioridade 2: Observações internas contendo *frete full* (entre asteriscos)
+  // Prioridade 2: ObservaÃ§Ãµes internas contendo *frete full* (entre asteriscos)
   const hasFreteFull = (order: any) => {
     const raw = order?.raw_json || {};
     // Prioridade 1: Campo direto
     if (isTrueGlobal(order?.tem_frete_full) || isTrueGlobal(raw?.tem_frete_full)) {
       return true;
     }
-    // Prioridade 2: Observações internas com *frete full*
+    // Prioridade 2: ObservaÃ§Ãµes internas com *frete full*
     const obsInternas = String(order?.observacoes_internas || raw?.observacoes_internas || '').toLowerCase();
     if (obsInternas.includes('*frete full*')) {
       return true;
@@ -2286,8 +2294,8 @@ function RouteCreationContent() {
     }
   };
 
-  // Lista completa de rotas em separação para o dropdown do modal
-  // (independente dos filtros de período/status da tela principal).
+  // Lista completa de rotas em separaÃ§Ã£o para o dropdown do modal
+  // (independente dos filtros de perÃ­odo/status da tela principal).
   const fetchAllPendingRoutes = async () => {
     try {
       const { data, error } = await supabase
@@ -2407,12 +2415,12 @@ function RouteCreationContent() {
         pickupPendingRes,
       ] = await Promise.all([
         // Orders (pending or returned OR assigned) - EXCLUINDO BLOQUEADOS
-        // OTIMIZAÇÃO: Excluindo colunas pesadas (danfe_base64=88MB, xml_documento, raw_json, return_nfe_xml, return_danfe_base64)
+        // OTIMIZAÃ‡ÃƒO: Excluindo colunas pesadas (danfe_base64=88MB, xml_documento, raw_json, return_nfe_xml, return_danfe_base64)
         supabase
           .from('orders')
           .select('id, order_id_erp, customer_name, phone, address_json, items_json, status, created_at, updated_at, filial_venda, data_venda, previsao_entrega, tem_frete_full, observacoes_publicas, observacoes_internas, customer_cpf, vendedor_nome, return_flag, last_return_reason, last_return_notes, brand, department, service_type, erp_status, blocked_at, blocked_reason, requires_pickup, pickup_created_at, return_nfe_number, return_nfe_key, return_date, return_type, import_source, previsao_montagem, product_group, product_subgroup, danfe_gerada_em, raw_operacoes:raw_json->>operacoes, raw_lancamento_venda:raw_json->>lancamento_venda')
           .in('status', ['pending', 'returned', 'assigned'])
-          .is('blocked_at', null)  // Só pedidos NÃO bloqueados
+          .is('blocked_at', null)  // SÃ³ pedidos NÃƒO bloqueados
           .order('created_at', { ascending: false }),
 
         // Vehicles
@@ -2456,7 +2464,7 @@ function RouteCreationContent() {
           .select('order_id, route:routes!inner(id,name,status,route_code)')
           .neq('route.status', 'completed'),
 
-        // Pedidos bloqueados (para aba "Bloqueados") — sem colunas pesadas
+        // Pedidos bloqueados (para aba "Bloqueados") â€” sem colunas pesadas
         supabase
           .from('orders')
           .select('id, order_id_erp, customer_name, phone, address_json, items_json, status, created_at, updated_at, filial_venda, data_venda, previsao_entrega, tem_frete_full, observacoes_publicas, observacoes_internas, customer_cpf, vendedor_nome, return_flag, last_return_reason, last_return_notes, brand, department, service_type, erp_status, blocked_at, blocked_reason, requires_pickup, pickup_created_at, return_nfe_number, return_nfe_key, return_date, return_type, import_source, previsao_montagem, product_group, product_subgroup, danfe_gerada_em, raw_operacoes:raw_json->>operacoes, raw_lancamento_venda:raw_json->>lancamento_venda')
@@ -2464,7 +2472,7 @@ function RouteCreationContent() {
           .order('blocked_at', { ascending: false })
           .limit(100),
 
-        // Pedidos que precisam de coleta (para aba "Coletas Pendentes") — sem colunas pesadas
+        // Pedidos que precisam de coleta (para aba "Coletas Pendentes") â€” sem colunas pesadas
         supabase
           .from('orders')
           .select('id, order_id_erp, customer_name, phone, address_json, items_json, status, created_at, updated_at, filial_venda, data_venda, previsao_entrega, tem_frete_full, observacoes_publicas, observacoes_internas, customer_cpf, vendedor_nome, return_flag, last_return_reason, last_return_notes, brand, department, service_type, erp_status, blocked_at, blocked_reason, requires_pickup, pickup_created_at, return_nfe_number, return_nfe_key, return_date, return_type, import_source, previsao_montagem, product_group, product_subgroup, danfe_gerada_em, raw_operacoes:raw_json->>operacoes, raw_lancamento_venda:raw_json->>lancamento_venda')
@@ -2491,23 +2499,23 @@ function RouteCreationContent() {
           .filter(o => String(o.status) !== 'assigned') // BLOCK VISIBILITY OF INCONSISTENT/STUCK ORDERS
           .map((o: any) => {
             let updated = { ...o };
-            // Reconstrói parcialmente o raw_json para a interface visual sem o payload de 88MB
+            // ReconstrÃ³i parcialmente o raw_json para a interface visual sem o payload de 88MB
             updated.raw_json = {
               operacoes: o.raw_operacoes,
               lancamento_venda: o.raw_lancamento_venda
             };
-            // Normalização de flags de retorno e auto-repair visual
-            // Se tiver last_return_reason, deveríamos considerar como retornado para fins de UI
+            // NormalizaÃ§Ã£o de flags de retorno e auto-repair visual
+            // Se tiver last_return_reason, deverÃ­amos considerar como retornado para fins de UI
             if ((String(o.status) === 'returned' && !o.return_flag) || (o.last_return_reason && !o.return_flag)) {
               updated.return_flag = true;
             }
-            // Recuperação de falhas: se estiver 'assigned' mas não bloqueado (passou filtro),
-            // significa que está "solto" (ex: rota concluída mas status não atualizou).
-            // Tratamos como pending para permitir nova roteirização.
-            // TENTATIVA DE RECUPERAÇÃO REMOVIDA:
-            // Anteriormente, se o pedido estava 'assigned' mas não bloqueado (rota concluída),
-            // o sistema forçava 'pending'. Isso causava duplicidade se o sync falhasse.
-            // Agora, se houver descompasso, o pedido fica 'assigned' e invisível aqui,
+            // RecuperaÃ§Ã£o de falhas: se estiver 'assigned' mas nÃ£o bloqueado (passou filtro),
+            // significa que estÃ¡ "solto" (ex: rota concluÃ­da mas status nÃ£o atualizou).
+            // Tratamos como pending para permitir nova roteirizaÃ§Ã£o.
+            // TENTATIVA DE RECUPERAÃ‡ÃƒO REMOVIDA:
+            // Anteriormente, se o pedido estava 'assigned' mas nÃ£o bloqueado (rota concluÃ­da),
+            // o sistema forÃ§ava 'pending'. Isso causava duplicidade se o sync falhasse.
+            // Agora, se houver descompasso, o pedido fica 'assigned' e invisÃ­vel aqui,
             // devendo ser tratado na tela de Auditoria.
             // if (String(o.status) === 'assigned') {
             //   updated.status = 'pending';
@@ -2667,7 +2675,7 @@ function RouteCreationContent() {
   loadDataRef.current = loadData;
 
   // Realtime removido: assinaturas sem filtro em orders/route_orders/routes
-  // sobrecarregavam o pool de conexões do Supabase durante operações em lote.
+  // sobrecarregavam o pool de conexÃµes do Supabase durante operaÃ§Ãµes em lote.
 
   const toggleOrderSelection = (orderId: string) => {
     const newSelected = new Set(selectedOrders);
@@ -2715,7 +2723,7 @@ function RouteCreationContent() {
         }
 
         if (existingRoutes.length > 0) {
-          toast.warning(`Atenção: Cliente com entregas em andamento!`, {
+          toast.warning(`AtenÃ§Ã£o: Cliente com entregas em andamento!`, {
             description: `Rotas: ${existingRoutes.join(', ')}. Considere agrupar.`,
             duration: 8000,
           });
@@ -2733,7 +2741,7 @@ function RouteCreationContent() {
           const locs = getOrderLocations(o || {}).map(l => String(l));
           const other = locs.filter(l => l.toLowerCase() !== filterLocalEstocagem.toLowerCase());
           if (other.length > 0) {
-            toast.warning(`Pedido possui itens também em outros locais: ${Array.from(new Set(other)).join(', ')}`);
+            toast.warning(`Pedido possui itens tambÃ©m em outros locais: ${Array.from(new Set(other)).join(', ')}`);
           }
         } catch { }
       }
@@ -2749,13 +2757,13 @@ function RouteCreationContent() {
       return;
     }
     if (!pickupConferente) {
-      toast.error('Selecione o conferente responsável pela entrega.');
+      toast.error('Selecione o conferente responsÃ¡vel pela entrega.');
       return;
     }
 
     // Buscar o nome do conferente selecionado
     const conferenteInfo = conferentes.find(c => c.id === pickupConferente);
-    const conferenteName = conferenteInfo?.name || 'Não informado';
+    const conferenteName = conferenteInfo?.name || 'NÃ£o informado';
 
     setPickupSaving(true);
     try {
@@ -2765,9 +2773,9 @@ function RouteCreationContent() {
         .insert({
           name,
           driver_id: PICKUP_PLACEHOLDER_DRIVER_ID, // Motorista placeholder
-          conferente: conferenteName, // Responsável pela entrega
+          conferente: conferenteName, // ResponsÃ¡vel pela entrega
           status: 'pending',
-          observations: `Retirada em Loja.\nResponsável: ${conferenteName}\nObs: ${pickupObservations}`.trim()
+          observations: `Retirada em Loja.\nResponsÃ¡vel: ${conferenteName}\nObs: ${pickupObservations}`.trim()
         })
         .select()
         .single();
@@ -2821,7 +2829,7 @@ function RouteCreationContent() {
     }
   };
 
-  // Função para criar ordem de coleta de devolução
+  // FunÃ§Ã£o para criar ordem de coleta de devoluÃ§Ã£o
   const createPickupOrder = async () => {
     if (!selectedPickupOrder) return;
     if (!pickupTeam) {
@@ -2842,13 +2850,13 @@ function RouteCreationContent() {
       // Buscar dados da equipe selecionada
       let teamData = teams.find(t => t.id === pickupTeam);
 
-      // Se não achou na lista local (raro), busca no banco
+      // Se nÃ£o achou na lista local (raro), busca no banco
       if (!teamData) {
         const { data: t } = await supabase.from('teams_user').select('*').eq('id', pickupTeam).single();
         if (t) teamData = t;
       }
 
-      // Definição de Motorista e Ajudante baseado na equipe
+      // DefiniÃ§Ã£o de Motorista e Ajudante baseado na equipe
       let driverIdToUse = null;
       let helperIdToUse = null;
       let conferenteName = 'Conferente';
@@ -2859,7 +2867,7 @@ function RouteCreationContent() {
         const drv = drivers.find(d => d.user_id === teamData.driver_user_id);
         if (drv) driverIdToUse = drv.id;
         else {
-          // Fallback: se não achar na lista, pode ser que drivers não esteja carregado full, ou o user_id não bata. 
+          // Fallback: se nÃ£o achar na lista, pode ser que drivers nÃ£o esteja carregado full, ou o user_id nÃ£o bata. 
           // Tenta buscar driver pelo user_id
           const { data: dDB } = await supabase.from('drivers').select('id').eq('user_id', teamData.driver_user_id).single();
           if (dDB) driverIdToUse = dDB.id;
@@ -2868,27 +2876,27 @@ function RouteCreationContent() {
 
       helperIdToUse = teamData?.helper_user_id || null;
 
-      // Se não achou motorista na equipe, usa o placeholder OU avisa (decisão: avisar/falhar é mais seguro, mas vou manter fallback para placeholder se crítico)
+      // Se nÃ£o achou motorista na equipe, usa o placeholder OU avisa (decisÃ£o: avisar/falhar Ã© mais seguro, mas vou manter fallback para placeholder se crÃ­tico)
       if (!driverIdToUse) {
-        console.warn('Motorista da equipe não encontrado na tabela drivers. Usando placeholder.');
+        console.warn('Motorista da equipe nÃ£o encontrado na tabela drivers. Usando placeholder.');
         driverIdToUse = PICKUP_PLACEHOLDER_DRIVER_ID;
       }
 
-      // Conferente Name (apenas visual para observação)
+      // Conferente Name (apenas visual para observaÃ§Ã£o)
       if (pickupOrderConferente) {
         const c = conferentes.find(x => x.id === pickupOrderConferente);
         if (c) conferenteName = c.name;
       }
 
-      // 1. Gerar DANFE da nota de devolução via webhook
-      toast.info('Gerando nota fiscal de devolução...');
+      // 1. Gerar DANFE da nota de devoluÃ§Ã£o via webhook
+      toast.info('Gerando nota fiscal de devoluÃ§Ã£o...');
 
       const nfWebhook = await resolveDanfeWebhookUrl(true);
 
-      // Usar o XML de devolução que veio do ERP
+      // Usar o XML de devoluÃ§Ã£o que veio do ERP
       const xmlDevolucao = String(order.return_nfe_xml || '');
       if (!xmlDevolucao) {
-        toast.warning('XML de devolução não encontrado. Continuando sem DANFE.');
+        toast.warning('XML de devoluÃ§Ã£o nÃ£o encontrado. Continuando sem DANFE.');
       }
 
       let danfeBase64 = String(order.return_danfe_base64 || '');
@@ -2918,12 +2926,12 @@ function RouteCreationContent() {
             }
           }
         } catch (e) {
-          console.warn('Falha ao gerar DANFE de devolução:', e);
+          console.warn('Falha ao gerar DANFE de devoluÃ§Ã£o:', e);
         }
       }
 
       // 2. CRIAR NOVO PEDIDO DE COLETA (Prefixo C-)
-      // Isso é necessário para evitar conflito com o pedido original que já está Entregue
+      // Isso Ã© necessÃ¡rio para evitar conflito com o pedido original que jÃ¡ estÃ¡ Entregue
       // e para ter um ciclo de vida independente na rota de coleta.
 
       const newOrderErpId = `C-${order.order_id_erp}`;
@@ -2937,7 +2945,7 @@ function RouteCreationContent() {
         address_json: order.address_json,
         items_json: (order.items_json || []).map((item: any) => ({
           ...item,
-          // Importante: Remover flags de montagem para não disparar trigger de assembly product ao entregar
+          // Importante: Remover flags de montagem para nÃ£o disparar trigger de assembly product ao entregar
           tem_montagem: false,
           has_assembly: false,
           assembly_status: null
@@ -2945,11 +2953,11 @@ function RouteCreationContent() {
         status: 'pending', // Nasce pendente para poder ser roteirizado
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
-        raw_json: order.raw_json, // Mantém raw_json para referência
+        raw_json: order.raw_json, // MantÃ©m raw_json para referÃªncia
 
-        // Campos específicos da coleta
-        xml_documento: null, // Limpa XML de venda para evitar confusão
-        return_nfe_xml: order.return_nfe_xml || null, // XML da devolução no campo correto
+        // Campos especÃ­ficos da coleta
+        xml_documento: null, // Limpa XML de venda para evitar confusÃ£o
+        return_nfe_xml: order.return_nfe_xml || null, // XML da devoluÃ§Ã£o no campo correto
         return_nfe_number: order.return_nfe_number,
         return_nfe_key: order.return_nfe_key || null,
         return_date: order.return_date || null,
@@ -2962,11 +2970,11 @@ function RouteCreationContent() {
         filial_venda: order.filial_venda,
         data_venda: order.data_venda,
 
-        observacoes_internas: `PEDIDO DE COLETA GERADO AUTOMATICAMENTE.\nOrigem: ${order.order_id_erp}\nMotivo: ${order.blocked_reason || 'Devolução'}`.slice(0, 1000),
+        observacoes_internas: `PEDIDO DE COLETA GERADO AUTOMATICAMENTE.\nOrigem: ${order.order_id_erp}\nMotivo: ${order.blocked_reason || 'DevoluÃ§Ã£o'}`.slice(0, 1000),
 
         // Limpar flags de controle anteriores
         return_flag: false,
-        requires_pickup: false, // Este pedido JÁ É a execução da pickup
+        requires_pickup: false, // Este pedido JÃ Ã‰ a execuÃ§Ã£o da pickup
         pickup_created_at: null,
         blocked_at: null
       };
@@ -2994,7 +3002,7 @@ function RouteCreationContent() {
           helper_id: helperIdToUse, // ID do ajudante (user_id)
           vehicle_id: null,
           status: 'pending',
-          observations: `Coleta de devolução. NF: ${order.return_nfe_number || '-'}. Resp: ${conferenteName}. ${pickupOrderObservations}`.trim()
+          observations: `Coleta de devoluÃ§Ã£o. NF: ${order.return_nfe_number || '-'}. Resp: ${conferenteName}. ${pickupOrderObservations}`.trim()
         })
         .select()
         .single();
@@ -3007,7 +3015,7 @@ function RouteCreationContent() {
         order_id: newOrderData.id, // ID do novo pedido C-
         sequence: 1,
         status: 'pending',
-        delivery_observations: `Coleta de devolução. NF: ${order.return_nfe_number || '-'}. Motivo: ${order.blocked_reason || '-'}`
+        delivery_observations: `Coleta de devoluÃ§Ã£o. NF: ${order.return_nfe_number || '-'}. Motivo: ${order.blocked_reason || '-'}`
       });
       if (roError) throw roError;
 
@@ -3017,7 +3025,7 @@ function RouteCreationContent() {
         pickup_created_at: new Date().toISOString()
       };
 
-      // Opcional: Salvar DANFE no original também para histórico, se desejar
+      // Opcional: Salvar DANFE no original tambÃ©m para histÃ³rico, se desejar
       if (danfeBase64) {
         updateData.return_danfe_base64 = danfeBase64;
       }
@@ -3157,7 +3165,7 @@ function RouteCreationContent() {
         .filter((id) => validOrderIds.has(String(id)));
 
       if (toAdd.length === 0 && selectedOrders.size > 0) {
-        toast.error('Pedidos selecionados não são mais válidos. A seleção será limpa.');
+        toast.error('Pedidos selecionados nÃ£o sÃ£o mais vÃ¡lidos. A seleÃ§Ã£o serÃ¡ limpa.');
         setSelectedOrders(new Set());
         setSaving(false);
         return;
@@ -3195,7 +3203,7 @@ function RouteCreationContent() {
       console.error('Error creating route (detailed):', JSON.stringify(error, null, 2));
       console.error('Original error object:', error);
       if (error?.code === '23505' || error?.status === 409) {
-        toast.error('Já existe uma rota com este nome. Por favor, escolha outro.');
+        toast.error('JÃ¡ existe uma rota com este nome. Por favor, escolha outro.');
       } else {
         toast.error('Erro ao criar rota: ' + (error?.message || error?.details || 'Erro desconhecido'));
       }
@@ -3224,7 +3232,7 @@ function RouteCreationContent() {
           <div className="bg-white shadow-sm border border-gray-200 rounded-xl px-4 py-3 flex items-center justify-between gap-3">
             <div className="flex items-center gap-2 text-sm text-gray-700">
               <MapPin className="h-4 w-4 text-blue-500" />
-              Acesso rápido
+              Acesso rÃ¡pido
             </div>
             <div className="flex items-center gap-2">
               <button
@@ -3283,7 +3291,7 @@ function RouteCreationContent() {
           <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5 animate-in slide-in-from-top-2 duration-200">
             <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-4">
               <div className="space-y-1">
-                <label className="text-xs font-semibold text-gray-500 uppercase">Data da Venda (Período)</label>
+                <label className="text-xs font-semibold text-gray-500 uppercase">Data da Venda (PerÃ­odo)</label>
                 <div className="w-full">
                   <DatePicker
                     selectsRange={true}
@@ -3297,7 +3305,7 @@ function RouteCreationContent() {
                     isClearable={true}
                     locale="pt-BR"
                     dateFormat="dd/MM/yyyy"
-                    placeholderText="Selecione o período"
+                    placeholderText="Selecione o perÃ­odo"
                     className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all text-gray-700 text-sm"
                     wrapperClassName="w-full"
                   />
@@ -3325,7 +3333,7 @@ function RouteCreationContent() {
                 </select>
               </div>
               <div className="space-y-1">
-                <label className="text-xs font-semibold text-gray-500 uppercase">Local de Saída</label>
+                <label className="text-xs font-semibold text-gray-500 uppercase">Local de SaÃ­da</label>
                 <select value={filterLocalEstocagem} onChange={(e) => setFilterLocalEstocagem(e.target.value)} className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all">
                   <option value="">Todos</option>
                   {localOptions.map((c) => (<option key={c} value={c}>{c}</option>))}
@@ -3343,7 +3351,7 @@ function RouteCreationContent() {
                 </select>
               </div>
               <div className="relative space-y-1">
-                <label className="text-xs font-semibold text-gray-500 uppercase">Busca Rápida</label>
+                <label className="text-xs font-semibold text-gray-500 uppercase">Busca RÃ¡pida</label>
                 <div className="relative">
                   <Search className="absolute left-3 top-2.5 h-4 w-4 text-gray-400" />
                   <input
@@ -3382,7 +3390,7 @@ function RouteCreationContent() {
                 </select>
               </div>
               <div className="space-y-1">
-                <label className="text-xs font-semibold text-gray-500 uppercase">Operação</label>
+                <label className="text-xs font-semibold text-gray-500 uppercase">OperaÃ§Ã£o</label>
                 <select value={filterOperation} onChange={(e) => setFilterOperation(e.target.value)} className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all">
                   <option value="">Todas</option>
                   {operationOptions.map((c) => (<option key={c} value={c}>{c}</option>))}
@@ -3417,12 +3425,12 @@ function RouteCreationContent() {
                 </div>
               </div>
               <div className="space-y-1">
-                <label className="text-xs font-semibold text-gray-500 uppercase">Tipo Serviço</label>
+                <label className="text-xs font-semibold text-gray-500 uppercase">Tipo ServiÃ§o</label>
                 <select value={filterServiceType} onChange={(e) => setFilterServiceType(e.target.value)} className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all">
                   <option value="">Todos</option>
                   <option value="normal">Venda Normal</option>
                   <option value="troca">Troca</option>
-                  <option value="assistencia">Assistência</option>
+                  <option value="assistencia">AssistÃªncia</option>
                 </select>
               </div>
             </div>
@@ -3443,10 +3451,10 @@ function RouteCreationContent() {
           <button
             onClick={() => setShowLaunchModal(true)}
             className="flex items-center justify-center px-4 py-3 rounded-xl border border-orange-200 text-orange-700 bg-orange-50 hover:bg-orange-100 font-bold transition-all shadow-sm hover:shadow"
-            title="Lançar Troca ou Assistência Avulsa"
+            title="LanÃ§ar Troca ou AssistÃªncia Avulsa"
           >
             <FilePlus className="h-5 w-5 mr-2" />
-            Lançamento Avulso
+            LanÃ§amento Avulso
           </button>
 
           <button
@@ -3486,8 +3494,8 @@ function RouteCreationContent() {
                 <Package className="h-5 w-5 text-blue-700" />
               </div>
               <div>
-                <h2 className="text-lg font-bold text-gray-900">Pedidos Disponíveis</h2>
-                <p className="text-xs text-gray-500">{orders.length} pedidos aguardando roteirização</p>
+                <div className="mb-1 inline-flex items-center rounded-full bg-blue-50 px-2.5 py-1 text-[11px] font-semibold text-blue-700">{visibleUniqueOrderIds.size} pedidos unicos</div>
+                <h2 className="text-lg font-bold text-gray-900">Pedidos aguardando rota</h2>
               </div>
             </div>
 
@@ -3498,15 +3506,14 @@ function RouteCreationContent() {
                   className="h-4 w-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
                   onChange={(e) => {
                     if (e.currentTarget.checked) {
-                      const ids = getFilteredOrderIds();
-                      setSelectedOrders(ids);
+                      setSelectedOrders(new Set(visibleUniqueOrderIds));
                     } else {
                       setSelectedOrders(new Set());
                     }
                   }}
-                  checked={getFilteredOrderIds().size > 0 && selectedOrders.size === getFilteredOrderIds().size}
+                  checked={visibleUniqueOrderIds.size > 0 && selectedOrders.size === visibleUniqueOrderIds.size}
                 />
-                <span className="ml-2 text-sm font-medium text-gray-700">Selecionar Todos</span>
+                <span className="ml-2 text-sm font-medium text-gray-700">Selecionar todos os pedidos</span>
               </label>
               <button onClick={() => setShowColumnsModal(true)} className="p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors" title="Configurar Colunas">
                 <Settings className="h-5 w-5" />
@@ -3519,9 +3526,9 @@ function RouteCreationContent() {
             <div className="bg-yellow-50 border-b border-yellow-100 px-6 py-3 flex items-start gap-3">
               <AlertTriangle className="h-5 w-5 text-yellow-600 shrink-0 mt-0.5" />
               <div className="text-sm text-yellow-800">
-                <span className="font-bold">Atenção:</span> Alguns pedidos selecionados possuem itens fora dos filtros atuais.
+                <span className="font-bold">AtenÃ§Ã£o:</span> Alguns pedidos selecionados possuem itens fora dos filtros atuais.
                 <div className="mt-1 font-mono text-xs">
-                  {selectedMixedOrdersPlus.map((m) => `${m.pedido}${m.otherLocs.length ? ` (${m.otherLocs.join(', ')})` : ''} — ${m.reasons.join(', ')}`).join(' • ')}
+                  {selectedMixedOrdersPlus.map((m) => `${m.pedido}${m.otherLocs.length ? ` (${m.otherLocs.join(', ')})` : ''} â€” ${m.reasons.join(', ')}`).join(' â€¢ ')}
                 </div>
               </div>
             </div>
@@ -3542,8 +3549,8 @@ function RouteCreationContent() {
                 <div className="bg-gray-50 p-4 rounded-full mb-4">
                   <Package className="h-8 w-8 text-gray-400" />
                 </div>
-                <h3 className="text-lg font-medium text-gray-900">Nenhum pedido disponível</h3>
-                <p className="text-gray-500 mt-1 max-w-sm">Todos os pedidos já foram roteirizados ou não há retornos/importações recentes.</p>
+                <h3 className="text-lg font-medium text-gray-900">Nenhum pedido disponÃ­vel</h3>
+                <p className="text-gray-500 mt-1 max-w-sm">Todos os pedidos jÃ¡ foram roteirizados ou nÃ£o hÃ¡ retornos/importaÃ§Ãµes recentes.</p>
               </div>
             ) : (
               <table className="min-w-max w-full text-sm divide-y divide-gray-100">
@@ -3591,7 +3598,7 @@ function RouteCreationContent() {
                     const isReturned = Boolean(o.return_flag) || String(o.status) === 'returned';
                     const returnReason = (o.last_return_reason || (raw as any).return_reason || '') as string;
                     const returnNotes = (o.last_return_notes || (raw as any).return_notes || '') as string;
-                    const returnTitle = [returnReason, returnNotes].filter(Boolean).join(' • ');
+                    const returnTitle = [returnReason, returnNotes].filter(Boolean).join(' â€¢ ');
 
                     const waLink = (() => {
                       const p = String(o.phone || '').replace(/\D/g, '');
@@ -3645,7 +3652,7 @@ function RouteCreationContent() {
                                   <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-red-100 text-red-800 border border-red-200" title={returnTitle || 'Pedido retornado'}>
                                     <AlertTriangle className="h-3.5 w-3.5" />
                                     Retornado
-                                    {returnReason ? ` · ${returnReason}` : ''}
+                                    {returnReason ? ` Â· ${returnReason}` : ''}
                                   </span>
                                 )}
                                 {o.service_type === 'troca' && (
@@ -3655,9 +3662,9 @@ function RouteCreationContent() {
                                   </span>
                                 )}
                                 {o.service_type === 'assistencia' && (
-                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold bg-blue-100 text-blue-800 border border-blue-200 uppercase tracking-wide" title="Pedido de Assistência">
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold bg-blue-100 text-blue-800 border border-blue-200 uppercase tracking-wide" title="Pedido de AssistÃªncia">
                                     <Wrench className="h-3.5 w-3.5" />
-                                    Assistência
+                                    AssistÃªncia
                                   </span>
                                 )}
                                 {hasAssembly && (
@@ -3673,7 +3680,7 @@ function RouteCreationContent() {
                                   </span>
                                 )}
                                 {obsIntLower.includes('*retirada*') && (
-                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-purple-100 text-purple-800 border border-purple-200" title="Retirada em Loja/Fábrica">
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-purple-100 text-purple-800 border border-purple-200" title="Retirada em Loja/FÃ¡brica">
                                     <Store className="h-3.5 w-3.5" />
                                     Retirada
                                   </span>
@@ -3681,9 +3688,9 @@ function RouteCreationContent() {
                                 {(() => {
                                   const st = getPrazoStatusForOrder(o);
                                   const cls = st === 'within' ? 'bg-green-100 text-green-800 border-green-200' : st === 'out' ? 'bg-red-100 text-red-800 border-red-200' : 'bg-gray-100 text-gray-700 border-gray-200';
-                                  const label = st === 'within' ? 'Dentro do prazo' : st === 'out' ? 'Fora do prazo' : 'Sem previsão';
+                                  const label = st === 'within' ? 'Dentro do prazo' : st === 'out' ? 'Fora do prazo' : 'Sem previsÃ£o';
                                   return (
-                                    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold border ${cls}`} title="Prazo vs previsão">
+                                    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold border ${cls}`} title="Prazo vs previsÃ£o">
                                       <Calendar className="h-3.5 w-3.5" />
                                       {label}
                                     </span>
@@ -3713,7 +3720,7 @@ function RouteCreationContent() {
           {/* FILTERS BAR */}
           <div className="flex flex-col md:flex-row gap-6 justify-between items-start md:items-center bg-gray-50 px-6 py-4 rounded-xl border border-gray-100">
             <div className="flex flex-col gap-2">
-              <label className="text-xs font-bold text-gray-500 uppercase tracking-wide">Período</label>
+              <label className="text-xs font-bold text-gray-500 uppercase tracking-wide">PerÃ­odo</label>
               <div className="flex items-center gap-2">
                 {[
                   { id: 'today', label: 'Hoje' },
@@ -3739,7 +3746,7 @@ function RouteCreationContent() {
               <label className="text-xs font-bold text-gray-500 uppercase tracking-wide">Status</label>
               <div className="flex items-center gap-2 flex-wrap">
                 {[
-                  { id: 'pending', label: 'Em Separação', color: 'text-yellow-700 bg-yellow-50 border-yellow-200' },
+                  { id: 'pending', label: 'Em SeparaÃ§Ã£o', color: 'text-yellow-700 bg-yellow-50 border-yellow-200' },
                   { id: 'in_progress', label: 'Em Rota', color: 'text-blue-700 bg-blue-50 border-blue-200' },
                   { id: 'completed', label: 'Finalizada', color: 'text-green-700 bg-green-50 border-green-200' }
                 ].map(opt => {
@@ -3855,7 +3862,7 @@ function RouteCreationContent() {
             })()}
           </div>
 
-          {/* Conteúdo condicional baseado na aba ativa */}
+          {/* ConteÃºdo condicional baseado na aba ativa */}
           {(activeRoutesTab === 'deliveries' || activeRoutesTab === 'pickups' || activeRoutesTab === 'pickupRoutes') && (
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
               {filteredRoutesList.length === 0 ? (
@@ -3883,7 +3890,7 @@ function RouteCreationContent() {
                     completed: 'bg-green-50 text-green-700 border-green-200'
                   };
                   const statusLabel = {
-                    pending: 'Em Separação',
+                    pending: 'Em SeparaÃ§Ã£o',
                     in_progress: 'Em Rota',
                     completed: 'Finalizada'
                   };
@@ -3916,9 +3923,9 @@ function RouteCreationContent() {
                               const badgeClass = ok
                                 ? 'bg-green-50 text-green-700 border-green-200'
                                 : (cStatus === 'in_progress' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-yellow-50 text-yellow-700 border-yellow-200');
-                              const label = ok ? 'Conferência: Finalizada' : (cStatus === 'in_progress' ? 'Conferência: Em curso' : 'Conferência: Aguardando');
+                              const label = ok ? 'ConferÃªncia: Finalizada' : (cStatus === 'in_progress' ? 'ConferÃªncia: Em curso' : 'ConferÃªncia: Aguardando');
                               return (
-                                <span className={`px-2 py-0.5 rounded-full text-[11px] font-semibold border inline-flex items-center gap-1 ${badgeClass}`} title="Status de conferência">
+                                <span className={`px-2 py-0.5 rounded-full text-[11px] font-semibold border inline-flex items-center gap-1 ${badgeClass}`} title="Status de conferÃªncia">
                                   {ok ? <ClipboardCheck className="h-3 w-3" /> : <ClipboardList className="h-3 w-3" />}
                                   {label}
                                 </span>
@@ -3928,7 +3935,7 @@ function RouteCreationContent() {
                         </div>
 
                         <div className="space-y-3 mb-6">
-                          {/* Para retiradas: mostrar conferente como Responsável, esconder motorista e veículo */}
+                          {/* Para retiradas: mostrar conferente como ResponsÃ¡vel, esconder motorista e veÃ­culo */}
                           {(() => {
                             const isPickupRoute = String(route.name || '').startsWith('RETIRADA');
 
@@ -3936,8 +3943,8 @@ function RouteCreationContent() {
                               return (
                                 <div className="flex items-center text-sm text-gray-600">
                                   <ClipboardList className="h-4 w-4 mr-2 text-gray-400" />
-                                  <span className="font-medium text-purple-700">Responsável:</span>&nbsp;
-                                  {String((route as any)?.conferente || '').trim() || 'Não informado'}
+                                  <span className="font-medium text-purple-700">ResponsÃ¡vel:</span>&nbsp;
+                                  {String((route as any)?.conferente || '').trim() || 'NÃ£o informado'}
                                 </div>
                               );
                             }
@@ -3955,7 +3962,7 @@ function RouteCreationContent() {
                                 </div>
                                 <div className="flex items-center text-sm text-gray-600">
                                   <Truck className="h-4 w-4 mr-2 text-gray-400" />
-                                  {route.vehicle ? `${route.vehicle.model} (${route.vehicle.plate})` : 'Sem veículo'}
+                                  {route.vehicle ? `${route.vehicle.model} (${route.vehicle.plate})` : 'Sem veÃ­culo'}
                                 </div>
                               </>
                             );
@@ -3996,8 +4003,8 @@ function RouteCreationContent() {
                           onClick={async () => {
                             const toastId = toast.loading('Carregando detalhes da rota...');
                             try {
-                              // OTIMIZAÇÃO: Excluindo campos pesados (danfe_base64, xml_documento, return_danfe_base64, return_nfe_xml)
-                              // DANFE base64 é buscado sob demanda ao clicar em "Imprimir"
+                              // OTIMIZAÃ‡ÃƒO: Excluindo campos pesados (danfe_base64, xml_documento, return_danfe_base64, return_nfe_xml)
+                              // DANFE base64 Ã© buscado sob demanda ao clicar em "Imprimir"
                               const DETAIL_SAFE_COLS = 'id,order_id_erp,customer_name,phone,address_json,items_json,status,created_at,updated_at,filial_venda,data_venda,previsao_entrega,tem_frete_full,observacoes_publicas,observacoes_internas,customer_cpf,vendedor_nome,return_flag,last_return_reason,last_return_notes,brand,department,service_type,erp_status,blocked_at,blocked_reason,requires_pickup,pickup_created_at,return_nfe_number,return_nfe_key,return_date,return_type,import_source,previsao_montagem,product_group,product_subgroup,danfe_gerada_em,raw_json';
                               const { data, error } = await supabase
                                 .from('routes')
@@ -4072,7 +4079,7 @@ function RouteCreationContent() {
                     <CheckCircle2 className="h-8 w-8 text-green-500" />
                   </div>
                   <h3 className="text-lg font-medium text-gray-900">Nenhum pedido bloqueado</h3>
-                  <p className="text-gray-500">Todos os pedidos estão disponíveis para roteamento.</p>
+                  <p className="text-gray-500">Todos os pedidos estÃ£o disponÃ­veis para roteamento.</p>
                 </div>
               ) : (
                 <div className="overflow-x-auto">
@@ -4084,7 +4091,7 @@ function RouteCreationContent() {
                         <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">Status ERP</th>
                         <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">Motivo</th>
                         <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">Data Bloqueio</th>
-                        <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">NF Devolução</th>
+                        <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">NF DevoluÃ§Ã£o</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100">
@@ -4121,7 +4128,7 @@ function RouteCreationContent() {
                     <CheckCircle2 className="h-8 w-8 text-green-500" />
                   </div>
                   <h3 className="text-lg font-medium text-gray-900">Nenhuma coleta pendente</h3>
-                  <p className="text-gray-500">Não há pedidos aguardando coleta no momento.</p>
+                  <p className="text-gray-500">NÃ£o hÃ¡ pedidos aguardando coleta no momento.</p>
                 </div>
               ) : (
                 <div className="overflow-x-auto">
@@ -4130,10 +4137,10 @@ function RouteCreationContent() {
                       <tr>
                         <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">Pedido</th>
                         <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">Cliente</th>
-                        <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">Endereço</th>
-                        <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">NF Devolução</th>
-                        <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">Data Devolução</th>
-                        <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">Ações</th>
+                        <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">EndereÃ§o</th>
+                        <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">NF DevoluÃ§Ã£o</th>
+                        <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">Data DevoluÃ§Ã£o</th>
+                        <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">AÃ§Ãµes</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100">
@@ -4180,7 +4187,7 @@ function RouteCreationContent() {
 
       {/* --- MODALS --- */}
 
-      {/* Modal de Coleta de Devolução */}
+      {/* Modal de Coleta de DevoluÃ§Ã£o */}
       {showPickupOrderModal && selectedPickupOrder && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden">
@@ -4188,7 +4195,7 @@ function RouteCreationContent() {
               <div>
                 <h3 className="text-lg font-bold text-gray-900 flex items-center gap-2">
                   <PackageX className="h-5 w-5 text-orange-600" />
-                  Criar Coleta de Devolução
+                  Criar Coleta de DevoluÃ§Ã£o
                 </h3>
                 <p className="text-sm text-gray-500 mt-1">Pedido #{selectedPickupOrder.order_id_erp}</p>
               </div>
@@ -4208,13 +4215,13 @@ function RouteCreationContent() {
                   <span className="text-sm font-medium text-gray-900">{selectedPickupOrder.customer_name}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-sm text-gray-500">Endereço:</span>
+                  <span className="text-sm text-gray-500">EndereÃ§o:</span>
                   <span className="text-sm text-gray-900">
                     {selectedPickupOrder.address_json?.street}, {selectedPickupOrder.address_json?.neighborhood}
                   </span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-sm text-gray-500">NF Devolução:</span>
+                  <span className="text-sm text-gray-500">NF DevoluÃ§Ã£o:</span>
                   <span className="text-sm font-bold text-blue-600">{selectedPickupOrder.return_nfe_number || '-'}</span>
                 </div>
                 <div className="flex justify-between">
@@ -4223,7 +4230,7 @@ function RouteCreationContent() {
                 </div>
               </div>
 
-              {/* Seleção de Equipe (Substitui motorista fixo) */}
+              {/* SeleÃ§Ã£o de Equipe (Substitui motorista fixo) */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   Equipe de Coleta *
@@ -4238,7 +4245,7 @@ function RouteCreationContent() {
                     <option key={t.id} value={t.id}>{t.name}</option>
                   ))}
                 </select>
-                <p className="text-xs text-gray-500 mt-1">Motorista e ajudante serão definidos automaticamente pela equipe.</p>
+                <p className="text-xs text-gray-500 mt-1">Motorista e ajudante serÃ£o definidos automaticamente pela equipe.</p>
               </div>
 
               {/* Conferente */}
@@ -4258,10 +4265,10 @@ function RouteCreationContent() {
                 </select>
               </div>
 
-              {/* Observações */}
+              {/* ObservaÃ§Ãµes */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Observações (opcional)
+                  ObservaÃ§Ãµes (opcional)
                 </label>
                 <textarea
                   value={pickupOrderObservations}
@@ -4276,8 +4283,8 @@ function RouteCreationContent() {
               <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 flex items-start gap-2">
                 <Info className="h-5 w-5 text-blue-500 flex-shrink-0 mt-0.5" />
                 <div className="text-sm text-blue-700">
-                  <p className="font-medium">Nota Fiscal de Devolução</p>
-                  <p className="text-blue-600">O sistema irá gerar automaticamente a DANFE de devolução para ser levada na coleta.</p>
+                  <p className="font-medium">Nota Fiscal de DevoluÃ§Ã£o</p>
+                  <p className="text-blue-600">O sistema irÃ¡ gerar automaticamente a DANFE de devoluÃ§Ã£o para ser levada na coleta.</p>
                 </div>
               </div>
             </div>
@@ -4338,7 +4345,7 @@ function RouteCreationContent() {
                     }}
                     className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all"
                   >
-                    <option value="">Não, criar novo romaneio</option>
+                    <option value="">NÃ£o, criar novo romaneio</option>
                     {pendingExistingRoutes.map(r => (
                       <option key={r.id} value={r.id}>{getExistingDeliveryRouteOptionLabel(r)}</option>
                     ))}
@@ -4446,7 +4453,7 @@ function RouteCreationContent() {
                         </div>
                       </div>
                       <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-2">Veículo <span className="text-red-500">*</span></label>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">VeÃ­culo <span className="text-red-500">*</span></label>
                         <select
                           value={selectedVehicle}
                           onChange={(e) => setSelectedVehicle(e.target.value)}
@@ -4473,7 +4480,7 @@ function RouteCreationContent() {
 
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Observações da Rota {selectedExistingRouteId ? '(editar rota selecionada)' : '(opcional)'}
+                    ObservaÃ§Ãµes da Rota {selectedExistingRouteId ? '(editar rota selecionada)' : '(opcional)'}
                   </label>
                   <textarea
                     value={selectedExistingRouteId ? existingRouteObservations : observations}
@@ -4485,7 +4492,7 @@ function RouteCreationContent() {
                       }
                     }}
                     rows={3}
-                    placeholder={selectedExistingRouteId ? 'Edite as observações da rota existente...' : 'Observações sobre a rota...'}
+                    placeholder={selectedExistingRouteId ? 'Edite as observaÃ§Ãµes da rota existente...' : 'ObservaÃ§Ãµes sobre a rota...'}
                     className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all"
                   />
                 </div>
@@ -4527,14 +4534,14 @@ function RouteCreationContent() {
                   <FilePlus className="h-8 w-8 text-orange-600" />
                 </div>
 
-                <h3 className="text-2xl font-bold text-gray-900 text-center mb-2">Lançamento Avulso</h3>
+                <h3 className="text-2xl font-bold text-gray-900 text-center mb-2">LanÃ§amento Avulso</h3>
                 <p className="text-center text-gray-500 mb-8">
-                  Importe uma Troca, Assistência ou Pedido de Venda antigo usando o número do lançamento.
+                  Importe uma Troca, AssistÃªncia ou Pedido de Venda antigo usando o nÃºmero do lanÃ§amento.
                 </p>
 
                 <form onSubmit={handleLaunchSubmit} className="space-y-5">
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">Número do Lançamento (ERP)</label>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">NÃºmero do LanÃ§amento (ERP)</label>
                     <input
                       type="text"
                       value={launchNumber}
@@ -4546,7 +4553,7 @@ function RouteCreationContent() {
                   </div>
 
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">Tipo de Serviço</label>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Tipo de ServiÃ§o</label>
                     <div className="grid grid-cols-3 gap-2">
                       <button
                         type="button"
@@ -4562,7 +4569,7 @@ function RouteCreationContent() {
                         className={`px-3 py-3 rounded-xl border flex flex-col items-center gap-1.5 transition-all ${launchType === 'assistencia' ? 'bg-blue-50 border-blue-500 text-blue-700 ring-1 ring-blue-500' : 'bg-white border-gray-200 text-gray-600 hover:border-blue-200 hover:bg-blue-50/50'}`}
                       >
                         <Hammer className="h-5 w-5" />
-                        <span className="font-semibold text-xs">Assistência</span>
+                        <span className="font-semibold text-xs">AssistÃªncia</span>
                       </button>
                       <button
                         type="button"
@@ -4575,7 +4582,7 @@ function RouteCreationContent() {
                     </div>
                     {launchType === 'venda' && (
                       <p className="mt-2 text-xs text-emerald-600 bg-emerald-50 p-2 rounded-lg border border-emerald-100">
-                        Dica: Use para pedidos antigos aguardando liberação do cliente (reformas, etc.)
+                        Dica: Use para pedidos antigos aguardando liberaÃ§Ã£o do cliente (reformas, etc.)
                       </p>
                     )}
                   </div>
@@ -4620,12 +4627,12 @@ function RouteCreationContent() {
               </div>
               <div className="p-6 space-y-4">
                 <p className="text-sm text-gray-600 bg-purple-50 p-3 rounded-lg border border-purple-100">
-                  Você está prestes a marcar <strong>{selectedOrders.size}</strong> pedido(s) como <strong>RETIRADO</strong>.
-                  Isso baixará os pedidos do sistema imediatamente e gerará um comprovante.
+                  VocÃª estÃ¡ prestes a marcar <strong>{selectedOrders.size}</strong> pedido(s) como <strong>RETIRADO</strong>.
+                  Isso baixarÃ¡ os pedidos do sistema imediatamente e gerarÃ¡ um comprovante.
                 </p>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Responsável pela Entrega *</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">ResponsÃ¡vel pela Entrega *</label>
                   <select
                     value={pickupConferente}
                     onChange={e => setPickupConferente(e.target.value)}
@@ -4641,7 +4648,7 @@ function RouteCreationContent() {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Observações (Opcional)</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">ObservaÃ§Ãµes (Opcional)</label>
                   <textarea
                     value={pickupObservations}
                     onChange={e => setPickupObservations(e.target.value)}
@@ -4666,7 +4673,7 @@ function RouteCreationContent() {
         )
       }
 
-      {/* --- PREVIEW DO AVULSO (MODAL DE CONFIRMAÇÃO) --- */}
+      {/* --- PREVIEW DO AVULSO (MODAL DE CONFIRMAÃ‡ÃƒO) --- */}
       {
         showLaunchPreview && previewLaunchData && (
           <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
@@ -4675,10 +4682,10 @@ function RouteCreationContent() {
                 <div>
                   <h3 className="text-xl font-bold text-gray-900 flex items-center gap-2">
                     <CheckCircle2 className="h-6 w-6 text-green-600" />
-                    Revisão de Importação: {previewLaunchData.numero || previewLaunchData.id}
+                    RevisÃ£o de ImportaÃ§Ã£o: {previewLaunchData.numero || previewLaunchData.id}
                   </h3>
                   <p className="text-sm text-gray-500 mt-1">
-                    Cliente: {previewLaunchData.cliente?.nome || previewLaunchData.nome_cliente || previewLaunchData.nome || 'Cliente não identificado'}
+                    Cliente: {previewLaunchData.cliente?.nome || previewLaunchData.nome_cliente || previewLaunchData.nome || 'Cliente nÃ£o identificado'}
                   </p>
                 </div>
                 <button
@@ -4699,7 +4706,7 @@ function RouteCreationContent() {
                     Selecione os itens e Montagens
                   </h4>
                   <p className="text-sm text-orange-800">
-                    Abaixo estão os produtos capturados neste pedido. Desmarque aqueles que você <strong>não</strong> deseja importar na rota atual.
+                    Abaixo estÃ£o os produtos capturados neste pedido. Desmarque aqueles que vocÃª <strong>nÃ£o</strong> deseja importar na rota atual.
                   </p>
                 </div>
 
@@ -4736,7 +4743,7 @@ function RouteCreationContent() {
                             />
                             <div>
                               <p className={`font-semibold ${selection.import ? 'text-gray-900' : 'text-gray-500 line-through'}`}>{nome}</p>
-                              <p className="text-xs text-gray-500 mt-1">SKU: {sku} • Qtd: {qte}</p>
+                              <p className="text-xs text-gray-500 mt-1">SKU: {sku} â€¢ Qtd: {qte}</p>
                             </div>
                           </label>
 
@@ -4781,7 +4788,7 @@ function RouteCreationContent() {
                   disabled={confirmingLaunch}
                   className="min-w-[160px] px-6 py-2.5 rounded-xl bg-orange-600 text-white font-bold hover:bg-orange-700 shadow-lg shadow-orange-200 disabled:opacity-50 disabled:shadow-none transition-all transform active:scale-95 flex justify-center items-center"
                 >
-                  {confirmingLaunch ? <RefreshCw className="animate-spin h-5 w-5" /> : 'Confirmar Importação'}
+                  {confirmingLaunch ? <RefreshCw className="animate-spin h-5 w-5" /> : 'Confirmar ImportaÃ§Ã£o'}
                 </button>
               </div>
             </div>
@@ -4843,20 +4850,20 @@ function RouteCreationContent() {
                     if (authUser?.id) {
                       const success = await saveUserPreference(authUser.id, 'rc_columns_conf', columnsConf);
                       if (success) {
-                        toast.success('Configuração de colunas salva com sucesso!');
+                        toast.success('ConfiguraÃ§Ã£o de colunas salva com sucesso!');
                       } else {
-                        toast.error('Erro ao salvar configuração. Tente novamente.');
+                        toast.error('Erro ao salvar configuraÃ§Ã£o. Tente novamente.');
                       }
                     } else {
                       // Fallback to localStorage if not authenticated
                       localStorage.setItem('rc_columns_conf', JSON.stringify(columnsConf));
-                      toast.success('Configuração salva localmente.');
+                      toast.success('ConfiguraÃ§Ã£o salva localmente.');
                     }
                     setShowColumnsModal(false);
                   }}
                   className="px-4 py-2 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700"
                 >
-                  Salvar Configuração
+                  Salvar ConfiguraÃ§Ã£o
                 </button>
               </div>
             </div>
@@ -4870,7 +4877,7 @@ function RouteCreationContent() {
           <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
             <div className="bg-white rounded-xl shadow-xl w-full max-w-5xl max-h-[85vh] flex flex-col overflow-hidden">
               <div className="px-6 py-4 border-b flex items-center justify-between bg-gray-50">
-                <h4 className="text-lg font-bold text-gray-900">Revisão de Conferência — {conferenceRoute.name}</h4>
+                <h4 className="text-lg font-bold text-gray-900">RevisÃ£o de ConferÃªncia â€” {conferenceRoute.name}</h4>
                 <button onClick={() => setShowConferenceModal(false)} className="text-gray-500 hover:text-gray-700"><X className="h-5 w-5" /></button>
               </div>
               <div className="p-6 overflow-y-auto flex-1">
@@ -4896,31 +4903,31 @@ function RouteCreationContent() {
                   const authUser = useAuthStore.getState().user;
                   const markResolved = async (removedIds: string[]) => {
                     try {
-                      if (!conf?.id) { toast.error('Conferência não encontrada'); return; }
+                      if (!conf?.id) { toast.error('ConferÃªncia nÃ£o encontrada'); return; }
                       const resolutionPayload = { removedOrderIds: removedIds, missingLabelsByOrder: Object.keys(byOrder).reduce((acc: any, k) => { if ((byOrder[k]?.codes || []).length > 0) acc[k] = byOrder[k].codes; return acc; }, {}), notBipedByOrder: byOrderProducts };
                       const { error: updErr } = await supabase
                         .from('route_conferences')
                         .update({ resolved_at: new Date().toISOString(), resolved_by: authUser?.id || null, resolution: resolutionPayload })
                         .eq('id', conf.id);
                       if (updErr) throw updErr;
-                      toast.success('Divergência marcada como resolvida');
+                      toast.success('DivergÃªncia marcada como resolvida');
                       setShowConferenceModal(false);
                       loadData();
                     } catch (e: any) {
                       console.error(e);
-                      toast.error('Erro ao marcar divergência como resolvida');
+                      toast.error('Erro ao marcar divergÃªncia como resolvida');
                     }
                   };
                   const orderIds = Object.keys(byOrder).filter(k => byOrder[k].codes.length > 0);
                   if (orderIds.length === 0) {
                     const pIds = Object.keys(byOrderProducts).filter(k => (byOrderProducts[k] || []).length > 0);
-                    if (pIds.length === 0) return <div className="text-center py-8 text-gray-500 font-medium">Sem faltantes. Conferência OK.</div>;
+                    if (pIds.length === 0) return <div className="text-center py-8 text-gray-500 font-medium">Sem faltantes. ConferÃªncia OK.</div>;
                     return (
                       <div className="space-y-4">
                         {pIds.map((oid) => {
                           const info = byOrder[String(oid)] || { order: null, codes: [] } as any;
-                          const cliente = info.order?.customer_name || '—';
-                          const pedido = info.order?.order_id_erp || '—';
+                          const cliente = info.order?.customer_name || 'â€”';
+                          const pedido = info.order?.order_id_erp || 'â€”';
                           const products = byOrderProducts[oid] || [];
                           return (
                             <div key={oid} className="border rounded-lg overflow-hidden">
@@ -4932,11 +4939,11 @@ function RouteCreationContent() {
                                 </div>
                               </div>
                               <div className="p-4 bg-white">
-                                <div className="text-sm font-bold text-red-600 mb-2">Produtos não bipados ({products.length}):</div>
+                                <div className="text-sm font-bold text-red-600 mb-2">Produtos nÃ£o bipados ({products.length}):</div>
                                 <ul className="space-y-2">
                                   {products.map((p, idx) => (
                                     <li key={idx} className="text-sm text-gray-700 bg-red-50 p-2 rounded border border-red-100">
-                                      <span className="font-semibold">Produto:</span> {p.productCode || '—'} • <span className="font-semibold">Motivo:</span> {p.reason || '—'} {p.notes ? `• ${p.notes}` : ''}
+                                      <span className="font-semibold">Produto:</span> {p.productCode || 'â€”'} â€¢ <span className="font-semibold">Motivo:</span> {p.reason || 'â€”'} {p.notes ? `â€¢ ${p.notes}` : ''}
                                     </li>
                                   ))}
                                 </ul>
@@ -4963,11 +4970,11 @@ function RouteCreationContent() {
                               }
                             }}
                             className="px-4 py-2 bg-red-100 text-red-700 hover:bg-red-200 rounded-lg font-medium transition-colors"
-                          >Remover pedidos não bipados</button>
+                          >Remover pedidos nÃ£o bipados</button>
                           <button
                             onClick={() => { const ids = pIds.filter(Boolean); markResolved(ids); }}
                             className="px-4 py-2 bg-teal-600 text-white hover:bg-teal-700 rounded-lg font-medium shadow-sm transition-colors"
-                          >Resolver Divergência</button>
+                          >Resolver DivergÃªncia</button>
                         </div>
                       </div>
                     );
@@ -4976,12 +4983,12 @@ function RouteCreationContent() {
                     <div className="space-y-4">
                       {orderIds.map((oid) => {
                         const info = byOrder[oid];
-                        const cliente = info.order?.customer_name || '—';
-                        const pedido = info.order?.order_id_erp || '—';
+                        const cliente = info.order?.customer_name || 'â€”';
+                        const pedido = info.order?.order_id_erp || 'â€”';
                         return (
                           <div key={oid} className="border rounded-lg overflow-hidden">
                             <div className="px-4 py-2 bg-gray-50 border-b">
-                              <div className="font-bold text-gray-900">Pedido: {pedido} • {cliente}</div>
+                              <div className="font-bold text-gray-900">Pedido: {pedido} â€¢ {cliente}</div>
                             </div>
                             <div className="p-4 bg-white">
                               <div className="text-sm font-bold text-red-600 mb-2">Volumes faltantes ({info.codes.length}):</div>
@@ -5017,7 +5024,7 @@ function RouteCreationContent() {
                         <button
                           onClick={() => { const ids = orderIds.filter(Boolean); markResolved(ids); }}
                           className="px-4 py-2 bg-teal-600 text-white hover:bg-teal-700 rounded-lg font-medium shadow-sm transition-colors"
-                        >Resolver Divergência</button>
+                        >Resolver DivergÃªncia</button>
                       </div>
                     </div>
                   );
@@ -5081,7 +5088,7 @@ function RouteCreationContent() {
                           selectedRoute.status === 'in_progress' ? 'bg-blue-100 text-blue-700' :
                             'bg-yellow-100 text-yellow-700'
                           }`}>
-                          {selectedRoute.status === 'completed' ? 'Concluída' :
+                          {selectedRoute.status === 'completed' ? 'ConcluÃ­da' :
                             selectedRoute.status === 'in_progress' ? 'Em Rota' : 'Pendente'}
                         </span>
                       </h2>
@@ -5089,7 +5096,7 @@ function RouteCreationContent() {
                   </div>
                   {!isEditingRoute && String(selectedRoute.name || '').startsWith('RETIRADA') && (
                     <p className="text-sm text-gray-500 mt-1">
-                      {`Responsável: ${selectedRoute.conferente || 'Não informado'}`}
+                      {`ResponsÃ¡vel: ${selectedRoute.conferente || 'NÃ£o informado'}`}
                     </p>
                   )}
                 </div>
@@ -5140,10 +5147,10 @@ function RouteCreationContent() {
                               const { error, count } = await supabase.from('routes').delete({ count: 'exact' }).eq('id', selectedRoute.id);
                               if (error) throw error;
                               if (count === 0) {
-                                toast.error('Não foi possível excluir. Rota não encontrada ou permissão negada.');
+                                toast.error('NÃ£o foi possÃ­vel excluir. Rota nÃ£o encontrada ou permissÃ£o negada.');
                                 return;
                               }
-                              toast.success('Rota excluída com sucesso');
+                              toast.success('Rota excluÃ­da com sucesso');
                               // Optimistic update: remove from list immediately
                               setRoutesList(prev => prev.filter(r => r.id !== selectedRoute.id));
                               setShowRouteModal(false);
@@ -5177,7 +5184,7 @@ function RouteCreationContent() {
                                 if (!selectedRoute) return;
                                 if (selectedRoute.status === 'completed') return; // Already completed
                                 try {
-                                  if (confirm('Confirma a retirada destes pedidos? Isso marcará a rota como concluída e os pedidos como entregues.')) {
+                                  if (confirm('Confirma a retirada destes pedidos? Isso marcarÃ¡ a rota como concluÃ­da e os pedidos como entregues.')) {
                                     setSaving(true);
 
                                     // 1. Update Route Status
@@ -5281,7 +5288,7 @@ function RouteCreationContent() {
                               className="flex items-center justify-center px-4 py-2 bg-purple-50 text-purple-700 hover:bg-purple-100 rounded-lg font-medium text-sm transition-colors border border-purple-200 disabled:opacity-50 disabled:cursor-not-allowed"
                             >
                               <CheckCircle2 className="h-4 w-4 mr-2" />
-                              {selectedRoute.status === 'completed' ? 'Retirada Concluída' : 'Confirmar Retirada'}
+                              {selectedRoute.status === 'completed' ? 'Retirada ConcluÃ­da' : 'Confirmar Retirada'}
                             </button>
                           </>
                         );
@@ -5341,7 +5348,7 @@ function RouteCreationContent() {
                                   if (insErr) throw insErr;
                                   const { error: updErr } = await supabase.from('orders').update({ status: 'assigned' }).in('id', toAddIds);
                                   if (updErr) throw updErr;
-                                  toast.success('Pedidos adicionados à rota');
+                                  toast.success('Pedidos adicionados Ã  rota');
 
                                   // Recarregar dados e atualizar selectedRoute para refletir os novos pedidos no modal
                                   await loadData();
@@ -5362,7 +5369,7 @@ function RouteCreationContent() {
                                     setSelectedRoute(updatedRouteData as any);
                                   }
 
-                                  // Limpar seleção de pedidos
+                                  // Limpar seleÃ§Ã£o de pedidos
                                   setSelectedOrders(new Set());
                                 } catch {
                                   toast.error('Falha ao adicionar pedidos');
@@ -5414,11 +5421,11 @@ function RouteCreationContent() {
                             onClick={async () => {
                               if (!selectedRoute) return;
                               if (!selectedRoute.route_orders || selectedRoute.route_orders.length === 0) {
-                                toast.error('Rota vazia não pode gerar romaneio');
+                                toast.error('Rota vazia nÃ£o pode gerar romaneio');
                                 return;
                               }
 
-                              const toastId = toast.loading('Gerando Romaneio de Separação...');
+                              const toastId = toast.loading('Gerando Romaneio de SeparaÃ§Ã£o...');
                               try {
                                 const orders = selectedRoute.route_orders
                                   .map((ro: any) => ro.order)
@@ -5440,7 +5447,7 @@ function RouteCreationContent() {
                             }}
                             className="flex items-center justify-center px-4 py-2 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 rounded-lg font-medium text-sm transition-colors border border-indigo-200"
                           >
-                            <FileText className="h-4 w-4 mr-2" /> Imprimir Separação
+                            <FileText className="h-4 w-4 mr-2" /> Imprimir SeparaÃ§Ã£o
                           </button>
 
                           {/* WhatsApp Button (cliente) */}
@@ -5505,7 +5512,7 @@ function RouteCreationContent() {
                                 const { data: roForGroup } = await supabase.from('route_orders').select('*, order:orders(*)').eq('route_id', route.id).order('sequence');
                                 const route_name = String(route.name || '');
 
-                                // Lógica para buscar nome da equipe (prioridade) ou manter nome do motorista
+                                // LÃ³gica para buscar nome da equipe (prioridade) ou manter nome do motorista
                                 const driverUserId = (route.driver as any)?.user_id;
                                 let finalDriverName = String((route.driver as any)?.user?.name || '');
 
@@ -5536,11 +5543,11 @@ function RouteCreationContent() {
                                     const { data: vData } = await supabase.from('vehicles').select('*').eq('id', route.vehicle_id).single();
                                     v = vData || null;
                                   }
-                                  if (v) vehicle_text = `${String(v.model || '')}${v.plate ? ' • ' + String(v.plate) : ''}`;
+                                  if (v) vehicle_text = `${String(v.model || '')}${v.plate ? ' â€¢ ' + String(v.plate) : ''}`;
                                 } catch { }
                                 const observations = String(route.observations || '');
                                 const documentos = (roForGroup || []).map((ro) => String(ro.order?.order_id_erp || ro.order_id || '')).filter(Boolean);
-                                if (documentos.length === 0) { toast.error('Nenhum número de lançamento encontrado'); setGroupSending(false); return; }
+                                if (documentos.length === 0) { toast.error('Nenhum nÃºmero de lanÃ§amento encontrado'); setGroupSending(false); return; }
                                 let webhookUrl = import.meta.env.VITE_WEBHOOK_ENVIA_GRUPO_URL;
                                 if (!webhookUrl) {
                                   try {
@@ -5557,7 +5564,7 @@ function RouteCreationContent() {
                                   if (!resp.ok) {
                                     const text = await resp.text();
                                     if (resp.status === 404 && text.includes('envia_grupo')) {
-                                      toast.error('Webhook não está ativo.');
+                                      toast.error('Webhook nÃ£o estÃ¡ ativo.');
                                     } else {
                                       toast.error('Falha ao enviar informativo');
                                     }
@@ -5616,7 +5623,7 @@ function RouteCreationContent() {
                           const { data: roData, error: roErr } = await supabase.from('route_orders').select('*, order:orders(*)').eq('route_id', routeId).order('sequence');
                           if (roErr) throw roErr;
 
-                          // Verificar se é rota de coleta (usa DANFE de devolução)
+                          // Verificar se Ã© rota de coleta (usa DANFE de devoluÃ§Ã£o)
                           const isPickupRoute = isCollectionRouteName(selectedRoute.name);
                           const pickupSourceXmlByOrderErp = isPickupRoute
                             ? await fetchPickupSourceReturnXmlMap(roData || [])
@@ -5673,7 +5680,7 @@ function RouteCreationContent() {
                           if (Array.isArray(payload)) payload.forEach((d: any) => { if (d?.data?.startsWith('JVBER')) pushData(d.data); if (d?.order_id && d?.data?.startsWith('JVBER')) mapByOrderId.set(String(d.order_id), d.data); });
                           if (Array.isArray(payload?.documentos)) payload.documentos.forEach((d: any) => { if (d?.data?.startsWith('JVBER')) pushData(d.data); if (d?.order_id) mapByOrderId.set(String(d.order_id), d.data); });
                           if (Array.isArray(payload?.arquivos)) payload.arquivos.forEach((d: any) => { if (d?.data?.startsWith('JVBER')) pushData(d.data); if (d?.order_id) mapByOrderId.set(String(d.order_id), d.data); });
-                          if (base64List.length === 0) { toast.error('Resposta não contém PDFs em base64'); setNfLoading(false); return; }
+                          if (base64List.length === 0) { toast.error('Resposta nÃ£o contÃ©m PDFs em base64'); setNfLoading(false); return; }
                           try {
                             // Salvar DANFE no campo correto baseado no tipo de rota
                             const danfeField = isPickupRoute ? 'return_danfe_base64' : 'danfe_base64';
@@ -5710,7 +5717,7 @@ function RouteCreationContent() {
                       <FileSpreadsheet className="h-4 w-4 mr-2" /> {nfLoading ? '...' : getRouteDanfeButtonLabel(selectedRoute)}
                     </button>
 
-                    {/* Relatório de Fechamento Button */}
+                    {/* RelatÃ³rio de Fechamento Button */}
                     <button
                       onClick={async () => {
                         if (!selectedRoute) return;
@@ -5721,7 +5728,7 @@ function RouteCreationContent() {
                           if (roErr) throw roErr;
 
                           // Ensure we have driver details
-                          let driverName = route.driver?.user?.name || route.driver?.name || 'Não informado';
+                          let driverName = route.driver?.user?.name || route.driver?.name || 'NÃ£o informado';
                           if (!route.driver && route.driver_id) {
                             const { data: d } = await supabase.from('drivers').select('*, user:users(*)').eq('id', route.driver_id).single();
                             if (d) driverName = d.user?.name || d.name || driverName;
@@ -5764,10 +5771,10 @@ function RouteCreationContent() {
                           const data = {
                             route: { ...route, route_orders: routeOrders },
                             driverName,
-                            supervisorName: route.conferente || 'Não informado',
+                            supervisorName: route.conferente || 'NÃ£o informado',
                             vehicleInfo,
-                            teamName: teamName || 'Não informada',
-                            helperName: helperName || 'Não informado',
+                            teamName: teamName || 'NÃ£o informada',
+                            helperName: helperName || 'NÃ£o informado',
                             generatedAt: new Date().toISOString()
                           };
 
@@ -5862,7 +5869,7 @@ function RouteCreationContent() {
                 <div className="flex items-center space-x-3">
                   <div className="p-2 bg-orange-100 rounded-lg"><Truck className="h-5 w-5 text-orange-600" /></div>
                   <div className="flex-1">
-                    <p className="text-sm font-medium text-gray-500">Veículo</p>
+                    <p className="text-sm font-medium text-gray-500">VeÃ­culo</p>
                     {isEditingRoute ? (
                       <select
                         value={editRouteVehicle}
@@ -5913,19 +5920,19 @@ function RouteCreationContent() {
                         <th className="px-4 py-3 text-left font-semibold text-gray-600">Pedido</th>
                         <th className="px-4 py-3 text-left font-semibold text-gray-600">Cliente</th>
                         <th className="px-4 py-3 text-left font-semibold text-gray-600">Status</th>
-                        <th className="px-4 py-3 text-right font-semibold text-gray-600">Ações</th>
+                        <th className="px-4 py-3 text-right font-semibold text-gray-600">AÃ§Ãµes</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100">
                       {selectedRoute.route_orders?.map(ro => {
                         const returnReason = (ro as any)?.return_reason?.reason || (ro as any)?.return_reason || (ro as any)?.order?.last_return_reason || '';
                         const returnNotes = (ro as any)?.return_notes || (ro as any)?.order?.last_return_notes || '';
-                        const returnInfo = [returnReason, returnNotes].filter(Boolean).join(' • ');
+                        const returnInfo = [returnReason, returnNotes].filter(Boolean).join(' â€¢ ');
                         return (
                           <tr key={ro.id} className="hover:bg-gray-50">
                             <td className="px-4 py-3">{ro.sequence}</td>
-                            <td className="px-4 py-3 font-medium">{ro.order?.order_id_erp || '—'}</td>
-                            <td className="px-4 py-3">{ro.order?.customer_name || '—'}</td>
+                            <td className="px-4 py-3 font-medium">{ro.order?.order_id_erp || 'â€”'}</td>
+                            <td className="px-4 py-3">{ro.order?.customer_name || 'â€”'}</td>
                             <td className="px-4 py-3">
                               <div className="flex flex-col gap-1">
                                 <span className={`px-2 py-1 rounded text-xs font-bold ${ro.status === 'delivered' ? 'bg-green-100 text-green-700' :
@@ -5952,7 +5959,7 @@ function RouteCreationContent() {
                                 </span>
                                 {ro.status === 'returned' && (returnReason || returnNotes) && (
                                   <span className="text-xs text-red-700" title={returnInfo}>
-                                    {returnReason || 'Retornado'}{returnNotes ? ` · ${returnNotes}` : ''}
+                                    {returnReason || 'Retornado'}{returnNotes ? ` Â· ${returnNotes}` : ''}
                                   </span>
                                 )}
                               </div>
@@ -5964,16 +5971,16 @@ function RouteCreationContent() {
                                   title="Remover da rota"
                                   onClick={async () => {
                                     try {
-                                      // LÓGICA DE EXCLUSÃO COM ROLLBACK PARA COLETAS
+                                      // LÃ“GICA DE EXCLUSÃƒO COM ROLLBACK PARA COLETAS
                                       const orderERP = String(ro.order?.order_id_erp || '');
                                       const isPickupOrder = orderERP.startsWith('C-');
 
                                       if (isPickupOrder) {
                                         // 1. Extrair ID original
                                         const originalErpInfo = orderERP.substring(2); // remove "C-"
-                                        // Tenta achar o pedido original. Como não temos o ID original fácil aqui no objeto ro, 
-                                        // vamos buscar pelo order_id_erp se possível, ou assumir que o 'C-' foi criado corretamente.
-                                        // O ideal seria ter salvo o original_id no pedido de coleta, mas usamos o ERP ID como chave lógica.
+                                        // Tenta achar o pedido original. Como nÃ£o temos o ID original fÃ¡cil aqui no objeto ro, 
+                                        // vamos buscar pelo order_id_erp se possÃ­vel, ou assumir que o 'C-' foi criado corretamente.
+                                        // O ideal seria ter salvo o original_id no pedido de coleta, mas usamos o ERP ID como chave lÃ³gica.
 
                                         // Buscar pedido original pelo ERP ID
                                         const { data: originalOrder } = await supabase
@@ -5992,13 +5999,13 @@ function RouteCreationContent() {
                                         if (delErr) throw delErr;
 
                                         // EXCLUIR O PEDIDO "C-" (limpeza)
-                                        // Como ele foi criado só pra essa rota, se saiu da rota, deve sumir.
+                                        // Como ele foi criado sÃ³ pra essa rota, se saiu da rota, deve sumir.
                                         await supabase.from('orders').delete().eq('id', ro.order_id);
 
-                                        toast.success('Coleta cancelada. Pedido voltou para pendências.');
+                                        toast.success('Coleta cancelada. Pedido voltou para pendÃªncias.');
 
                                       } else {
-                                        // LÓGICA PADRÃO PARA ENTREGAS NORMAIS
+                                        // LÃ“GICA PADRÃƒO PARA ENTREGAS NORMAIS
                                         const { error: delErr } = await supabase.from('route_orders').delete().eq('id', ro.id);
                                         if (delErr) throw delErr;
                                         const { error: updErr } = await supabase.from('orders').update({ status: 'pending' }).eq('id', ro.order_id);
@@ -6030,12 +6037,12 @@ function RouteCreationContent() {
                               {/* Individual Separation Print */}
                               <button
                                 className="p-1 text-orange-600 hover:text-orange-800 hover:bg-orange-50 rounded transition-colors"
-                                title="Imprimir Separação Individual"
+                                title="Imprimir SeparaÃ§Ã£o Individual"
                                 onClick={async () => {
                                   const toastId = toast.loading('Gerando...');
                                   try {
                                     const order = ro.order;
-                                    if (!order) throw new Error("Pedido não encontrado");
+                                    if (!order) throw new Error("Pedido nÃ£o encontrado");
 
                                     const pdfBytes = await SeparationSheetGenerator.generate({
                                       route: selectedRoute,
@@ -6062,9 +6069,9 @@ function RouteCreationContent() {
                                   const toastId = toast.loading('Gerando Romaneio de Entrega...');
                                   try {
                                     const order = ro.order;
-                                    if (!order) throw new Error("Pedido não encontrado");
+                                    if (!order) throw new Error("Pedido nÃ£o encontrado");
 
-                                    // Lógica de mapeamento igual ao romaneio geral, mas para UM pedido
+                                    // LÃ³gica de mapeamento igual ao romaneio geral, mas para UM pedido
                                     const address = order.address_json || {};
                                     const itemsRaw = Array.isArray(order.items_json) ? order.items_json : [];
                                     const prodLoc = order.raw_json?.produtos_locais || [];
@@ -6150,10 +6157,10 @@ function RouteCreationContent() {
                                         created_at: selectedRoute.created_at,
                                         updated_at: selectedRoute.updated_at,
                                       },
-                                      routeOrders: [ro], // Passa só esta routeOrder
+                                      routeOrders: [ro], // Passa sÃ³ esta routeOrder
                                       driver: driverObj as any,
                                       vehicle: vehicleObj,
-                                      orders: [mappedOrderResolved], // Passa só este pedido
+                                      orders: [mappedOrderResolved], // Passa sÃ³ este pedido
                                       generatedAt: new Date().toISOString(),
                                       teamName,
                                       helperName,
@@ -6179,7 +6186,7 @@ function RouteCreationContent() {
                                     try {
                                       const { data: orderData } = await supabase.from('orders').select('danfe_base64, return_danfe_base64, danfe_gerada_em').eq('id', ro.order_id).single();
                                       const b64 = getStoredDanfeForRoute(orderData, selectedRoute?.name);
-                                      if (!b64.startsWith('JVBER')) { toast.error('DANFE não encontrada no banco'); return; }
+                                      if (!b64.startsWith('JVBER')) { toast.error('DANFE nÃ£o encontrada no banco'); return; }
                                       syncSelectedRouteOrderDanfe(ro.id, {
                                         danfe_base64: orderData?.danfe_base64 || null,
                                         return_danfe_base64: orderData?.return_danfe_base64 || null,
@@ -6227,7 +6234,7 @@ function RouteCreationContent() {
                                             const first = Array.isArray(arr) ? arr[0] : null;
                                             return first ? (typeof first === 'string' ? first : (first?.xml || '')) : '';
                                           })());
-                                      if (!xml || !xml.includes('<')) { toast.error('XML não encontrado'); return; }
+                                      if (!xml || !xml.includes('<')) { toast.error('XML nÃ£o encontrado'); return; }
                                       const webhookUrl = await resolveDanfeWebhookUrl(isPickupDanfeRoute);
                                       const bodyPayload: any = {
                                         route_id: selectedRoute.id,
@@ -6250,7 +6257,7 @@ function RouteCreationContent() {
                                       if (typeof payload?.data === 'string' && payload.data.startsWith('JVBER')) b64 = payload.data;
                                       else if (Array.isArray(payload?.documentos)) { const item = payload.documentos.find((d: any) => String(d?.order_id) === String(ro.order_id)); if (item?.data?.startsWith('JVBER')) b64 = item.data; }
                                       else if (Array.isArray(payload)) { const item = payload.find((d: any) => String(d?.order_id) === String(ro.order_id)); if (item?.data?.startsWith('JVBER')) b64 = item.data; }
-                                      if (!b64) { toast.error('DANFE não retornada pelo webhook'); return; }
+                                      if (!b64) { toast.error('DANFE nÃ£o retornada pelo webhook'); return; }
                                       const danfeField = isPickupDanfeRoute ? 'return_danfe_base64' : 'danfe_base64';
                                       const generatedAt = new Date().toISOString();
                                       await supabase.from('orders').update({ [danfeField]: b64, danfe_gerada_em: generatedAt }).eq('id', ro.order_id);
@@ -6377,7 +6384,7 @@ function RouteCreationContent() {
                         </div>
                         <p className="text-xs text-gray-500 mt-2">
                           Previsao: {formatDate(item.previsaoEntrega)}
-                          {(item.routeCode || item.routeName) ? ` • Rota: ${item.routeCode || item.routeName}` : ''}
+                          {(item.routeCode || item.routeName) ? ` â€¢ Rota: ${item.routeCode || item.routeName}` : ''}
                         </p>
                       </div>
                     ))}
@@ -6426,7 +6433,7 @@ function RouteCreationContent() {
             <div className="bg-white rounded-xl shadow-xl max-w-lg w-full p-6">
               <div className="flex items-center gap-3 mb-4 text-yellow-600">
                 <AlertTriangle className="h-8 w-8" />
-                <h3 className="text-lg font-bold text-gray-900">Confirmação Necessária</h3>
+                <h3 className="text-lg font-bold text-gray-900">ConfirmaÃ§Ã£o NecessÃ¡ria</h3>
               </div>
               <p className="text-gray-600 mb-4">
                 Alguns pedidos selecionados possuem itens em locais diferentes do filtro atual (<strong>{filterLocalEstocagem}</strong>).
@@ -6454,13 +6461,13 @@ function RouteCreationContent() {
         )
       }
 
-      {/* Modal de Ordenação do PDF */}
+      {/* Modal de OrdenaÃ§Ã£o do PDF */}
       {showPdfSortModal && selectedRoute && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 overflow-hidden">
             <div className="bg-gradient-to-r from-blue-600 to-blue-700 px-6 py-4">
               <h3 className="text-lg font-bold text-white">Gerar Romaneio de Entrega</h3>
-              <p className="text-blue-100 text-sm">Escolha a ordenação dos pedidos</p>
+              <p className="text-blue-100 text-sm">Escolha a ordenaÃ§Ã£o dos pedidos</p>
             </div>
             <div className="p-6 space-y-4">
               <div className="space-y-3">
@@ -6489,7 +6496,7 @@ function RouteCreationContent() {
                   />
                   <div className="ml-3">
                     <span className="font-medium text-gray-900">Por Cidade</span>
-                    <p className="text-sm text-gray-500">Ordem alfabética (A-Z)</p>
+                    <p className="text-sm text-gray-500">Ordem alfabÃ©tica (A-Z)</p>
                   </div>
                 </label>
                 <label className="flex items-center p-3 border rounded-lg cursor-pointer hover:bg-gray-50 transition-colors">
@@ -6502,7 +6509,7 @@ function RouteCreationContent() {
                     className="w-4 h-4 text-blue-600 border-gray-300 focus:ring-blue-500"
                   />
                   <div className="ml-3">
-                    <span className="font-medium text-gray-900">Por Previsão de Entrega</span>
+                    <span className="font-medium text-gray-900">Por PrevisÃ£o de Entrega</span>
                     <p className="text-sm text-gray-500">Da mais antiga para a mais recente</p>
                   </div>
                 </label>
@@ -6517,7 +6524,7 @@ function RouteCreationContent() {
                   />
                   <div className="ml-3">
                     <span className="font-medium text-gray-900">Por Cliente</span>
-                    <p className="text-sm text-gray-500">Ordem alfabética (A-Z)</p>
+                    <p className="text-sm text-gray-500">Ordem alfabÃ©tica (A-Z)</p>
                   </div>
                 </label>
               </div>
@@ -6597,7 +6604,7 @@ function RouteCreationContent() {
                       );
                     }
 
-                    // Ordenar pedidos conforme opção selecionada
+                    // Ordenar pedidos conforme opÃ§Ã£o selecionada
                     const parseDate = (d: any) => {
                       if (!d) return new Date(0);
                       try { return new Date(d); } catch { return new Date(0); }
@@ -6721,5 +6728,8 @@ export default function RouteCreation() {
     </RouteCreationErrorBoundary>
   );
 }
+
+
+
 
 
