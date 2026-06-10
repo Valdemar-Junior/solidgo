@@ -7,6 +7,7 @@ import {
   Package,
   Trash2,
   Eye,
+  FileDown,
   FileText,
   FileSpreadsheet,
   MessageSquare,
@@ -83,6 +84,16 @@ type FullUrgentAlertSummary = {
   awaitingRouting: FullUrgentAlertItem[];
   inSeparation: FullUrgentAlertItem[];
 };
+
+type RouteMdfeManifest = {
+  id: string;
+  status: 'draft' | 'processing' | 'issued' | 'closed' | 'cancelled' | 'error';
+  pdf_url: string | null;
+  focus_reference: string | null;
+  environment: 'homologation' | 'production' | null;
+};
+
+const ACTIVE_MDFE_STATUSES = new Set<RouteMdfeManifest['status']>(['draft', 'processing', 'issued']);
 
 // --- ERROR BOUNDARY ---
 class RouteCreationErrorBoundary extends React.Component<
@@ -205,6 +216,8 @@ function RouteCreationContent() {
   const [fullUrgentAlert, setFullUrgentAlert] = useState<FullUrgentAlertSummary | null>(null);
   const [fullUrgentAlertRecheckToken, setFullUrgentAlertRecheckToken] = useState(0);
   const [mdfeEnabled, setMdfeEnabled] = useState(false);
+  const [routeMdfeManifest, setRouteMdfeManifest] = useState<RouteMdfeManifest | null>(null);
+  const [mdfeRouteActionLoading, setMdfeRouteActionLoading] = useState(false);
 
   // Loading states for specific actions
   const [nfLoading, setNfLoading] = useState(false);
@@ -603,6 +616,80 @@ function RouteCreationContent() {
       setEditRouteConferente(selectedRoute.conferente_id || '');
     }
   }, [showRouteModal, selectedRoute, isEditingRoute, deliveryRouteCatalog]);
+
+  useEffect(() => {
+    const loadRouteManifest = async () => {
+      if (!showRouteModal || !selectedRoute?.id || !mdfeEnabled) {
+        setRouteMdfeManifest(null);
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from('mdfe_manifests')
+        .select('id, status, pdf_url, focus_reference, environment')
+        .eq('route_id', selectedRoute.id)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (error) {
+        console.error(error);
+        setRouteMdfeManifest(null);
+        return;
+      }
+
+      const manifest = (data as RouteMdfeManifest | null) || null;
+      setRouteMdfeManifest(
+        manifest && ACTIVE_MDFE_STATUSES.has(manifest.status) ? manifest : null
+      );
+    };
+
+    void loadRouteManifest();
+  }, [showRouteModal, selectedRoute?.id, mdfeEnabled, showMdfeModal]);
+
+  const handleOpenRouteMdfe = async () => {
+    if (!routeMdfeManifest?.id) {
+      setShowMdfeModal(true);
+      return;
+    }
+
+    try {
+      setMdfeRouteActionLoading(true);
+
+      const { data, error } = await supabase.functions.invoke('refresh-mdfe', {
+        body: { manifestId: routeMdfeManifest.id },
+      });
+
+      if (error) throw error;
+      if (data?.error) throw new Error(data.error);
+
+      const refreshedManifest = data?.manifest as RouteMdfeManifest | undefined;
+      const pdfUrl = refreshedManifest?.pdf_url || routeMdfeManifest.pdf_url;
+
+      setRouteMdfeManifest((previous) =>
+        previous
+          ? {
+              ...previous,
+              status: refreshedManifest?.status || previous.status,
+              pdf_url: pdfUrl || previous.pdf_url,
+            }
+          : previous
+      );
+
+      if (pdfUrl) {
+        window.open(pdfUrl, '_blank', 'noopener,noreferrer');
+        return;
+      }
+
+      toast.info('Manifesto localizado, mas o PDF ainda nao esta disponivel. Abrindo historico MDF-e.');
+      navigate('/admin/mdfe/manifests');
+    } catch (error: any) {
+      console.error(error);
+      toast.error(error?.message || 'Erro ao consultar/imprimir MDF-e da rota');
+    } finally {
+      setMdfeRouteActionLoading(false);
+    }
+  };
 
   const handleEditTeamChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const tid = e.target.value;
@@ -5194,16 +5281,36 @@ function RouteCreationContent() {
                         <>
                           {mdfeEnabled && (
                             <button
-                              onClick={() => setShowMdfeModal(true)}
-                              disabled={!selectedRoute?.route_orders || selectedRoute.route_orders.length === 0}
+                              onClick={() => {
+                                if (routeMdfeManifest?.id) {
+                                  void handleOpenRouteMdfe();
+                                  return;
+                                }
+
+                                setShowMdfeModal(true);
+                              }}
+                              disabled={
+                                !selectedRoute?.route_orders ||
+                                selectedRoute.route_orders.length === 0 ||
+                                mdfeRouteActionLoading
+                              }
                               className="flex items-center justify-center px-4 py-2 bg-cyan-50 text-cyan-700 hover:bg-cyan-100 rounded-lg font-medium text-sm transition-colors border border-cyan-200 disabled:opacity-50 disabled:cursor-not-allowed"
                               title={
                                 !selectedRoute?.route_orders || selectedRoute.route_orders.length === 0
                                   ? 'A rota precisa ter pedidos para gerar MDF-e'
-                                  : 'Abrir emissao isolada do MDF-e'
+                                  : routeMdfeManifest?.id
+                                    ? 'Atualizar o manifesto da rota e abrir o DAMDFE'
+                                    : 'Abrir emissao isolada do MDF-e'
                               }
                             >
-                              <FilePlus className="h-4 w-4 mr-2" /> Gerar MDF-e
+                              {mdfeRouteActionLoading ? (
+                                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                              ) : routeMdfeManifest?.id ? (
+                                <FileDown className="h-4 w-4 mr-2" />
+                              ) : (
+                                <FilePlus className="h-4 w-4 mr-2" />
+                              )}{' '}
+                              {routeMdfeManifest?.id ? 'Imprimir MDF-e' : 'Gerar MDF-e'}
                             </button>
                           )}
 

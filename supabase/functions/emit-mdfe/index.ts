@@ -6,6 +6,7 @@ type EmitRequest = {
   emitterId?: string;
   vehicleId?: string;
   driverId?: string;
+  routeOrderIds?: string[];
 };
 
 type ParsedDocument = {
@@ -74,9 +75,18 @@ Deno.serve(async (request) => {
     const emitterId = String(body.emitterId || '').trim();
     const vehicleId = String(body.vehicleId || '').trim();
     const driverId = String(body.driverId || '').trim();
+    const selectedRouteOrderIds = Array.isArray(body.routeOrderIds)
+      ? body.routeOrderIds.map((value) => String(value || '').trim()).filter(Boolean)
+      : [];
 
     if (!routeId || !emitterId || !vehicleId || !driverId) {
-      return jsonResponse({ error: 'routeId, emitterId, vehicleId e driverId sao obrigatorios.' }, 400);
+      return jsonResponse(
+        {
+          error: 'Nao foi possivel iniciar a emissao do MDF-e.',
+          user_message: 'Selecione emitente, veiculo e condutor antes de emitir o manifesto.',
+        },
+        400
+      );
     }
 
     const [settingsResponse, emitterResponse, vehicleResponse, driverResponse, routeResponse, duplicateResponse] =
@@ -127,22 +137,27 @@ Deno.serve(async (request) => {
     const driver = driverResponse.data;
     const route = routeResponse.data as any;
 
-    if (!settings) return jsonResponse({ error: 'Configuracao do MDF-e nao encontrada.' }, 422);
-    if (!emitter) return jsonResponse({ error: 'Emitente MDF-e nao encontrado ou inativo.' }, 422);
-    if (!vehicle) return jsonResponse({ error: 'Veiculo MDF-e nao encontrado ou inativo.' }, 422);
-    if (!driver) return jsonResponse({ error: 'Condutor MDF-e nao encontrado ou inativo.' }, 422);
+    if (!settings) return jsonResponse({ error: 'Configuracao do MDF-e nao encontrada.', user_message: 'As configuracoes do modulo MDF-e nao foram encontradas. Revise o menu MDF-e > Configuracoes.' }, 422);
+    if (!emitter) return jsonResponse({ error: 'Emitente MDF-e nao encontrado ou inativo.', user_message: 'O emitente selecionado nao esta disponivel. Revise o cadastro de emitentes MDF-e.' }, 422);
+    if (!vehicle) return jsonResponse({ error: 'Veiculo MDF-e nao encontrado ou inativo.', user_message: 'O veiculo selecionado nao esta disponivel. Revise o cadastro de veiculos MDF-e.' }, 422);
+    if (!driver) return jsonResponse({ error: 'Condutor MDF-e nao encontrado ou inativo.', user_message: 'O condutor selecionado nao esta disponivel. Revise o cadastro de condutores MDF-e.' }, 422);
 
-    const environment = String(settings.environment || 'homologation');
+    const environment = normalizeEnvironment(settings.environment);
     const focusToken =
       environment === 'production'
         ? Deno.env.get('FOCUS_NFE_PRODUCTION_TOKEN') || Deno.env.get('FOCUS_NFE_TOKEN')
         : Deno.env.get('FOCUS_NFE_HOMOLOGATION_TOKEN') || Deno.env.get('FOCUS_NFE_TOKEN');
 
     if (!focusToken) {
-      return jsonResponse({ error: 'Token da Focus nao configurado no backend.' }, 500);
+      return jsonResponse({ error: 'Token da Focus nao configurado no backend.', user_message: 'O token da Focus nao esta configurado no servidor. Fale com o administrador do sistema.' }, 500);
     }
 
-    const focusBaseUrl = Deno.env.get('FOCUS_NFE_BASE_URL') || 'https://api.focusnfe.com.br';
+    const configuredBaseUrl = Deno.env.get('FOCUS_NFE_BASE_URL')?.trim();
+    const focusBaseUrl =
+      configuredBaseUrl ||
+      (environment === 'production'
+        ? 'https://api.focusnfe.com.br'
+        : 'https://homologacao.focusnfe.com.br');
 
     if (duplicateResponse.data) {
       const duplicateStatus = String(duplicateResponse.data.status || '');
@@ -162,6 +177,8 @@ Deno.serve(async (request) => {
           return jsonResponse(
             {
               error: 'Ja existe um MDF-e em aberto para esta rota.',
+              user_message:
+                'Esta rota ja possui um manifesto em andamento. Atualize o status, imprima, encerre ou cancele o MDF-e atual antes de tentar uma nova emissao.',
               manifest_id: duplicateResponse.data.id,
               status: remoteStatus || duplicateStatus,
               reference: duplicateReference,
@@ -173,6 +190,8 @@ Deno.serve(async (request) => {
         return jsonResponse(
           {
             error: 'Ja existe um MDF-e em aberto para esta rota.',
+            user_message:
+              'Esta rota ja possui um manifesto em aberto. Use o MDF-e atual ou finalize-o antes de emitir outro.',
             manifest_id: duplicateResponse.data.id,
             status: duplicateResponse.data.status,
             reference: duplicateResponse.data.focus_reference,
@@ -190,6 +209,7 @@ Deno.serve(async (request) => {
       return jsonResponse(
         {
           error: 'O veiculo MDF-e selecionado nao possui tipo de rodado valido. Use os codigos 01 a 06 no cadastro do veiculo.',
+          user_message: 'O cadastro do veiculo esta incompleto. Preencha corretamente o tipo de rodado no modulo MDF-e.',
         },
         422
       );
@@ -199,6 +219,7 @@ Deno.serve(async (request) => {
       return jsonResponse(
         {
           error: 'O veiculo MDF-e selecionado nao possui tipo de carroceria valido. Use os codigos 00 a 05 no cadastro do veiculo.',
+          user_message: 'O cadastro do veiculo esta incompleto. Preencha corretamente o tipo de carroceria no modulo MDF-e.',
         },
         422
       );
@@ -208,6 +229,7 @@ Deno.serve(async (request) => {
       return jsonResponse(
         {
           error: 'O veiculo MDF-e selecionado nao possui UF de licenciamento valida.',
+          user_message: 'O cadastro do veiculo esta incompleto. Preencha a UF de licenciamento antes de emitir o MDF-e.',
         },
         422
       );
@@ -219,17 +241,41 @@ Deno.serve(async (request) => {
 
     if (!loadingCityCode || !loadingCityName || !loadingUf) {
       return jsonResponse(
-        { error: 'Cidade de carregamento nao configurada. Preencha o carregamento padrao no modulo MDF-e.' },
+        {
+          error: 'Cidade de carregamento nao configurada. Preencha o carregamento padrao no modulo MDF-e.',
+          user_message: 'A cidade de carregamento padrao do MDF-e nao foi configurada. Revise as configuracoes do modulo MDF-e.',
+        },
         422
       );
     }
 
     const routeOrders = Array.isArray(route?.route_orders) ? route.route_orders : [];
     if (routeOrders.length === 0) {
-      return jsonResponse({ error: 'A rota nao possui pedidos para emissao do MDF-e.' }, 422);
+      return jsonResponse(
+        {
+          error: 'A rota nao possui pedidos para emissao do MDF-e.',
+          user_message: 'A rota esta sem pedidos. Adicione pedidos na rota antes de emitir o MDF-e.',
+        },
+        422
+      );
     }
 
-    const documents = routeOrders
+    const filteredRouteOrders =
+      selectedRouteOrderIds.length > 0
+        ? routeOrders.filter((routeOrder: any) => selectedRouteOrderIds.includes(String(routeOrder.id)))
+        : routeOrders;
+
+    if (filteredRouteOrders.length === 0) {
+      return jsonResponse(
+        {
+          error: 'Nenhum pedido foi selecionado para o manifesto.',
+          user_message: 'Selecione ao menos um pedido da rota para emitir o MDF-e.',
+        },
+        422
+      );
+    }
+
+    const documents = filteredRouteOrders
       .sort((left: any, right: any) => Number(left.sequence || 0) - Number(right.sequence || 0))
       .map((routeOrder: any) => {
         const order = routeOrder.order;
@@ -266,6 +312,7 @@ Deno.serve(async (request) => {
       return jsonResponse(
         {
           error: 'A rota possui pendencias impeditivas para emissao do MDF-e.',
+          user_message: 'Alguns pedidos da rota estao sem XML ou com dados fiscais incompletos. Corrija os pedidos listados antes de emitir o MDF-e.',
           blocking_issues: blockingIssues,
         },
         422
@@ -280,6 +327,7 @@ Deno.serve(async (request) => {
       return jsonResponse(
         {
           error: 'A rota possui destinos em mais de uma UF. A emissao atual exige uma unica UF de descarregamento.',
+          user_message: 'Esta rota mistura entregas em mais de um estado. Separe a carga por UF para emitir o MDF-e corretamente.',
           ufs: distinctUnloadingUfs,
         },
         422
@@ -295,7 +343,7 @@ Deno.serve(async (request) => {
       const key = `${document.cityCode}|${document.cityName}|${document.uf}`;
       if (!unloadingGroups.has(key)) {
         unloadingGroups.set(key, {
-          codigo: String(document.cityCode),
+          codigo: Number(document.cityCode),
           nome: String(document.cityName),
           notas_fiscais: [],
         });
@@ -308,8 +356,134 @@ Deno.serve(async (request) => {
     const totalGrossWeight = documents.reduce((acc, document) => acc + Number(document.grossWeight || 0), 0);
     const lastDocument = documents[documents.length - 1];
     const reference = buildFocusReference(route.route_code || route.id);
-    const payloadGrossWeight =
-      environment === 'homologation' && totalGrossWeight <= 0 ? 5 : totalGrossWeight;
+    const payloadGrossWeight = environment === 'homologation' ? 5 : totalGrossWeight;
+    const conflictingManifestResponse = await adminClient
+      .from('mdfe_manifests')
+      .select(`
+        id,
+        route_id,
+        status,
+        focus_reference,
+        loading_uf,
+        unloading_uf,
+        route:routes!mdfe_manifests_route_id_fkey(route_code, name)
+      `)
+      .eq('vehicle_id', vehicleId)
+      .eq('loading_uf', loadingUf)
+      .eq('unloading_uf', distinctUnloadingUfs[0])
+      .in('status', ['processing', 'issued'])
+      .neq('route_id', routeId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (conflictingManifestResponse.error) throw conflictingManifestResponse.error;
+
+    if (conflictingManifestResponse.data) {
+      const conflictingManifest = conflictingManifestResponse.data as any;
+      const conflictingStatus = String(conflictingManifest.status || '');
+      const conflictingReference = String(conflictingManifest.focus_reference || '').trim();
+
+      if (conflictingStatus === 'processing' && conflictingReference) {
+        const remoteStatus = await reconcileManifestStatus({
+          manifestId: String(conflictingManifest.id),
+          reference: conflictingReference,
+          focusBaseUrl,
+          focusToken,
+        });
+
+        if (remoteStatus !== 'error' && remoteStatus !== 'cancelled' && remoteStatus !== 'closed') {
+          return jsonResponse(
+            {
+              error:
+                'Ja existe um MDF-e em aberto para esta placa no mesmo par UF carregamento/descarregamento.',
+              user_message:
+                `O veiculo ${vehicle.plate} ja possui um MDF-e em aberto${conflictingManifest.route?.route_code ? ` na rota ${conflictingManifest.route.route_code}` : ''}. Encerre ou cancele esse manifesto antes de emitir outro para a mesma viagem.`,
+              manifest_id: conflictingManifest.id,
+              status: remoteStatus || conflictingStatus,
+              reference: conflictingReference,
+              route_code: conflictingManifest.route?.route_code || conflictingManifest.route?.name || null,
+            },
+            409
+          );
+        }
+      } else {
+        return jsonResponse(
+          {
+            error:
+              'Ja existe um MDF-e em aberto para esta placa no mesmo par UF carregamento/descarregamento.',
+            user_message:
+              `O veiculo ${vehicle.plate} ja possui um MDF-e em aberto${conflictingManifest.route?.route_code ? ` na rota ${conflictingManifest.route.route_code}` : ''}. Encerre ou cancele esse manifesto antes de emitir outro para a mesma viagem.`,
+            manifest_id: conflictingManifest.id,
+            status: conflictingManifest.status,
+            reference: conflictingManifest.focus_reference,
+            route_code: conflictingManifest.route?.route_code || conflictingManifest.route?.name || null,
+          },
+          409
+        );
+      }
+    }
+
+    const driverConflictResponse = await adminClient
+      .from('mdfe_manifests')
+      .select(`
+        id,
+        route_id,
+        status,
+        focus_reference,
+        route:routes!mdfe_manifests_route_id_fkey(route_code, name)
+      `)
+      .eq('driver_id', driverId)
+      .in('status', ['draft', 'processing', 'issued'])
+      .neq('route_id', routeId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (driverConflictResponse.error) throw driverConflictResponse.error;
+
+    if (driverConflictResponse.data) {
+      const conflictingManifest = driverConflictResponse.data as any;
+      const conflictingStatus = String(conflictingManifest.status || '');
+      const conflictingReference = String(conflictingManifest.focus_reference || '').trim();
+
+      if (conflictingStatus === 'processing' && conflictingReference) {
+        const remoteStatus = await reconcileManifestStatus({
+          manifestId: String(conflictingManifest.id),
+          reference: conflictingReference,
+          focusBaseUrl,
+          focusToken,
+        });
+
+        if (remoteStatus !== 'error' && remoteStatus !== 'cancelled' && remoteStatus !== 'closed') {
+          return jsonResponse(
+            {
+              error: 'Ja existe um MDF-e em aberto para este condutor.',
+              user_message:
+                `O condutor ${driver.name} ja esta vinculado a um MDF-e em aberto${conflictingManifest.route?.route_code ? ` na rota ${conflictingManifest.route.route_code}` : ''}. Encerre ou cancele o manifesto anterior antes de usar este motorista novamente.`,
+              manifest_id: conflictingManifest.id,
+              status: remoteStatus || conflictingStatus,
+              reference: conflictingReference,
+              route_code: conflictingManifest.route?.route_code || conflictingManifest.route?.name || null,
+            },
+            409
+          );
+        }
+      } else {
+        return jsonResponse(
+          {
+            error: 'Ja existe um MDF-e em aberto para este condutor.',
+            user_message:
+              `O condutor ${driver.name} ja esta vinculado a um MDF-e em aberto${conflictingManifest.route?.route_code ? ` na rota ${conflictingManifest.route.route_code}` : ''}. Encerre ou cancele o manifesto anterior antes de usar este motorista novamente.`,
+            manifest_id: conflictingManifest.id,
+            status: conflictingManifest.status,
+            reference: conflictingManifest.focus_reference,
+            route_code: conflictingManifest.route?.route_code || conflictingManifest.route?.name || null,
+          },
+          409
+        );
+      }
+    }
 
     const payload = {
       data_emissao: new Date().toISOString(),
@@ -318,7 +492,7 @@ Deno.serve(async (request) => {
       uf_fim: distinctUnloadingUfs[0],
       municipios_carregamento: [
         {
-          codigo: loadingCityCode,
+          codigo: Number(loadingCityCode),
           nome: loadingCityName,
         },
       ],
@@ -331,7 +505,7 @@ Deno.serve(async (request) => {
       numero_emitente: emitter.number,
       ...(emitter.complement ? { complemento_emitente: emitter.complement } : {}),
       bairro_emitente: emitter.neighborhood,
-      codigo_municipio_emitente: cleanDigits(emitter.city_code),
+      codigo_municipio_emitente: Number(cleanDigits(emitter.city_code)),
       municipio_emitente: emitter.city_name,
       ...(emitter.zip_code ? { cep_emitente: cleanDigits(emitter.zip_code) } : {}),
       uf_emitente: String(emitter.uf || '').trim().toUpperCase(),
@@ -341,6 +515,8 @@ Deno.serve(async (request) => {
       valor_total_carga: totalValue.toFixed(2),
       codigo_unidade_medida_peso_bruto: '01',
       peso_bruto: payloadGrossWeight.toFixed(4),
+      tipo_carga: '05',
+      descricao_produto: 'Moveis',
       veiculo_tracao: {
         placa: vehicle.plate,
       },
@@ -382,6 +558,9 @@ Deno.serve(async (request) => {
       return jsonResponse(
         {
           error: 'A Focus rejeitou a emissao do MDF-e.',
+          user_message:
+            resolveFocusUserMessage(focusJson) ||
+            'A Focus recusou a emissao. Revise os dados fiscais do manifesto e tente novamente.',
           status_code: focusResponse.status,
           focus_response: focusJson ?? responseText,
           payload,
@@ -671,12 +850,28 @@ function resolveFocusMessage(payload: any) {
   );
 }
 
+function resolveFocusUserMessage(payload: any) {
+  return (
+    payload?.mensagem_sefaz ||
+    payload?.mensagem ||
+    payload?.message ||
+    payload?.descricao ||
+    null
+  );
+}
+
 function normalizeStatus(value: unknown) {
   return String(value || '')
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .trim()
     .toLowerCase();
+}
+
+function normalizeEnvironment(value: unknown) {
+  const normalized = normalizeStatus(value);
+  if (normalized === 'production' || normalized === 'producao') return 'production';
+  return 'homologation';
 }
 
 function jsonResponse(body: unknown, status = 200) {

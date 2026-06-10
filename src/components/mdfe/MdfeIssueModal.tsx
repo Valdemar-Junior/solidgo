@@ -74,6 +74,7 @@ type RouteOrderForMdfe = {
 };
 
 type ParsedDocument = {
+  routeOrderId: string;
   orderId: string;
   orderIdErp: string;
   customerName: string;
@@ -123,6 +124,7 @@ export default function MdfeIssueModal({
   const [selectedEmitterId, setSelectedEmitterId] = useState('');
   const [selectedVehicleId, setSelectedVehicleId] = useState('');
   const [selectedDriverId, setSelectedDriverId] = useState('');
+  const [selectedRouteOrderIds, setSelectedRouteOrderIds] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     if (!isOpen || !routeId) return;
@@ -195,6 +197,7 @@ export default function MdfeIssueModal({
           if (!order) {
             routeIssues.push(`Pedido da sequencia ${routeOrder.sequence || '-'} sem vinculo carregado.`);
             return {
+              routeOrderId: routeOrder.id,
               orderId: '',
               orderIdErp: '',
               customerName: '',
@@ -212,6 +215,7 @@ export default function MdfeIssueModal({
 
           const xml = String(order.xml_documento || order.return_nfe_xml || '').trim();
           return parseNfeDocument({
+            routeOrderId: routeOrder.id,
             orderId: order.id,
             orderIdErp: String(order.order_id_erp || ''),
             customerName: String(order.customer_name || ''),
@@ -245,6 +249,9 @@ export default function MdfeIssueModal({
             routeOrderCount: routeOrders.length,
             routeIssues,
           });
+          setSelectedRouteOrderIds(
+            new Set(documents.map((item) => item.routeOrderId).filter(Boolean))
+          );
           setSelectedEmitterId(defaultEmitterId || '');
           setSelectedVehicleId(matchedVehicle?.id || '');
           setSelectedDriverId(matchedDriver?.id || '');
@@ -280,8 +287,12 @@ export default function MdfeIssueModal({
     [state.drivers, selectedDriverId]
   );
 
+  const includedDocuments = useMemo(() => {
+    return state.documents.filter((document) => selectedRouteOrderIds.has(document.routeOrderId));
+  }, [state.documents, selectedRouteOrderIds]);
+
   const totals = useMemo(() => {
-    return state.documents.reduce(
+    return includedDocuments.reduce(
       (acc, document) => {
         acc.totalValue += Number(document.totalValue || 0);
         acc.totalWeight += Number(document.grossWeight || 0);
@@ -292,17 +303,17 @@ export default function MdfeIssueModal({
       },
       { totalValue: 0, totalWeight: 0, validKeys: 0, documentsWithIssues: 0, documentsWithWarnings: 0 }
     );
-  }, [state.documents]);
+  }, [includedDocuments]);
 
   const unloadingCities = useMemo(() => {
     return Array.from(
       new Set(
-        state.documents
+        includedDocuments
           .filter((item) => item.cityName || item.uf)
           .map((item) => formatCity(item.cityName, item.uf))
       )
     );
-  }, [state.documents]);
+  }, [includedDocuments]);
 
   const validationItems = useMemo(() => {
     return [
@@ -328,29 +339,29 @@ export default function MdfeIssueModal({
       },
       {
         label: 'Todos os pedidos possuem XML',
-        ok: state.documents.length > 0 && state.documents.every((item) => !item.blockingIssues.includes('XML nao encontrado no pedido.')),
+        ok: includedDocuments.length > 0 && includedDocuments.every((item) => !item.blockingIssues.includes('XML nao encontrado no pedido.')),
       },
       {
         label: 'Todas as NF-es possuem chave',
-        ok: state.documents.length > 0 && state.documents.every((item) => Boolean(item.nfeKey)),
+        ok: includedDocuments.length > 0 && includedDocuments.every((item) => Boolean(item.nfeKey)),
       },
       {
         label: 'Peso ausente nao bloqueia emissao',
         ok: true,
       },
     ];
-  }, [selectedDriver, selectedEmitter, selectedVehicle, state.documents, totals.totalWeight]);
+  }, [includedDocuments, selectedDriver, selectedEmitter, selectedVehicle, totals.totalWeight]);
 
   const hasBlockingIssues = useMemo(() => {
-    return state.documents.some((item) => item.blockingIssues.length > 0);
-  }, [state.documents]);
+    return includedDocuments.some((item) => item.blockingIssues.length > 0);
+  }, [includedDocuments]);
 
   const canEmit =
     Boolean(routeId) &&
     Boolean(selectedEmitterId) &&
     Boolean(selectedVehicleId) &&
     Boolean(selectedDriverId) &&
-    state.routeOrderCount > 0 &&
+    includedDocuments.length > 0 &&
     !hasBlockingIssues &&
     Boolean(selectedVehicle?.rodado_type) &&
     Boolean(selectedVehicle?.body_type) &&
@@ -368,6 +379,7 @@ export default function MdfeIssueModal({
           emitterId: selectedEmitterId,
           vehicleId: selectedVehicleId,
           driverId: selectedDriverId,
+          routeOrderIds: Array.from(selectedRouteOrderIds),
         },
       });
 
@@ -393,6 +405,7 @@ export default function MdfeIssueModal({
           });
 
           resolvedMessage =
+            payload?.user_message ||
             payload?.error ||
             payload?.message ||
             payload?.focus_response?.mensagem ||
@@ -414,6 +427,18 @@ export default function MdfeIssueModal({
   };
 
   if (!isOpen) return null;
+
+  const toggleDocumentSelection = (routeOrderId: string) => {
+    setSelectedRouteOrderIds((previous) => {
+      const next = new Set(previous);
+      if (next.has(routeOrderId)) {
+        next.delete(routeOrderId);
+      } else {
+        next.add(routeOrderId);
+      }
+      return next;
+    });
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm">
@@ -471,12 +496,12 @@ export default function MdfeIssueModal({
                   icon={Route}
                   title="Rota"
                   description={routeCode || routeName || 'Nao informada'}
-                  detail={`${state.routeOrderCount} pedido(s) na rota`}
+                  detail={`${includedDocuments.length} de ${state.routeOrderCount} pedido(s) no manifesto`}
                 />
                 <SummaryCard
                   icon={FileText}
                   title="NF-es validas"
-                  description={`${totals.validKeys} de ${state.routeOrderCount}`}
+                  description={`${totals.validKeys} de ${includedDocuments.length}`}
                   detail={
                     totals.documentsWithIssues > 0
                       ? `${totals.documentsWithIssues} documento(s) com bloqueio`
@@ -562,11 +587,17 @@ export default function MdfeIssueModal({
                             <th className="px-3 py-2">Destino</th>
                             <th className="px-3 py-2">Peso</th>
                             <th className="px-3 py-2">Valor</th>
+                            <th className="px-3 py-2 text-right">Manifesto</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100">
                           {state.documents.map((document) => (
-                            <tr key={`${document.orderId}-${document.orderIdErp}`} className="align-top text-sm text-slate-700">
+                            <tr
+                              key={document.routeOrderId}
+                              className={`align-top text-sm text-slate-700 ${
+                                selectedRouteOrderIds.has(document.routeOrderId) ? '' : 'bg-slate-50 opacity-70'
+                              }`}
+                            >
                               <td className="px-3 py-3">
                                 <p className="font-medium text-slate-900">{document.orderIdErp || '-'}</p>
                                 <p className="text-xs text-slate-500">{document.customerName || '-'}</p>
@@ -596,6 +627,21 @@ export default function MdfeIssueModal({
                               </td>
                               <td className="px-3 py-3 text-xs text-slate-600">
                                 {formatCurrency(document.totalValue)}
+                              </td>
+                              <td className="px-3 py-3 text-right">
+                                <button
+                                  type="button"
+                                  onClick={() => toggleDocumentSelection(document.routeOrderId)}
+                                  className={`inline-flex items-center rounded-xl px-3 py-2 text-xs font-semibold ${
+                                    selectedRouteOrderIds.has(document.routeOrderId)
+                                      ? 'border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100'
+                                      : 'border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                                  }`}
+                                >
+                                  {selectedRouteOrderIds.has(document.routeOrderId)
+                                    ? 'Retirar do MDF-e'
+                                    : 'Incluir no MDF-e'}
+                                </button>
                               </td>
                             </tr>
                           ))}
@@ -629,8 +675,8 @@ export default function MdfeIssueModal({
                   <section className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-5">
                     <h3 className="text-lg font-semibold text-slate-900">Proximo encaixe</h3>
                     <p className="mt-2 text-sm text-slate-600">
-                      Com esta pre-visualizacao validada, o proximo passo e ligar a Edge Function
-                      para enviar o payload consolidado para a Focus com o token em segredo.
+                      Revise os pedidos incluidos no manifesto. Se algum pedido da rota estiver com XML ausente
+                      ou nao deve seguir nesta viagem, retire-o apenas do MDF-e sem mexer na rota.
                     </p>
                     <button
                       type="button"

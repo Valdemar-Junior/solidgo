@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   ArrowLeft,
+  FileDown,
   FileSearch,
   FileText,
+  Loader2,
   RefreshCw,
   Route,
   Search,
@@ -28,6 +30,8 @@ type MdfeManifest = {
   mdfe_number: string | null;
   mdfe_key: string | null;
   protocol: string | null;
+  pdf_url: string | null;
+  xml_content: string | null;
   error_message: string | null;
   issued_at: string | null;
   closed_at: string | null;
@@ -81,6 +85,9 @@ const STATUS_META: Record<
 
 export default function MdfeManifests() {
   const [loading, setLoading] = useState(true);
+  const [syncingId, setSyncingId] = useState<string | null>(null);
+  const [openingXmlId, setOpeningXmlId] = useState<string | null>(null);
+  const [actioningId, setActioningId] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [manifests, setManifests] = useState<MdfeManifest[]>([]);
 
@@ -142,6 +149,8 @@ export default function MdfeManifests() {
           mdfe_number,
           mdfe_key,
           protocol,
+          pdf_url,
+          xml_content,
           error_message,
           issued_at,
           closed_at,
@@ -160,6 +169,131 @@ export default function MdfeManifests() {
       toast.error(error?.message || 'Erro ao carregar manifestos MDF-e');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const refreshManifest = async (manifestId: string) => {
+    try {
+      setSyncingId(manifestId);
+      const { data, error } = await supabase.functions.invoke('refresh-mdfe', {
+        body: { manifestId },
+      });
+
+      if (error) throw normalizeFunctionError(error, data);
+      if (data?.error) throw new Error(data.error);
+
+      toast.success('Status do MDF-e atualizado.');
+      await load();
+    } catch (error: any) {
+      console.error(error);
+      toast.error(error?.message || 'Erro ao atualizar status do MDF-e');
+    } finally {
+      setSyncingId(null);
+    }
+  };
+
+  const openPdf = (manifest: MdfeManifest) => {
+    if (!manifest.pdf_url) {
+      toast.error('PDF do DAMDFE ainda nao disponivel. Atualize o status primeiro.');
+      return;
+    }
+
+    window.open(manifest.pdf_url, '_blank', 'noopener,noreferrer');
+  };
+
+  const openXml = (manifest: MdfeManifest) => {
+    if (!manifest.xml_content) {
+      toast.error('XML ainda nao disponivel. Atualize o status primeiro.');
+      return;
+    }
+
+    try {
+      setOpeningXmlId(manifest.id);
+      const blob = new Blob([manifest.xml_content], { type: 'application/xml;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      window.open(url, '_blank', 'noopener,noreferrer');
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
+    } finally {
+      setOpeningXmlId(null);
+    }
+  };
+
+  const closeManifest = async (manifest: MdfeManifest) => {
+    const closeUf = String(manifest.unloading_uf || '').trim().toUpperCase();
+    const closeCity = String(manifest.unloading_city_name || '').trim();
+
+    if (!closeUf || !closeCity) {
+      toast.error('Manifesto sem cidade/UF de descarregamento para encerramento automatico.');
+      return;
+    }
+
+    const shouldContinue = window.confirm(
+      `Encerrar o MDF-e ${manifest.mdfe_number || manifest.mdfe_key || ''} em ${closeCity}/${closeUf}?`
+    );
+
+    if (!shouldContinue) return;
+
+    try {
+      setActioningId(manifest.id);
+      const { data, error } = await supabase.functions.invoke('close-mdfe', {
+        body: {
+          manifestId: manifest.id,
+          uf: closeUf,
+          cityName: closeCity,
+        },
+      });
+
+      if (error) throw normalizeFunctionError(error, data);
+      if (data?.error) throw new Error(data.error);
+
+      toast.success('MDF-e encerrado com sucesso.');
+      await load();
+    } catch (error: any) {
+      console.error(error);
+      toast.error(error?.message || 'Erro ao encerrar MDF-e');
+    } finally {
+      setActioningId(null);
+    }
+  };
+
+  const cancelManifest = async (manifest: MdfeManifest) => {
+    const justification = window.prompt(
+      'Informe a justificativa do cancelamento do MDF-e (minimo 15 caracteres):',
+      'Cancelamento antes do inicio do transporte.'
+    );
+
+    if (justification === null) return;
+
+    if (justification.trim().length < 15) {
+      toast.error('A justificativa precisa ter pelo menos 15 caracteres.');
+      return;
+    }
+
+    const shouldContinue = window.confirm(
+      `Cancelar o MDF-e ${manifest.mdfe_number || manifest.mdfe_key || ''}? Esta acao e definitiva.`
+    );
+
+    if (!shouldContinue) return;
+
+    try {
+      setActioningId(manifest.id);
+      const { data, error } = await supabase.functions.invoke('cancel-mdfe', {
+        body: {
+          manifestId: manifest.id,
+          justification: justification.trim(),
+        },
+      });
+
+      if (error) throw normalizeFunctionError(error, data);
+      if (data?.error) throw new Error(data.error);
+
+      toast.success('MDF-e cancelado com sucesso.');
+      await load();
+    } catch (error: any) {
+      console.error(error);
+      toast.error(error?.message || 'Erro ao cancelar MDF-e');
+    } finally {
+      setActioningId(null);
     }
   };
 
@@ -227,18 +361,19 @@ export default function MdfeManifests() {
                   <th className="px-5 py-3">Condutor / Veiculo</th>
                   <th className="px-5 py-3">Carga</th>
                   <th className="px-5 py-3">Status</th>
+                  <th className="px-5 py-3 text-right">Acoes</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {loading ? (
                   <tr>
-                    <td colSpan={6} className="px-5 py-10 text-center text-sm text-slate-500">
+                    <td colSpan={7} className="px-5 py-10 text-center text-sm text-slate-500">
                       Carregando manifestos...
                     </td>
                   </tr>
                 ) : filteredManifests.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="px-5 py-10">
+                    <td colSpan={7} className="px-5 py-10">
                       <div className="flex flex-col items-center justify-center gap-3 text-center text-sm text-slate-500">
                         <div className="rounded-2xl bg-slate-100 p-3 text-slate-500">
                           <FileSearch className="h-6 w-6" />
@@ -255,6 +390,9 @@ export default function MdfeManifests() {
                 ) : (
                   filteredManifests.map((manifest) => {
                     const statusMeta = STATUS_META[manifest.status];
+                    const canClose = manifest.status === 'issued';
+                    const canCancel = manifest.status === 'issued';
+                    const isActing = actioningId === manifest.id;
 
                     return (
                       <tr key={manifest.id} className="align-top text-sm text-slate-700">
@@ -368,6 +506,64 @@ export default function MdfeManifests() {
                             </div>
                           </div>
                         </td>
+
+                        <td className="px-5 py-4">
+                          <div className="flex justify-end gap-2 flex-wrap">
+                            <button
+                              type="button"
+                              onClick={() => void refreshManifest(manifest.id)}
+                              disabled={syncingId === manifest.id || isActing}
+                              className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                            >
+                              {syncingId === manifest.id ? (
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                              ) : (
+                                <RefreshCw className="h-4 w-4" />
+                              )}
+                              Atualizar
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => openXml(manifest)}
+                              disabled={openingXmlId === manifest.id || isActing}
+                              className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                            >
+                              {openingXmlId === manifest.id ? (
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                              ) : (
+                                <FileText className="h-4 w-4" />
+                              )}
+                              XML
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => openPdf(manifest)}
+                              disabled={!manifest.pdf_url || isActing}
+                              className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-3 py-2 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-60"
+                            >
+                              <FileDown className="h-4 w-4" />
+                              Imprimir
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => void closeManifest(manifest)}
+                              disabled={!canClose || isActing}
+                              className="inline-flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 disabled:opacity-60"
+                            >
+                              {isActing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                              Encerrar
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => void cancelManifest(manifest)}
+                              disabled={!canCancel || isActing}
+                              className="inline-flex items-center gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700 hover:bg-rose-100 disabled:opacity-60"
+                            >
+                              {isActing ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />}
+                              Cancelar
+                            </button>
+                          </div>
+                        </td>
                       </tr>
                     );
                   })
@@ -379,6 +575,36 @@ export default function MdfeManifests() {
       </div>
     </div>
   );
+}
+
+function normalizeFunctionError(error: any, data: any) {
+  const focusResponse = data?.focus_response;
+
+  if (typeof focusResponse === 'string' && focusResponse.trim()) {
+    return new Error(focusResponse);
+  }
+
+  if (focusResponse?.mensagem) {
+    return new Error(String(focusResponse.mensagem));
+  }
+
+  if (focusResponse?.message) {
+    return new Error(String(focusResponse.message));
+  }
+
+  if (focusResponse?.errors) {
+    return new Error(JSON.stringify(focusResponse.errors));
+  }
+
+  if (data?.error) {
+    return new Error(String(data.error));
+  }
+
+  if (error?.message) {
+    return new Error(String(error.message));
+  }
+
+  return new Error('A operacao retornou erro sem detalhe.');
 }
 
 function MetricCard({
