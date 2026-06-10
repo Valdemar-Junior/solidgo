@@ -11,6 +11,7 @@ import {
     Settings,
     ShieldAlert,
     BookMarked,
+    FileBadge2,
     LogOut,
     Menu,
     X,
@@ -39,14 +40,15 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         { name: 'Dashboard', href: '/admin', icon: LayoutDashboard },
         { name: 'Pedidos (Importar)', href: '/admin/orders', icon: Box },
         { name: 'Consulta de Pedido', href: '/admin/order-lookup', icon: PackageSearch },
-        { name: 'Gestão de Entregas', href: '/admin/routes', icon: Truck },
-        { name: 'Gestão de Montagem', href: '/admin/assembly', icon: Hammer },
+        { name: 'Gestao de Entregas', href: '/admin/routes', icon: Truck },
+        { name: 'Gestao de Montagem', href: '/admin/assembly', icon: Hammer },
         { name: 'Controle de Frota', href: '/admin/fleet', icon: CarFront },
-        { name: 'Relatórios', href: '/admin/reports', icon: FileSpreadsheet },
+        { name: 'MDF-e', href: '/admin/mdfe', icon: FileBadge2 },
+        { name: 'Relatorios', href: '/admin/reports', icon: FileSpreadsheet },
         { name: 'Cadastros e Equipes', href: '/admin/users-teams', icon: Users },
-        { name: 'Configurações', href: '/admin/settings', icon: Settings },
+        { name: 'Configuracoes', href: '/admin/settings', icon: Settings },
         { name: 'Auditoria', href: '/admin/audit', icon: ShieldAlert },
-        { name: 'Diário de Bordo', href: '/admin/diary', icon: BookMarked },
+        { name: 'Diario de Bordo', href: '/admin/diary', icon: BookMarked },
     ];
 
     const currentRoute = navigationItems.find((item) => item.href === location.pathname) || { name: 'Painel Administrativo' };
@@ -153,7 +155,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
                         <div className="flex items-center gap-2">
                             <div className="hidden sm:block text-right">
                                 <p className="text-sm font-medium text-gray-900 leading-none">{user?.name || 'Admin'}</p>
-                                <p className="text-xs text-gray-500 mt-1">{user?.role === 'admin' ? 'Gestor' : 'Usuário'}</p>
+                                <p className="text-xs text-gray-500 mt-1">{user?.role === 'admin' ? 'Gestor' : 'Usuario'}</p>
                             </div>
                             <UserCircle className="h-8 w-8 text-gray-400" />
                         </div>

@@ -21,6 +21,12 @@ import RouteCreation from './pages/admin/RouteCreation';
 import AssemblyManagement from './pages/admin/AssemblyManagement';
 import OrderLookup from './pages/admin/OrderLookup';
 import Reports from './pages/admin/Reports';
+import Mdfe from './pages/admin/Mdfe';
+import MdfeEmitters from './pages/admin/MdfeEmitters';
+import MdfeVehicles from './pages/admin/MdfeVehicles';
+import MdfeDrivers from './pages/admin/MdfeDrivers';
+import MdfeSettings from './pages/admin/MdfeSettings';
+import MdfeManifests from './pages/admin/MdfeManifests';
 import AssemblyDashboard from './pages/montador/AssemblyDashboard';
 import AssemblyRouteDetails from './pages/montador/AssemblyRouteDetails';
 import TesteImportacao from './pages/teste-importacao';
@@ -163,6 +169,66 @@ function App() {
               <ProtectedRoute allowedRoles={['admin']}>
                 <AdminLayout>
                   <FleetManagement />
+                </AdminLayout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/mdfe"
+            element={
+              <ProtectedRoute allowedRoles={['admin']}>
+                <AdminLayout>
+                  <Mdfe />
+                </AdminLayout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/mdfe/settings"
+            element={
+              <ProtectedRoute allowedRoles={['admin']}>
+                <AdminLayout>
+                  <MdfeSettings />
+                </AdminLayout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/mdfe/emitters"
+            element={
+              <ProtectedRoute allowedRoles={['admin']}>
+                <AdminLayout>
+                  <MdfeEmitters />
+                </AdminLayout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/mdfe/vehicles"
+            element={
+              <ProtectedRoute allowedRoles={['admin']}>
+                <AdminLayout>
+                  <MdfeVehicles />
+                </AdminLayout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/mdfe/drivers"
+            element={
+              <ProtectedRoute allowedRoles={['admin']}>
+                <AdminLayout>
+                  <MdfeDrivers />
+                </AdminLayout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/mdfe/manifests"
+            element={
+              <ProtectedRoute allowedRoles={['admin']}>
+                <AdminLayout>
+                  <MdfeManifests />
                 </AdminLayout>
               </ProtectedRoute>
             }

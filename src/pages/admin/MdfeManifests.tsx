@@ -1,0 +1,440 @@
+import { useEffect, useMemo, useState } from 'react';
+import {
+  ArrowLeft,
+  FileSearch,
+  FileText,
+  RefreshCw,
+  Route,
+  Search,
+  Truck,
+  UserRound,
+} from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { toast } from 'sonner';
+import { supabase } from '../../supabase/client';
+
+type MdfeManifest = {
+  id: string;
+  route_id: string | null;
+  status: 'draft' | 'processing' | 'issued' | 'closed' | 'cancelled' | 'error';
+  environment: 'homologation' | 'production';
+  loading_city_name: string | null;
+  loading_uf: string | null;
+  unloading_city_name: string | null;
+  unloading_uf: string | null;
+  total_documents: number;
+  total_value: number;
+  total_gross_weight: number;
+  mdfe_number: string | null;
+  mdfe_key: string | null;
+  protocol: string | null;
+  error_message: string | null;
+  issued_at: string | null;
+  closed_at: string | null;
+  created_at: string;
+  emitter?: {
+    company_name: string;
+  } | null;
+  vehicle?: {
+    display_name: string;
+    plate: string;
+  } | null;
+  driver?: {
+    name: string;
+    cpf: string;
+  } | null;
+  route?: {
+    name: string;
+    route_code: string | null;
+  } | null;
+};
+
+const STATUS_META: Record<
+  MdfeManifest['status'],
+  { label: string; className: string }
+> = {
+  draft: {
+    label: 'Rascunho',
+    className: 'bg-slate-100 text-slate-700',
+  },
+  processing: {
+    label: 'Processando',
+    className: 'bg-amber-100 text-amber-700',
+  },
+  issued: {
+    label: 'Emitido',
+    className: 'bg-emerald-100 text-emerald-700',
+  },
+  closed: {
+    label: 'Encerrado',
+    className: 'bg-blue-100 text-blue-700',
+  },
+  cancelled: {
+    label: 'Cancelado',
+    className: 'bg-slate-200 text-slate-700',
+  },
+  error: {
+    label: 'Erro',
+    className: 'bg-rose-100 text-rose-700',
+  },
+};
+
+export default function MdfeManifests() {
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState('');
+  const [manifests, setManifests] = useState<MdfeManifest[]>([]);
+
+  useEffect(() => {
+    void load();
+  }, []);
+
+  const filteredManifests = useMemo(() => {
+    const term = search.trim().toLowerCase();
+    if (!term) return manifests;
+
+    return manifests.filter((manifest) =>
+      [
+        manifest.mdfe_number,
+        manifest.mdfe_key,
+        manifest.protocol,
+        manifest.route?.route_code,
+        manifest.route?.name,
+        manifest.emitter?.company_name,
+        manifest.vehicle?.display_name,
+        manifest.vehicle?.plate,
+        manifest.driver?.name,
+        manifest.loading_city_name,
+        manifest.unloading_city_name,
+      ].some((value) => String(value || '').toLowerCase().includes(term))
+    );
+  }, [manifests, search]);
+
+  const counters = useMemo(() => {
+    return filteredManifests.reduce(
+      (acc, manifest) => {
+        acc.total += 1;
+        if (manifest.status === 'issued') acc.issued += 1;
+        if (manifest.status === 'closed') acc.closed += 1;
+        if (manifest.status === 'error') acc.error += 1;
+        return acc;
+      },
+      { total: 0, issued: 0, closed: 0, error: 0 }
+    );
+  }, [filteredManifests]);
+
+  const load = async () => {
+    try {
+      setLoading(true);
+      const { data, error } = await supabase
+        .from('mdfe_manifests')
+        .select(`
+          id,
+          route_id,
+          status,
+          environment,
+          loading_city_name,
+          loading_uf,
+          unloading_city_name,
+          unloading_uf,
+          total_documents,
+          total_value,
+          total_gross_weight,
+          mdfe_number,
+          mdfe_key,
+          protocol,
+          error_message,
+          issued_at,
+          closed_at,
+          created_at,
+          emitter:mdfe_emitters!mdfe_manifests_emitter_id_fkey(company_name),
+          vehicle:mdfe_vehicles!mdfe_manifests_vehicle_id_fkey(display_name, plate),
+          driver:mdfe_drivers!mdfe_manifests_driver_id_fkey(name, cpf),
+          route:routes!mdfe_manifests_route_id_fkey(name, route_code)
+        `)
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+      setManifests((data || []) as MdfeManifest[]);
+    } catch (error: any) {
+      console.error(error);
+      toast.error(error?.message || 'Erro ao carregar manifestos MDF-e');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="p-6 sm:p-8">
+      <div className="mx-auto max-w-7xl space-y-6">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <Link
+              to="/admin/mdfe"
+              className="inline-flex items-center gap-2 text-sm font-medium text-blue-700 hover:text-blue-800"
+            >
+              <ArrowLeft className="h-4 w-4" />
+              Voltar para MDF-e
+            </Link>
+            <h1 className="mt-3 text-2xl font-bold text-slate-900">Historico MDF-e</h1>
+            <p className="mt-2 max-w-3xl text-sm text-slate-600">
+              Consulta isolada dos MDF-es emitidos pela rota para acompanhar status,
+              reimpressao, protocolo, erro e encerramento.
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => void load()}
+            className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+          >
+            <RefreshCw className="h-4 w-4" />
+            Atualizar
+          </button>
+        </div>
+
+        <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <MetricCard label="Total" value={counters.total} />
+          <MetricCard label="Emitidos" value={counters.issued} tone="emerald" />
+          <MetricCard label="Encerrados" value={counters.closed} tone="blue" />
+          <MetricCard label="Com erro" value={counters.error} tone="rose" />
+        </section>
+
+        <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Buscar por numero, chave, romaneio, emitente, veiculo ou cidade..."
+              className="w-full rounded-xl border border-slate-300 py-2 pl-10 pr-4 text-sm text-slate-900 outline-none focus:border-blue-500"
+            />
+          </div>
+        </section>
+
+        <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+          <div className="border-b border-slate-200 px-5 py-4">
+            <h2 className="text-lg font-semibold text-slate-900">Lista de manifestos</h2>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-slate-200">
+              <thead className="bg-slate-50">
+                <tr className="text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  <th className="px-5 py-3">Manifesto</th>
+                  <th className="px-5 py-3">Rota</th>
+                  <th className="px-5 py-3">Emitente</th>
+                  <th className="px-5 py-3">Condutor / Veiculo</th>
+                  <th className="px-5 py-3">Carga</th>
+                  <th className="px-5 py-3">Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {loading ? (
+                  <tr>
+                    <td colSpan={6} className="px-5 py-10 text-center text-sm text-slate-500">
+                      Carregando manifestos...
+                    </td>
+                  </tr>
+                ) : filteredManifests.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="px-5 py-10">
+                      <div className="flex flex-col items-center justify-center gap-3 text-center text-sm text-slate-500">
+                        <div className="rounded-2xl bg-slate-100 p-3 text-slate-500">
+                          <FileSearch className="h-6 w-6" />
+                        </div>
+                        <div>
+                          <p className="font-medium text-slate-700">Nenhum MDF-e encontrado no historico.</p>
+                          <p>
+                            Quando a emissao for ligada na rota, os manifestos gerados aparecerao aqui automaticamente.
+                          </p>
+                        </div>
+                      </div>
+                    </td>
+                  </tr>
+                ) : (
+                  filteredManifests.map((manifest) => {
+                    const statusMeta = STATUS_META[manifest.status];
+
+                    return (
+                      <tr key={manifest.id} className="align-top text-sm text-slate-700">
+                        <td className="px-5 py-4">
+                          <div className="space-y-1">
+                            <p className="font-semibold text-slate-900">
+                              {manifest.mdfe_number ? `MDF-e ${manifest.mdfe_number}` : 'Sem numero definido'}
+                            </p>
+                            <p className="text-xs text-slate-500">
+                              Ambiente: {manifest.environment === 'production' ? 'Producao' : 'Homologacao'}
+                            </p>
+                            {manifest.mdfe_key && (
+                              <p className="max-w-xs break-all text-xs text-slate-500">
+                                Chave: {manifest.mdfe_key}
+                              </p>
+                            )}
+                            {!manifest.mdfe_key && manifest.protocol && (
+                              <p className="text-xs text-slate-500">Protocolo: {manifest.protocol}</p>
+                            )}
+                          </div>
+                        </td>
+
+                        <td className="px-5 py-4">
+                          <div className="space-y-2">
+                            <div className="flex items-start gap-2">
+                              <Route className="mt-0.5 h-4 w-4 text-slate-400" />
+                              <div>
+                                <p className="font-medium text-slate-900">
+                                  {manifest.route?.route_code || manifest.route?.name || 'Sem rota vinculada'}
+                                </p>
+                                {manifest.route?.route_code && manifest.route?.name && (
+                                  <p className="text-xs text-slate-500">{manifest.route.name}</p>
+                                )}
+                              </div>
+                            </div>
+                            <p className="text-xs text-slate-500">
+                              {formatCity(manifest.loading_city_name, manifest.loading_uf)}{' '}
+                              {manifest.unloading_city_name ? `-> ${formatCity(manifest.unloading_city_name, manifest.unloading_uf)}` : ''}
+                            </p>
+                          </div>
+                        </td>
+
+                        <td className="px-5 py-4">
+                          <div className="space-y-1">
+                            <div className="flex items-start gap-2">
+                              <FileText className="mt-0.5 h-4 w-4 text-slate-400" />
+                              <div>
+                                <p className="font-medium text-slate-900">
+                                  {manifest.emitter?.company_name || '-'}
+                                </p>
+                              </div>
+                            </div>
+                          </div>
+                        </td>
+
+                        <td className="px-5 py-4">
+                          <div className="space-y-3">
+                            <div className="flex items-start gap-2">
+                              <UserRound className="mt-0.5 h-4 w-4 text-slate-400" />
+                              <div>
+                                <p className="font-medium text-slate-900">
+                                  {manifest.driver?.name || '-'}
+                                </p>
+                                {manifest.driver?.cpf && (
+                                  <p className="text-xs text-slate-500">CPF: {manifest.driver.cpf}</p>
+                                )}
+                              </div>
+                            </div>
+                            <div className="flex items-start gap-2">
+                              <Truck className="mt-0.5 h-4 w-4 text-slate-400" />
+                              <div>
+                                <p className="font-medium text-slate-900">
+                                  {manifest.vehicle?.display_name || '-'}
+                                </p>
+                                {manifest.vehicle?.plate && (
+                                  <p className="text-xs text-slate-500">Placa: {manifest.vehicle.plate}</p>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        </td>
+
+                        <td className="px-5 py-4">
+                          <div className="space-y-1">
+                            <p className="font-medium text-slate-900">
+                              {manifest.total_documents} documento(s)
+                            </p>
+                            <p className="text-xs text-slate-500">
+                              Valor total: {formatCurrency(manifest.total_value)}
+                            </p>
+                            <p className="text-xs text-slate-500">
+                              Peso bruto: {formatWeight(manifest.total_gross_weight)}
+                            </p>
+                          </div>
+                        </td>
+
+                        <td className="px-5 py-4">
+                          <div className="space-y-2">
+                            <span
+                              className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${statusMeta.className}`}
+                            >
+                              {statusMeta.label}
+                            </span>
+                            <div className="space-y-1 text-xs text-slate-500">
+                              <p>Criado em: {formatDateTime(manifest.created_at)}</p>
+                              {manifest.issued_at && <p>Emitido em: {formatDateTime(manifest.issued_at)}</p>}
+                              {manifest.closed_at && <p>Encerrado em: {formatDateTime(manifest.closed_at)}</p>}
+                              {manifest.status === 'error' && manifest.error_message && (
+                                <p className="max-w-xs text-rose-600">{manifest.error_message}</p>
+                              )}
+                            </div>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+}
+
+function MetricCard({
+  label,
+  value,
+  tone = 'slate',
+}: {
+  label: string;
+  value: number;
+  tone?: 'slate' | 'emerald' | 'blue' | 'rose';
+}) {
+  const tones = {
+    slate: 'border-slate-200 bg-white text-slate-900',
+    emerald: 'border-emerald-200 bg-emerald-50 text-emerald-900',
+    blue: 'border-blue-200 bg-blue-50 text-blue-900',
+    rose: 'border-rose-200 bg-rose-50 text-rose-900',
+  };
+
+  return (
+    <article className={`rounded-2xl border p-5 shadow-sm ${tones[tone]}`}>
+      <p className="text-sm font-medium">{label}</p>
+      <p className="mt-2 text-3xl font-bold">{value}</p>
+    </article>
+  );
+}
+
+function formatCurrency(value: number) {
+  return new Intl.NumberFormat('pt-BR', {
+    style: 'currency',
+    currency: 'BRL',
+  }).format(Number(value || 0));
+}
+
+function formatWeight(value: number) {
+  return `${Number(value || 0).toLocaleString('pt-BR', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 4,
+  })} KG`;
+}
+
+function formatDateTime(value: string | null) {
+  if (!value) return '-';
+
+  try {
+    return new Intl.DateTimeFormat('pt-BR', {
+      dateStyle: 'short',
+      timeStyle: 'short',
+    }).format(new Date(value));
+  } catch {
+    return value;
+  }
+}
+
+function formatCity(city: string | null, uf: string | null) {
+  if (!city && !uf) return 'Cidade nao informada';
+  if (!city) return uf || 'Cidade nao informada';
+  if (!uf) return city;
+  return `${city}/${uf}`;
+}

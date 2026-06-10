@@ -55,6 +55,7 @@ import { PDFDocument } from 'pdf-lib';
 import { useAuthStore } from '../../stores/authStore';
 import { useRouteDataStore } from '../../stores/routeDataStore';
 import { saveUserPreference, loadUserPreference, mergeColumnsConfig, type ColumnConfig } from '../../utils/userPreferences';
+import MdfeIssueModal from '../../components/mdfe/MdfeIssueModal';
 import DatePicker, { registerLocale } from 'react-datepicker';
 import { ptBR } from 'date-fns/locale';
 import 'react-datepicker/dist/react-datepicker.css';
@@ -197,11 +198,13 @@ function RouteCreationContent() {
   const [conferenceRoute, setConferenceRoute] = useState<RouteWithDetails | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showColumnsModal, setShowColumnsModal] = useState(false);
+  const [showMdfeModal, setShowMdfeModal] = useState(false);
   const [showFullUrgentAlertModal, setShowFullUrgentAlertModal] = useState(false);
   const [mixedConfirmOpen, setMixedConfirmOpen] = useState(false);
   const [requireConference, setRequireConference] = useState<boolean>(true);
   const [fullUrgentAlert, setFullUrgentAlert] = useState<FullUrgentAlertSummary | null>(null);
   const [fullUrgentAlertRecheckToken, setFullUrgentAlertRecheckToken] = useState(0);
+  const [mdfeEnabled, setMdfeEnabled] = useState(false);
 
   // Loading states for specific actions
   const [nfLoading, setNfLoading] = useState(false);
@@ -293,6 +296,26 @@ function RouteCreationContent() {
       openSpecificRoute();
     }
   }, [location.state?.openRouteId]);
+
+  useEffect(() => {
+    const loadMdfeFlag = async () => {
+      try {
+        const { data, error } = await supabase
+          .from('mdfe_settings')
+          .select('enabled')
+          .limit(1)
+          .maybeSingle();
+
+        if (error) throw error;
+        setMdfeEnabled(Boolean(data?.enabled));
+      } catch (error) {
+        console.error('Erro ao carregar flag do MDF-e:', error);
+        setMdfeEnabled(false);
+      }
+    };
+
+    loadMdfeFlag();
+  }, []);
 
   // --- DERIVED STATE (DATA PROCESSING) ---
 
@@ -5169,6 +5192,21 @@ function RouteCreationContent() {
                       // --- STANDARD BUTTONS ---
                       return (
                         <>
+                          {mdfeEnabled && (
+                            <button
+                              onClick={() => setShowMdfeModal(true)}
+                              disabled={!selectedRoute?.route_orders || selectedRoute.route_orders.length === 0}
+                              className="flex items-center justify-center px-4 py-2 bg-cyan-50 text-cyan-700 hover:bg-cyan-100 rounded-lg font-medium text-sm transition-colors border border-cyan-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                              title={
+                                !selectedRoute?.route_orders || selectedRoute.route_orders.length === 0
+                                  ? 'A rota precisa ter pedidos para gerar MDF-e'
+                                  : 'Abrir emissao isolada do MDF-e'
+                              }
+                            >
+                              <FilePlus className="h-4 w-4 mr-2" /> Gerar MDF-e
+                            </button>
+                          )}
+
                           {/* Add Orders Button */}
                           {selectedRoute?.status === 'pending' && (
                             <button
@@ -6543,6 +6581,16 @@ function RouteCreationContent() {
           </div>
         </div>
       )}
+
+      <MdfeIssueModal
+        isOpen={showMdfeModal && !!selectedRoute}
+        onClose={() => setShowMdfeModal(false)}
+        routeId={selectedRoute?.id || null}
+        routeCode={(selectedRoute as any)?.route_code || null}
+        routeName={selectedRoute?.name || null}
+        routeVehiclePlate={selectedRoute?.vehicle?.plate || null}
+        routeDriverName={(selectedRoute?.driver as any)?.user?.name || selectedRoute?.driver?.name || null}
+      />
 
     </div >
   );
