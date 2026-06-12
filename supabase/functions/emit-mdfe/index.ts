@@ -356,7 +356,7 @@ Deno.serve(async (request) => {
 
     const unloadingGroups = new Map<
       string,
-      { codigo: string; nome: string; notas_fiscais: Array<{ chave_nfe: string }> }
+      { codigo: number; nome: string; uf: string; notas_fiscais: Array<{ chave_nfe: string }> }
     >();
 
     for (const document of documents) {
@@ -365,6 +365,7 @@ Deno.serve(async (request) => {
         unloadingGroups.set(key, {
           codigo: Number(document.cityCode),
           nome: String(document.cityName),
+          uf: String(document.uf),
           notas_fiscais: [],
         });
       }
@@ -376,7 +377,7 @@ Deno.serve(async (request) => {
     const totalGrossWeight = documents.reduce((acc, document) => acc + Number(document.grossWeight || 0), 0);
     const lastDocument = documents[documents.length - 1];
     const reference = buildFocusReference(route.route_code || route.id);
-    const resolvedGrossWeight = manualGrossWeight > 0 ? manualGrossWeight : totalGrossWeight;
+    const resolvedGrossWeight = manualGrossWeight === null ? totalGrossWeight : manualGrossWeight;
     const payloadGrossWeight = environment === 'homologation' ? Math.max(resolvedGrossWeight, 5) : resolvedGrossWeight;
     const normalizedPlate = cleanVehiclePlate(vehicle.plate);
     const normalizedRenavam = cleanDigits(vehicle.renavam);
@@ -756,9 +757,10 @@ function parseNfeDocument({
   try {
     const nfeKey = getXmlValue(xml, 'chNFe') || null;
     const totalValue = parseDecimal(getXmlValue(xml, 'vNF'));
-    const cityCode = getLastXmlValue(xml, 'cMun') || null;
-    const cityName = getLastXmlValue(xml, 'xMun') || null;
-    const uf = getLastXmlValue(xml, 'UF') || null;
+    const unloadingLocation = resolveUnloadingLocationFromXml(xml);
+    const cityCode = unloadingLocation.cityCode;
+    const cityName = unloadingLocation.cityName;
+    const uf = unloadingLocation.uf;
     const grossWeight = resolveGrossWeightFromXml(xml);
 
     const blockingIssues: string[] = [];
@@ -820,6 +822,37 @@ function getLastXmlValue(xml: string, tagName: string) {
   return values[values.length - 1] || '';
 }
 
+function getFirstXmlSection(xml: string, tagName: string) {
+  const pattern = new RegExp(
+    `<([\\w.:_-]+:)?${tagName}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/([\\w.:_-]+:)?${tagName}>`,
+    'i'
+  );
+  const match = xml.match(pattern);
+  return String(match?.[2] || '').trim();
+}
+
+function resolveUnloadingLocationFromXml(xml: string) {
+  const sections = [
+    getFirstXmlSection(xml, 'entrega'),
+    getFirstXmlSection(xml, 'enderEntrega'),
+    getFirstXmlSection(xml, 'enderDest'),
+    getFirstXmlSection(xml, 'dest'),
+    xml,
+  ].filter(Boolean);
+
+  for (const section of sections) {
+    const cityCode = getLastXmlValue(section, 'cMun') || null;
+    const cityName = getLastXmlValue(section, 'xMun') || null;
+    const uf = getLastXmlValue(section, 'UF') || null;
+
+    if (cityCode || cityName || uf) {
+      return { cityCode, cityName, uf };
+    }
+  }
+
+  return { cityCode: null, cityName: null, uf: null };
+}
+
 function getAllXmlValues(xml: string, tagName: string) {
   const pattern = new RegExp(`<([\\w.:_-]+:)?${tagName}>([\\s\\S]*?)<\\/([\\w.:_-]+:)?${tagName}>`, 'g');
   const values: string[] = [];
@@ -837,10 +870,11 @@ function parseDecimal(value: string) {
 }
 
 function parseOptionalDecimal(value: unknown) {
+  if (value === undefined || value === null) return null;
   const normalized = String(value ?? '').trim().replace(',', '.');
   if (!normalized) return 0;
   const parsed = Number(normalized);
-  return Number.isFinite(parsed) ? parsed : 0;
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function cleanDigits(value: string | null | undefined) {

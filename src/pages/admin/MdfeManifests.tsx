@@ -129,9 +129,13 @@ export default function MdfeManifests() {
     );
   }, [filteredManifests]);
 
-  const load = async () => {
+  const processingManifestIds = useMemo(() => {
+    return manifests.filter((manifest) => manifest.status === 'processing').map((manifest) => manifest.id);
+  }, [manifests]);
+
+  const load = async (background = false) => {
     try {
-      setLoading(true);
+      if (!background) setLoading(true);
       const { data, error } = await supabase
         .from('mdfe_manifests')
         .select(`
@@ -166,15 +170,59 @@ export default function MdfeManifests() {
       setManifests((data || []) as MdfeManifest[]);
     } catch (error: any) {
       console.error(error);
-      toast.error(error?.message || 'Erro ao carregar manifestos MDF-e');
+      if (!background) {
+        toast.error(error?.message || 'Erro ao carregar manifestos MDF-e');
+      }
     } finally {
-      setLoading(false);
+      if (!background) setLoading(false);
     }
   };
 
-  const refreshManifest = async (manifestId: string) => {
+  useEffect(() => {
+    if (processingManifestIds.length === 0) return;
+
+    let cancelled = false;
+    let running = false;
+
+    const syncProcessingManifests = async () => {
+      if (cancelled || running) return;
+      running = true;
+
+      try {
+        await Promise.all(
+          processingManifestIds.map(async (manifestId) => {
+            const { data, error } = await supabase.functions.invoke('refresh-mdfe', {
+              body: { manifestId },
+            });
+
+            if (error || data?.error) {
+              console.warn('Falha ao atualizar MDF-e em processamento:', manifestId, error || data?.error);
+            }
+          })
+        );
+
+        if (!cancelled) {
+          await load(true);
+        }
+      } finally {
+        running = false;
+      }
+    };
+
+    void syncProcessingManifests();
+    const intervalId = window.setInterval(() => {
+      void syncProcessingManifests();
+    }, 5000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [processingManifestIds]);
+
+  const refreshManifest = async (manifestId: string, silent = false) => {
     try {
-      setSyncingId(manifestId);
+      if (!silent) setSyncingId(manifestId);
       const { data, error } = await supabase.functions.invoke('refresh-mdfe', {
         body: { manifestId },
       });
@@ -182,13 +230,15 @@ export default function MdfeManifests() {
       if (error) throw normalizeFunctionError(error, data);
       if (data?.error) throw new Error(data.error);
 
-      toast.success('Status do MDF-e atualizado.');
-      await load();
+      if (!silent) toast.success('Status do MDF-e atualizado.');
+      await load(silent);
     } catch (error: any) {
       console.error(error);
-      toast.error(error?.message || 'Erro ao atualizar status do MDF-e');
+      if (!silent) {
+        toast.error(error?.message || 'Erro ao atualizar status do MDF-e');
+      }
     } finally {
-      setSyncingId(null);
+      if (!silent) setSyncingId(null);
     }
   };
 

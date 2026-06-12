@@ -257,7 +257,7 @@ export default function MdfeIssueModal({
           setSelectedEmitterId(defaultEmitterId || '');
           setSelectedVehicleId(matchedVehicle?.id || '');
           setSelectedDriverId(matchedDriver?.id || '');
-          setManualGrossWeight('');
+          setManualGrossWeight(formatWeightInput(documents.reduce((acc, item) => acc + Number(item.grossWeight || 0), 0)));
         }
       } catch (error: any) {
         console.error(error);
@@ -310,10 +310,10 @@ export default function MdfeIssueModal({
 
   const effectiveGrossWeight = useMemo(() => {
     const normalized = manualGrossWeight.trim().replace(',', '.');
-    if (!normalized) return totals.totalWeight;
+    if (!normalized) return 0;
     const parsed = Number(normalized);
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : totals.totalWeight;
-  }, [manualGrossWeight, totals.totalWeight]);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+  }, [manualGrossWeight]);
 
   const unloadingCities = useMemo(() => {
     return Array.from(
@@ -356,11 +356,11 @@ export default function MdfeIssueModal({
         ok: includedDocuments.length > 0 && includedDocuments.every((item) => Boolean(item.nfeKey)),
       },
       {
-        label: manualGrossWeight.trim() ? 'Peso total ajustado manualmente' : 'Peso ausente nao bloqueia emissao',
-        ok: manualGrossWeight.trim() ? effectiveGrossWeight > 0 : true,
+        label: effectiveGrossWeight > 0 ? 'Peso total pronto para envio' : 'Peso zerado sera enviado ao MDF-e',
+        ok: true,
       },
     ];
-  }, [effectiveGrossWeight, includedDocuments, manualGrossWeight, selectedDriver, selectedEmitter, selectedVehicle, totals.totalWeight]);
+  }, [effectiveGrossWeight, includedDocuments, selectedDriver, selectedEmitter, selectedVehicle]);
 
   const hasBlockingIssues = useMemo(() => {
     return includedDocuments.some((item) => item.blockingIssues.length > 0);
@@ -390,7 +390,7 @@ export default function MdfeIssueModal({
           vehicleId: selectedVehicleId,
           driverId: selectedDriverId,
           routeOrderIds: Array.from(selectedRouteOrderIds),
-          manualGrossWeight: effectiveGrossWeight,
+          manualGrossWeight: manualGrossWeight.trim() === '' ? 0 : effectiveGrossWeight,
         },
       });
 
@@ -519,12 +519,25 @@ export default function MdfeIssueModal({
                       : `${totals.documentsWithWarnings} documento(s) com aviso`
                   }
                 />
-                <SummaryCard
-                  icon={Truck}
-                  title="Peso bruto"
-                  description={formatWeight(effectiveGrossWeight)}
-                  detail={manualGrossWeight.trim() ? 'Peso informado manualmente no modal' : 'Consolidado pelos XMLs'}
-                />
+                <article className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                  <div className="mb-3 inline-flex rounded-xl bg-slate-100 p-3 text-slate-700">
+                    <Truck className="h-5 w-5" />
+                  </div>
+                  <h3 className="text-sm font-semibold text-slate-900">Peso bruto</h3>
+                  <div className="mt-2 flex items-center gap-2">
+                    <input
+                      type="text"
+                      inputMode="decimal"
+                      value={manualGrossWeight}
+                      onChange={(event) => setManualGrossWeight(event.target.value)}
+                      className="w-full rounded-xl border border-slate-300 px-3 py-2 text-lg font-semibold text-slate-900 outline-none focus:border-blue-500"
+                    />
+                    <span className="text-sm font-medium text-slate-500">KG</span>
+                  </div>
+                  <p className="mt-1 text-sm text-slate-500">
+                    Ajuste manualmente ou apague o valor para enviar peso zerado.
+                  </p>
+                </article>
                 <SummaryCard
                   icon={MapPin}
                   title="Valor total"
@@ -586,25 +599,6 @@ export default function MdfeIssueModal({
                       />
                     </div>
 
-                    <div className="mt-5 rounded-xl border border-amber-200 bg-amber-50 p-4">
-                      <label className="block">
-                        <span className="mb-2 block text-sm font-medium text-amber-900">
-                          Peso bruto total para enviar no MDF-e
-                        </span>
-                        <input
-                          type="text"
-                          inputMode="decimal"
-                          value={manualGrossWeight}
-                          onChange={(event) => setManualGrossWeight(event.target.value)}
-                          placeholder={totals.totalWeight > 0 ? `${totals.totalWeight.toFixed(4)}` : 'Ex.: 5 ou 115.5000'}
-                          className="w-full rounded-xl border border-amber-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-amber-500"
-                        />
-                      </label>
-                      <p className="mt-2 text-xs text-amber-900">
-                        Se os XMLs vierem com peso zerado ou ausente, informe aqui o peso total da carga em KG.
-                        Se deixar em branco, o sistema usa o peso consolidado encontrado nos XMLs.
-                      </p>
-                    </div>
                   </section>
 
                   <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -862,9 +856,10 @@ function parseNfeDocument({
 
     const nfeKey = getXmlNodeText(xmlDoc, 'chNFe') || null;
     const totalValue = parseDecimal(getXmlNodeText(xmlDoc, 'vNF'));
-    const cityCode = getXmlNodeText(xmlDoc, 'cMun') || null;
-    const cityName = getXmlNodeText(xmlDoc, 'xMun') || null;
-    const uf = getXmlNodeText(xmlDoc, 'UF') || null;
+    const unloadingLocation = resolveUnloadingLocation(xmlDoc);
+    const cityCode = unloadingLocation.cityCode;
+    const cityName = unloadingLocation.cityName;
+    const uf = unloadingLocation.uf;
     const grossWeight = resolveGrossWeight(xmlDoc);
 
     const blockingIssues: string[] = [];
@@ -921,6 +916,28 @@ function resolveGrossWeight(root: Document) {
   return totalWeightTag;
 }
 
+function resolveUnloadingLocation(root: Document) {
+  const containers = [
+    findFirstXmlElementByLocalName(root, 'entrega'),
+    findFirstXmlElementByLocalName(root, 'enderEntrega'),
+    findFirstXmlElementByLocalName(root, 'enderDest'),
+    findFirstXmlElementByLocalName(root, 'dest'),
+    root.documentElement,
+  ].filter(Boolean) as Element[];
+
+  for (const container of containers) {
+    const cityCode = getXmlNodeText(container, 'cMun') || null;
+    const cityName = getXmlNodeText(container, 'xMun') || null;
+    const uf = getXmlNodeText(container, 'UF') || null;
+
+    if (cityCode || cityName || uf) {
+      return { cityCode, cityName, uf };
+    }
+  }
+
+  return { cityCode: null, cityName: null, uf: null };
+}
+
 function findXmlElementsByLocalName(root: any, localName: string): Element[] {
   if (!root?.getElementsByTagName) return [];
   return Array.from(root.getElementsByTagName('*') as HTMLCollectionOf<Element>).filter(
@@ -940,6 +957,11 @@ function getXmlNodeText(root: any, localName: string) {
 function parseDecimal(value: string) {
   const parsed = Number(String(value || '0').replace(',', '.'));
   return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function formatWeightInput(value: number) {
+  if (!Number.isFinite(value)) return '0';
+  return value.toFixed(4).replace(/\.?0+$/, '');
 }
 
 function formatCurrency(value: number) {
