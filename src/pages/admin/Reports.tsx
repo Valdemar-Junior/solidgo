@@ -762,6 +762,7 @@ async function fetchPendingRows(filters: FiltersState): Promise<{
     const activeRoute = activeRouteByOrderId.get(order.id);
 
     if (status !== 'assigned' && !lockedOrderIds.has(order.id)) {
+      if (!matchesPendingDate(order.previsao_entrega, filters.pendingStart, filters.pendingEnd)) return;
       if (filters.routeId || filters.driverId) return;
 
       awaitingRouteRows.push(

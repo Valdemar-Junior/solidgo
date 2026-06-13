@@ -94,7 +94,20 @@ export class DeliveryOperationalReportGenerator {
 
     const formatDate = (value?: string | null) => {
       if (!value) return '-';
-      const date = new Date(value);
+      const normalizedValue = String(value).trim();
+      const dateOnlyMatch = normalizedValue.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if (dateOnlyMatch) {
+        const [, year, month, day] = dateOnlyMatch;
+        return `${day}/${month}/${year}`;
+      }
+
+      const isoMatch = normalizedValue.match(/^(\d{4})-(\d{2})-(\d{2})T/);
+      if (isoMatch) {
+        const [, year, month, day] = isoMatch;
+        return `${day}/${month}/${year}`;
+      }
+
+      const date = new Date(normalizedValue);
       if (Number.isNaN(date.getTime())) return '-';
       return date.toLocaleDateString('pt-BR');
     };
