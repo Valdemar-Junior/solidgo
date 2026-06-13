@@ -21,6 +21,7 @@ type RouteOption = {
 };
 
 type FiltersState = {
+  includeDelivered: boolean;
   deliveredStart: string;
   deliveredEnd: string;
   pendingStart: string;
@@ -28,8 +29,11 @@ type FiltersState = {
   city: string;
   neighborhood: string;
   filial: string;
+  importSource: string;
+  serviceType: string;
   driverId: string;
   routeId: string;
+  sortBy: 'sale_date_asc' | 'sale_date_desc';
 };
 
 type DeliveryQueryRow = {
@@ -63,6 +67,8 @@ type DeliveryQueryRow = {
     data_venda?: string | null;
     previsao_entrega?: string | null;
     status?: string | null;
+    import_source?: string | null;
+    service_type?: string | null;
   } | null;
 };
 
@@ -79,6 +85,8 @@ type PendingOrderRow = {
   data_venda?: string | null;
   previsao_entrega?: string | null;
   status?: string | null;
+  import_source?: string | null;
+  service_type?: string | null;
 };
 
 type PendingRouteOrderRow = {
@@ -106,6 +114,7 @@ const getToday = () => new Date().toISOString().slice(0, 10);
 const createInitialFilters = (): FiltersState => {
   const today = getToday();
   return {
+    includeDelivered: true,
     deliveredStart: today,
     deliveredEnd: today,
     pendingStart: '',
@@ -113,8 +122,11 @@ const createInitialFilters = (): FiltersState => {
     city: '',
     neighborhood: '',
     filial: '',
+    importSource: '',
+    serviceType: '',
     driverId: '',
     routeId: '',
+    sortBy: 'sale_date_asc',
   };
 };
 
@@ -260,13 +272,17 @@ export default function Reports() {
     });
   };
 
+  const updateBooleanFilter = (key: keyof FiltersState, value: boolean) => {
+    setFilters((prev) => ({ ...prev, [key]: value }));
+  };
+
   const validateFilters = () => {
-    if (!filters.deliveredStart || !filters.deliveredEnd) {
+    if (filters.includeDelivered && (!filters.deliveredStart || !filters.deliveredEnd)) {
       toast.error('Preencha o periodo de entregas antes de gerar o PDF');
       return false;
     }
 
-    if (filters.deliveredStart > filters.deliveredEnd) {
+    if (filters.includeDelivered && filters.deliveredStart > filters.deliveredEnd) {
       toast.error('O periodo de entregas esta invalido');
       return false;
     }
@@ -285,26 +301,33 @@ export default function Reports() {
     try {
       setGenerating(true);
 
-      const deliveredRows = await fetchDeliveredRows(filters);
+      const deliveredRows = filters.includeDelivered ? await fetchDeliveredRows(filters) : [];
       const pendingData = await fetchPendingRows(filters);
 
       const reportData: DeliveryOperationalReportData = {
         filters: {
-          deliveredStart: filters.deliveredStart,
-          deliveredEnd: filters.deliveredEnd,
+          deliveredStart: filters.includeDelivered ? filters.deliveredStart : '',
+          deliveredEnd: filters.includeDelivered ? filters.deliveredEnd : '',
           pendingStart: filters.pendingStart,
           pendingEnd: filters.pendingEnd,
           city: filters.city || undefined,
           neighborhood: filters.neighborhood || undefined,
           filial: filters.filial || undefined,
+          importSourceLabel: getImportSourceLabel(filters.importSource),
+          serviceTypeLabel: getServiceTypeLabel(filters.serviceType),
           driverName: selectedDriver?.name,
           routeLabel: selectedRoute?.label,
+          includeDelivered: filters.includeDelivered,
+          sortLabel:
+            filters.sortBy === 'sale_date_asc'
+              ? 'Data da venda: mais velha para mais nova'
+              : 'Data da venda: mais nova para mais velha',
           generatedAt: new Date().toISOString(),
         },
-        deliveredRows,
-        awaitingRouteRows: pendingData.awaitingRouteRows,
-        separatingRows: pendingData.separatingRows,
-        inRouteRows: pendingData.inRouteRows,
+        deliveredRows: deliveredRows.sort((a, b) => sortRows(a, b, filters.sortBy)),
+        awaitingRouteRows: pendingData.awaitingRouteRows.sort((a, b) => sortRows(a, b, filters.sortBy)),
+        separatingRows: pendingData.separatingRows.sort((a, b) => sortRows(a, b, filters.sortBy)),
+        inRouteRows: pendingData.inRouteRows.sort((a, b) => sortRows(a, b, filters.sortBy)),
       };
 
       const pdfBytes = await DeliveryOperationalReportGenerator.generate(reportData);
@@ -357,15 +380,26 @@ export default function Reports() {
               title="Periodo de entregas"
               description="Conta o que foi entregue no periodo pela data real da entrega."
             >
+              <label className="flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700">
+                <input
+                  type="checkbox"
+                  checked={filters.includeDelivered}
+                  onChange={(event) => updateBooleanFilter('includeDelivered', event.target.checked)}
+                  className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                />
+                Considerar pedidos entregues no relatorio
+              </label>
               <DateField
                 label="Inicio"
                 value={filters.deliveredStart}
                 onChange={(value) => updateFilter('deliveredStart', value)}
+                disabled={!filters.includeDelivered}
               />
               <DateField
                 label="Fim"
                 value={filters.deliveredEnd}
                 onChange={(value) => updateFilter('deliveredEnd', value)}
+                disabled={!filters.includeDelivered}
               />
             </FilterCard>
 
@@ -415,6 +449,29 @@ export default function Reports() {
                 placeholder="Todas as filiais"
                 disabled={loadingOptions}
               />
+              <SelectField
+                label="Origem"
+                value={filters.importSource}
+                onChange={(value) => updateFilter('importSource', value)}
+                options={[
+                  { value: 'lote', label: 'Somente lote' },
+                  { value: 'avulsa', label: 'Somente avulsa' },
+                ]}
+                placeholder="Todas as origens"
+                disabled={loadingOptions}
+              />
+              <SelectField
+                label="Tipo servico"
+                value={filters.serviceType}
+                onChange={(value) => updateFilter('serviceType', value)}
+                options={[
+                  { value: 'normal', label: 'Venda normal' },
+                  { value: 'troca', label: 'Troca' },
+                  { value: 'assistencia', label: 'Assistencia' },
+                ]}
+                placeholder="Todos os tipos"
+                disabled={loadingOptions}
+              />
             </FilterCard>
 
             <FilterCard
@@ -436,6 +493,17 @@ export default function Reports() {
                 onChange={(value) => updateFilter('routeId', value)}
                 options={routeOptionsFiltered.map((route) => ({ value: route.id, label: route.label }))}
                 placeholder="Todas as rotas"
+                disabled={loadingOptions}
+              />
+              <SelectField
+                label="Ordenacao"
+                value={filters.sortBy}
+                onChange={(value) => updateFilter('sortBy', value as FiltersState['sortBy'])}
+                options={[
+                  { value: 'sale_date_asc', label: 'Data da venda: mais velha primeiro' },
+                  { value: 'sale_date_desc', label: 'Data da venda: mais nova primeiro' },
+                ]}
+                placeholder="Selecione"
                 disabled={loadingOptions}
               />
             </FilterCard>
@@ -475,10 +543,12 @@ function DateField({
   label,
   value,
   onChange,
+  disabled,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
+  disabled?: boolean;
 }) {
   return (
     <label className="block">
@@ -486,8 +556,9 @@ function DateField({
       <input
         type="date"
         value={value}
+        disabled={disabled}
         onChange={(event) => onChange(event.target.value)}
-        className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+        className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-gray-100"
       />
     </label>
   );
@@ -560,7 +631,9 @@ async function fetchDeliveredRows(filters: FiltersState): Promise<DeliveryOperat
         filial_venda,
         data_venda,
         previsao_entrega,
-        status
+        status,
+        import_source,
+        service_type
       )
     `)
     .eq('status', 'delivered')
@@ -576,6 +649,8 @@ async function fetchDeliveredRows(filters: FiltersState): Promise<DeliveryOperat
       city: row.order?.address_json?.city,
       neighborhood: row.order?.address_json?.neighborhood,
       filial: row.order?.filial_venda,
+      importSource: row.order?.import_source,
+      serviceType: row.order?.service_type,
       driverId: row.route?.driver_id,
       routeId: row.route?.id,
     }))
@@ -605,7 +680,7 @@ async function fetchPendingRows(filters: FiltersState): Promise<{
   const [ordersRes, activeRouteOrdersRes] = await Promise.all([
     supabase
       .from('orders')
-      .select('id, order_id_erp, customer_name, items_json, address_json, filial_venda, data_venda, previsao_entrega, status, blocked_at')
+      .select('id, order_id_erp, customer_name, items_json, address_json, filial_venda, data_venda, previsao_entrega, status, blocked_at, import_source, service_type')
       .in('status', ['pending', 'imported', 'returned', 'assigned'])
       .is('blocked_at', null)
       .order('previsao_entrega', { ascending: true }),
@@ -650,6 +725,8 @@ async function fetchPendingRows(filters: FiltersState): Promise<{
       city: order.address_json?.city,
       neighborhood: order.address_json?.neighborhood,
       filial: order.filial_venda,
+      importSource: order.import_source,
+      serviceType: order.service_type,
       driverId: null,
       routeId: null,
       ignoreRouteDriver: true,
@@ -710,6 +787,8 @@ async function fetchPendingRows(filters: FiltersState): Promise<{
       city: order.address_json?.city,
       neighborhood: order.address_json?.neighborhood,
       filial: order.filial_venda,
+      importSource: order.import_source,
+      serviceType: order.service_type,
       driverId: activeRoute.route?.driver_id,
       routeId: activeRoute.route?.id,
     })) {
@@ -740,9 +819,9 @@ async function fetchPendingRows(filters: FiltersState): Promise<{
   });
 
   return {
-    awaitingRouteRows: awaitingRouteRows.sort(sortRows),
-    separatingRows: separatingRows.sort(sortRows),
-    inRouteRows: inRouteRows.sort(sortRows),
+    awaitingRouteRows,
+    separatingRows,
+    inRouteRows,
   };
 }
 
@@ -751,15 +830,19 @@ function matchesGlobalFilters(params: {
   city?: string | null;
   neighborhood?: string | null;
   filial?: string | null;
+  importSource?: string | null;
+  serviceType?: string | null;
   driverId?: string | null;
   routeId?: string | null;
   ignoreRouteDriver?: boolean;
 }) {
-  const { filters, city, neighborhood, filial, driverId, routeId, ignoreRouteDriver } = params;
+  const { filters, city, neighborhood, filial, importSource, serviceType, driverId, routeId, ignoreRouteDriver } = params;
 
   if (filters.city && normalizeText(city) !== filters.city) return false;
   if (filters.neighborhood && normalizeText(neighborhood) !== filters.neighborhood) return false;
   if (filters.filial && normalizeText(filial) !== filters.filial) return false;
+  if (!matchesImportSourceFilter(filters.importSource, importSource)) return false;
+  if (!matchesServiceTypeFilter(filters.serviceType, serviceType)) return false;
 
   if (!ignoreRouteDriver) {
     if (filters.driverId && normalizeText(driverId) !== filters.driverId) return false;
@@ -786,9 +869,51 @@ function hasSelectableItems(order: PendingOrderRow) {
   return Array.isArray(order.items_json) && order.items_json.length > 0;
 }
 
-function sortRows(a: DeliveryOperationalReportRow, b: DeliveryOperationalReportRow) {
-  const aDate = a.forecastDate || '';
-  const bDate = b.forecastDate || '';
-  if (aDate !== bDate) return aDate.localeCompare(bDate);
+function matchesImportSourceFilter(filterValue: string, importSource?: string | null) {
+  if (!filterValue) return true;
+
+  const normalized = normalizeText(importSource).toLowerCase();
+  if (filterValue === 'avulsa') return normalized === 'avulsa';
+  if (filterValue === 'lote') return normalized !== 'avulsa';
+  return true;
+}
+
+function matchesServiceTypeFilter(filterValue: string, serviceType?: string | null) {
+  if (!filterValue) return true;
+
+  const normalized = normalizeText(serviceType).toLowerCase();
+  if (filterValue === 'normal') return !normalized || normalized === 'venda' || normalized === 'normal';
+  return normalized === filterValue;
+}
+
+function getImportSourceLabel(value: string) {
+  if (value === 'avulsa') return 'Somente avulsa';
+  if (value === 'lote') return 'Somente lote';
+  return undefined;
+}
+
+function getServiceTypeLabel(value: string) {
+  if (value === 'normal') return 'Venda normal';
+  if (value === 'troca') return 'Troca';
+  if (value === 'assistencia') return 'Assistencia';
+  return undefined;
+}
+
+function sortRows(
+  a: DeliveryOperationalReportRow,
+  b: DeliveryOperationalReportRow,
+  sortBy: FiltersState['sortBy']
+) {
+  const aDate = a.saleDate || '';
+  const bDate = b.saleDate || '';
+
+  if (aDate !== bDate) {
+    return sortBy === 'sale_date_desc' ? bDate.localeCompare(aDate) : aDate.localeCompare(bDate);
+  }
+
+  const aForecast = a.forecastDate || '';
+  const bForecast = b.forecastDate || '';
+  if (aForecast !== bForecast) return aForecast.localeCompare(bForecast);
+
   return a.customerName.localeCompare(b.customerName);
 }

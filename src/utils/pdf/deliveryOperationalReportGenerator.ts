@@ -2,6 +2,7 @@ import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
 import { fitTextSafe, sanitizePdfText } from './pdfTextSanitizer';
 
 export interface DeliveryOperationalReportFilters {
+  includeDelivered?: boolean;
   deliveredStart: string;
   deliveredEnd: string;
   pendingStart: string;
@@ -9,8 +10,11 @@ export interface DeliveryOperationalReportFilters {
   city?: string;
   neighborhood?: string;
   filial?: string;
+  importSourceLabel?: string;
+  serviceTypeLabel?: string;
   driverName?: string;
   routeLabel?: string;
+  sortLabel?: string;
   generatedAt: string;
 }
 
@@ -102,26 +106,51 @@ export class DeliveryOperationalReportGenerator {
       return date.toLocaleString('pt-BR');
     };
 
+    const isOverdue = (value?: string | null) => {
+      if (!value) return false;
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return false;
+
+      const forecastDate = date.toISOString().slice(0, 10);
+      const today = new Date();
+      const todayDate = new Date(today.getFullYear(), today.getMonth(), today.getDate())
+        .toISOString()
+        .slice(0, 10);
+
+      return forecastDate < todayDate;
+    };
+
     const drawHeader = () => {
       drawText('RELATORIO OPERACIONAL DE ENTREGAS', margin, y, 18, true, rgb(0.08, 0.16, 0.28));
       drawText(`Gerado em ${formatDateTime(data.filters.generatedAt)}`, pageWidth - 240, y + 2, 9, false, rgb(0.45, 0.45, 0.5));
       y -= 24;
 
       const filtersLine1 = [
-        `Entregas: ${formatDate(data.filters.deliveredStart)} a ${formatDate(data.filters.deliveredEnd)}`,
+        data.filters.includeDelivered
+          ? `Entregas: ${formatDate(data.filters.deliveredStart)} a ${formatDate(data.filters.deliveredEnd)}`
+          : 'Entregas: nao consideradas',
         `Pendencias: ${formatDate(data.filters.pendingStart)} a ${formatDate(data.filters.pendingEnd)}`,
       ];
       const filtersLine2 = [
         `Cidade: ${data.filters.city || 'Todas'}`,
         `Bairro: ${data.filters.neighborhood || 'Todos'}`,
         `Filial: ${data.filters.filial || 'Todas'}`,
+        `Origem: ${data.filters.importSourceLabel || 'Todas'}`,
+        `Tipo: ${data.filters.serviceTypeLabel || 'Todos'}`,
+      ];
+      const filtersLine3 = [
         `Motorista: ${data.filters.driverName || 'Todos'}`,
         `Rota: ${data.filters.routeLabel || 'Todas'}`,
       ];
+      const filtersLine4 = `Ordenacao: ${data.filters.sortLabel || 'Data da venda: mais velha para mais nova'}`;
 
       drawText(filtersLine1.join('   |   '), margin, y, 9, false, rgb(0.35, 0.35, 0.4));
       y -= 14;
       drawText(filtersLine2.join('   |   '), margin, y, 9, false, rgb(0.35, 0.35, 0.4));
+      y -= 14;
+      drawText(filtersLine3.join('   |   '), margin, y, 9, false, rgb(0.35, 0.35, 0.4));
+      y -= 14;
+      drawText(filtersLine4, margin, y, 9, false, rgb(0.35, 0.35, 0.4));
       y -= 16;
 
       page.drawLine({
@@ -135,17 +164,42 @@ export class DeliveryOperationalReportGenerator {
 
     const drawSummary = () => {
       const pendingTotal = data.awaitingRouteRows.length + data.separatingRows.length + data.inRouteRows.length;
-      const items: SummaryItem[] = [
-        { label: 'Entregues', value: data.deliveredRows.length, color: rgb(0.07, 0.63, 0.34) },
-        { label: 'Pendentes', value: pendingTotal, color: rgb(0.78, 0.45, 0.08) },
-        { label: 'Aguardando rota', value: data.awaitingRouteRows.length, color: rgb(0.81, 0.36, 0.09) },
-        { label: 'Em separacao', value: data.separatingRows.length, color: rgb(0.12, 0.43, 0.82) },
-        { label: 'Em rota nao entregue', value: data.inRouteRows.length, color: rgb(0.46, 0.24, 0.72) },
+      const items: SummaryItem[] = data.filters.includeDelivered
+        ? [
+            { label: 'Entregues', value: data.deliveredRows.length, color: rgb(0.07, 0.63, 0.34) },
+            { label: 'Pendentes', value: pendingTotal, color: rgb(0.78, 0.45, 0.08) },
+            { label: 'Aguardando rota', value: data.awaitingRouteRows.length, color: rgb(0.81, 0.36, 0.09) },
+            { label: 'Em separacao', value: data.separatingRows.length, color: rgb(0.12, 0.43, 0.82) },
+            { label: 'Em rota nao entregue', value: data.inRouteRows.length, color: rgb(0.46, 0.24, 0.72) },
+          ]
+        : [
+            { label: 'Pendentes', value: pendingTotal, color: rgb(0.78, 0.45, 0.08) },
+            { label: 'Aguardando rota', value: data.awaitingRouteRows.length, color: rgb(0.81, 0.36, 0.09) },
+            { label: 'Em separacao', value: data.separatingRows.length, color: rgb(0.12, 0.43, 0.82) },
+            { label: 'Em rota nao entregue', value: data.inRouteRows.length, color: rgb(0.46, 0.24, 0.72) },
+          ];
+
+      const overdueItems: SummaryItem[] = [
+        {
+          label: 'Fora do prazo aguardando rota',
+          value: data.awaitingRouteRows.filter((row) => isOverdue(row.forecastDate)).length,
+          color: rgb(0.75, 0.22, 0.17),
+        },
+        {
+          label: 'Fora do prazo em separacao',
+          value: data.separatingRows.filter((row) => isOverdue(row.forecastDate)).length,
+          color: rgb(0.75, 0.22, 0.17),
+        },
+        {
+          label: 'Fora do prazo em rota',
+          value: data.inRouteRows.filter((row) => isOverdue(row.forecastDate)).length,
+          color: rgb(0.75, 0.22, 0.17),
+        },
       ];
 
-      ensureSpace(90);
+      ensureSpace(176);
       const gap = 10;
-      const cardWidth = (pageWidth - margin * 2 - gap * 4) / 5;
+      const cardWidth = (pageWidth - margin * 2 - gap * (items.length - 1)) / items.length;
       const cardHeight = 58;
 
       items.forEach((item, index) => {
@@ -163,7 +217,31 @@ export class DeliveryOperationalReportGenerator {
         drawText(String(item.value), x + 10, y - 40, 20, true, item.color);
       });
 
-      y -= cardHeight + 24;
+      y -= cardHeight + 18;
+
+      drawText('Pendencias fora do prazo', margin, y, 11, true, rgb(0.75, 0.22, 0.17));
+      y -= 12;
+
+      const overdueGap = 12;
+      const overdueCardWidth = (pageWidth - margin * 2 - overdueGap * 2) / 3;
+      const overdueCardHeight = 54;
+
+      overdueItems.forEach((item, index) => {
+        const x = margin + (overdueCardWidth + overdueGap) * index;
+        page.drawRectangle({
+          x,
+          y: y - overdueCardHeight,
+          width: overdueCardWidth,
+          height: overdueCardHeight,
+          color: rgb(1, 0.97, 0.96),
+          borderColor: rgb(0.96, 0.83, 0.8),
+          borderWidth: 1,
+        });
+        drawText(item.label, x + 10, y - 16, 9, true, rgb(0.44, 0.2, 0.17));
+        drawText(String(item.value), x + 10, y - 38, 19, true, item.color);
+      });
+
+      y -= overdueCardHeight + 24;
     };
 
     const drawSectionTitle = (title: string, count: number, color: ReturnType<typeof rgb>) => {
@@ -187,12 +265,13 @@ export class DeliveryOperationalReportGenerator {
     ) => {
       const columns: Column[] = [
         { key: 'orderIdErp', label: 'Pedido', width: 60 },
-        { key: 'customerName', label: 'Cliente', width: 156 },
-        { key: 'city', label: 'Cidade', width: 88 },
-        { key: 'forecastDate', label: 'Prev. entrega', width: 70 },
-        { key: 'routeName', label: 'Rota', width: 138 },
-        { key: 'driverName', label: 'Motorista', width: 110 },
-        { key: 'statusLabel', label: 'Status', width: 92 },
+        { key: 'customerName', label: 'Cliente', width: 148 },
+        { key: 'city', label: 'Cidade', width: 74 },
+        { key: 'saleDate', label: 'Data venda', width: 68 },
+        { key: 'forecastDate', label: 'Prev. entrega', width: 68 },
+        { key: 'routeName', label: 'Rota', width: 126 },
+        { key: 'driverName', label: 'Motorista', width: 98 },
+        { key: 'statusLabel', label: 'Status', width: 82 },
         { key: 'deliveredAt', label: 'Data ref.', width: 70 },
       ];
 
@@ -228,6 +307,7 @@ export class DeliveryOperationalReportGenerator {
           orderIdErp: row.orderIdErp || '-',
           customerName: row.customerName || '-',
           city: row.city || '-',
+          saleDate: formatDate(row.saleDate),
           forecastDate: formatDate(row.forecastDate),
           routeName: row.routeCode ? `${row.routeCode} - ${row.routeName || '-'}` : row.routeName || '-',
           driverName: row.driverName || '-',
@@ -264,8 +344,10 @@ export class DeliveryOperationalReportGenerator {
     drawHeader();
     drawSummary();
 
-    drawSectionTitle('Entregues no periodo', data.deliveredRows.length, rgb(0.07, 0.63, 0.34));
-    drawTable(data.deliveredRows, 'Entregue', rgb(0.07, 0.63, 0.34));
+    if (data.filters.includeDelivered) {
+      drawSectionTitle('Entregues no periodo', data.deliveredRows.length, rgb(0.07, 0.63, 0.34));
+      drawTable(data.deliveredRows, 'Entregue', rgb(0.07, 0.63, 0.34));
+    }
 
     drawSectionTitle('Aguardando rota', data.awaitingRouteRows.length, rgb(0.81, 0.36, 0.09));
     drawTable(data.awaitingRouteRows, 'Aguardando rota', rgb(0.81, 0.36, 0.09));
