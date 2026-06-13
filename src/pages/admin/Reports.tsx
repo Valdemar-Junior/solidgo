@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { CalendarRange, FileSpreadsheet, Filter, Loader2, MapPin, RotateCcw, Truck } from 'lucide-react';
 import { toast } from 'sonner';
 import { supabase } from '../../supabase/client';
+import { MultiSelect } from '../../components/ui/MultiSelect';
 import { DeliverySheetGenerator } from '../../utils/pdf/deliverySheetGenerator';
 import {
   DeliveryOperationalReportGenerator,
@@ -26,7 +27,7 @@ type FiltersState = {
   deliveredEnd: string;
   pendingStart: string;
   pendingEnd: string;
-  city: string;
+  city: string[];
   neighborhood: string;
   filial: string;
   importSource: string;
@@ -119,7 +120,7 @@ const createInitialFilters = (): FiltersState => {
     deliveredEnd: today,
     pendingStart: '',
     pendingEnd: '',
-    city: '',
+    city: [],
     neighborhood: '',
     filial: '',
     importSource: '',
@@ -247,7 +248,7 @@ export default function Reports() {
   }, []);
 
   const neighborhoodsFiltered = useMemo(() => {
-    if (!filters.city) return neighborhoods;
+    if (filters.city.length === 0) return neighborhoods;
     return neighborhoods;
   }, [filters.city, neighborhoods]);
 
@@ -274,6 +275,10 @@ export default function Reports() {
 
   const updateBooleanFilter = (key: keyof FiltersState, value: boolean) => {
     setFilters((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const updateCitiesFilter = (values: string[]) => {
+    setFilters((prev) => ({ ...prev, city: values }));
   };
 
   const validateFilters = () => {
@@ -310,7 +315,7 @@ export default function Reports() {
           deliveredEnd: filters.includeDelivered ? filters.deliveredEnd : '',
           pendingStart: filters.pendingStart,
           pendingEnd: filters.pendingEnd,
-          city: filters.city || undefined,
+          city: filters.city.length > 0 ? filters.city.join(', ') : undefined,
           neighborhood: filters.neighborhood || undefined,
           filial: filters.filial || undefined,
           importSourceLabel: getImportSourceLabel(filters.importSource),
@@ -425,14 +430,16 @@ export default function Reports() {
               title="Recorte geografico"
               description="Os filtros desta coluna valem para todo o relatorio."
             >
-              <SelectField
-                label="Cidade"
-                value={filters.city}
-                onChange={(value) => updateFilter('city', value)}
-                options={cities}
-                placeholder="Todas as cidades"
-                disabled={loadingOptions}
-              />
+              <div className="block">
+                <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500">Cidade</span>
+                <MultiSelect
+                  options={cities}
+                  selected={filters.city}
+                  onChange={updateCitiesFilter}
+                  placeholder="Todas as cidades"
+                  disabled={loadingOptions}
+                />
+              </div>
               <SelectField
                 label="Bairro"
                 value={filters.neighborhood}
@@ -839,7 +846,7 @@ function matchesGlobalFilters(params: {
 }) {
   const { filters, city, neighborhood, filial, importSource, serviceType, driverId, routeId, ignoreRouteDriver } = params;
 
-  if (filters.city && normalizeText(city) !== filters.city) return false;
+  if (filters.city.length > 0 && !filters.city.includes(normalizeText(city))) return false;
   if (filters.neighborhood && normalizeText(neighborhood) !== filters.neighborhood) return false;
   if (filters.filial && normalizeText(filial) !== filters.filial) return false;
   if (!matchesImportSourceFilter(filters.importSource, importSource)) return false;
