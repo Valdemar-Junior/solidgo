@@ -24,6 +24,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { WorkingDaysCalendar } from '../../components/settings/WorkingDaysCalendar';
+import { CarrierCitiesTable } from '../../components/settings/CarrierCitiesTable';
 import { CityRulesTable } from '../../components/settings/CityRulesTable';
 
 type Tab = 'general' | 'logistics' | 'integrations';
@@ -544,6 +545,7 @@ export default function Settings() {
                 </button>
               </div>
 
+              <CarrierCitiesTable />
               <CityRulesTable />
               <WorkingDaysCalendar />
             </div>

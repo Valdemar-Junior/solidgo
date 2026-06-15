@@ -9,6 +9,7 @@ export interface DeliverySheetData {
   vehicle?: Vehicle;
   orders: Order[];
   generatedAt: string;
+  printScope?: 'all' | 'full' | 'carrier' | 'normal';
   assemblyInstallerName?: string;
   assemblyVehicleModel?: string;
   assemblyVehiclePlate?: string;
@@ -249,6 +250,19 @@ export class DeliverySheetGenerator {
           font: helveticaBoldFont,
           color: rgb(0.86, 0.1, 0.1),
           opacity: 0.22,
+          rotate: degrees(35),
+        });
+      }
+
+      if (data.printScope === 'carrier' && Boolean((order as any).is_carrier_delivery)) {
+        const watermarkY = Math.max(margin + 48, y - (totalBlockHeight * 0.7));
+        page.drawText('TRANSPORTADORA', {
+          x: width - margin - 290,
+          y: watermarkY,
+          size: 34,
+          font: helveticaBoldFont,
+          color: rgb(0.8, 0.45, 0.05),
+          opacity: 0.18,
           rotate: degrees(35),
         });
       }

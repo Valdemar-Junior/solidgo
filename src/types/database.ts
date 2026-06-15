@@ -178,6 +178,15 @@ export interface Order {
   return_date?: string;          // Data da devolução no ERP
   return_type?: string;          // Tipo: 'NOTA DE DEVOLUCAO'
   return_danfe_base64?: string;  // PDF da DANFE de devolução em Base64
+  is_carrier_delivery?: boolean;
+}
+
+export interface CarrierCity {
+  id: string;
+  city_name: string;
+  active: boolean;
+  created_at: string;
+  updated_at?: string;
 }
 
 export interface Address {
