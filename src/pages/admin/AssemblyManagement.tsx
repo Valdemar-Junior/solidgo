@@ -1041,12 +1041,6 @@ function AssemblyManagementContent() {
       return;
     }
 
-    // If creating new route, deadline is required
-    if (!selectedExistingRoute && !deadline) {
-      toast.error('Por favor, informe o prazo de conclusão');
-      return;
-    }
-
     setSaving(true);
 
     try {
@@ -1082,7 +1076,7 @@ function AssemblyManagementContent() {
           .from('assembly_routes')
           .insert({
             name: selectedCatalogRouteName,
-            deadline: deadline || null,
+            deadline: null,
             observations: observations.trim() || null,
             assembler_id: selectedMontador || null,
             vehicle_id: selectedVehicle || null,
@@ -2807,16 +2801,6 @@ function AssemblyManagementContent() {
                           {vehicles.map(v => <option key={v.id} value={v.id}>{v.plate} - {v.model}</option>)}
                         </select>
                       </div>
-                    </div>
-
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">Prazo de Conclusão <span className="text-red-500">*</span></label>
-                      <input
-                        type="date"
-                        value={deadline}
-                        onChange={(e) => setDeadline(e.target.value)}
-                        className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all"
-                      />
                     </div>
 
                     <div>

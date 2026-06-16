@@ -14,6 +14,7 @@ interface RouteOrderInfo {
   status: string;
   sequence?: number;
   delivered_at?: string;
+  returned_at?: string;
   return_reason?: string | null;
   return_notes?: string | null;
   route?: any;
@@ -28,6 +29,10 @@ interface AssemblyInfo {
   assembly_route?: any;
   assembly_date?: string;
   completion_date?: string;
+  returned_at?: string;
+  return_reason?: string | null;
+  observations?: string | null;
+  technical_notes?: string | null;
   updated_at?: string;
 }
 
@@ -209,6 +214,76 @@ export default function OrderLookup() {
     }
   };
 
+  const fetchUserNamesByIds = async (ids: string[]) => {
+    const uniqueIds = Array.from(new Set(ids.map((id) => String(id || '').trim()).filter(Boolean)));
+    if (uniqueIds.length === 0) return {} as Record<string, string>;
+
+    const namesMap: Record<string, string> = {};
+
+    // Tentativa direta (respeita RLS). Em perfis restritos pode vir vazio.
+    const { data: directData, error: directError } = await supabase
+      .from('users')
+      .select('id, name')
+      .in('id', uniqueIds);
+
+    if (!directError && directData) {
+      for (const row of directData as Array<{ id: string; name: string }>) {
+        namesMap[String(row.id)] = String(row.name || '').trim();
+      }
+    }
+
+    const missingIds = uniqueIds.filter((id) => !namesMap[id]);
+    if (missingIds.length > 0) {
+      // Fallback via RPC SECURITY DEFINER para cenários com RLS restrita.
+      const { data: rpcData, error: rpcError } = await supabase.rpc('get_users_names_by_ids', {
+        p_user_ids: missingIds,
+      });
+
+      if (rpcError) {
+        console.warn('[OrderLookup] Falha ao buscar nomes de usuários via RPC:', rpcError.message);
+      } else {
+        for (const row of (rpcData || []) as Array<{ id: string; name: string }>) {
+          namesMap[String(row.id)] = String(row.name || '').trim();
+        }
+      }
+    }
+
+    const stillMissingIds = uniqueIds.filter((id) => !namesMap[id]);
+    if (stillMissingIds.length > 0) {
+      // Fallback extra sem migration: tenta mapear por list_drivers (SECURITY DEFINER já existente).
+      const { data: driversRpcData, error: driversRpcError } = await supabase.rpc('list_drivers');
+      if (driversRpcError) {
+        console.warn('[OrderLookup] Falha ao buscar nomes via list_drivers:', driversRpcError.message);
+      } else {
+        for (const row of (driversRpcData || []) as Array<{ driver_id?: string; user_id?: string; name?: string }>) {
+          const userId = String((row as any).user_id || '').trim();
+          const name = String((row as any).name || '').trim();
+          if (userId && name && stillMissingIds.includes(userId) && !namesMap[userId]) {
+            namesMap[userId] = name;
+          }
+        }
+      }
+    }
+
+    return namesMap;
+  };
+
+  const extractPersonNameFromRouteName = (routeName: string) => {
+    const text = String(routeName || '').trim();
+    if (!text) return '';
+
+    // Exemplos:
+    // "07/01-ROTA MOSSORÓ, ADRIANO-10:58"
+    // "11/21- ROTA PARAU. THIAGO-11:22"
+    const commaMatch = text.match(/,\s*([^-.,]+?)\s*(?:-\d{1,2}:\d{2})?$/);
+    if (commaMatch) return String(commaMatch[1] || '').trim();
+
+    const dotMatch = text.match(/\.\s*([^-.,]+?)\s*(?:-\d{1,2}:\d{2})?$/);
+    if (dotMatch) return String(dotMatch[1] || '').trim();
+
+    return '';
+  };
+
   useEffect(() => {
     const fetchDetails = async () => {
       if (!selectedOrder) return;
@@ -252,36 +327,72 @@ export default function OrderLookup() {
           if (driverIds.length > 0) {
             const { data: drvBulk } = await supabase
               .from('drivers')
-              .select('id, user_id, active')
+              .select('id, user_id, active, name')
               .in('id', driverIds);
+
+            const listDriversByDriverId: Record<string, string> = {};
+            const { data: listDriversData, error: listDriversError } = await supabase.rpc('list_drivers');
+            if (listDriversError) {
+              console.warn('[OrderLookup] Falha ao buscar nomes via list_drivers:', listDriversError.message);
+            } else {
+              for (const row of (listDriversData || []) as Array<{ driver_id?: string; name?: string }>) {
+                const driverId = String((row as any).driver_id || '').trim();
+                const driverName = String((row as any).name || '').trim();
+                if (driverId && driverName) {
+                  listDriversByDriverId[driverId] = driverName;
+                }
+              }
+            }
 
             if (drvBulk && drvBulk.length > 0) {
               const userIds = Array.from(new Set(drvBulk.map((d: any) => String(d.user_id)).filter(Boolean)));
+              const userNamesMap = await fetchUserNamesByIds(userIds);
+              const enrichedDrivers = drvBulk.map((d: any) => {
+                const resolvedName =
+                  userNamesMap[String(d.user_id)] ||
+                  listDriversByDriverId[String(d.id)] ||
+                  d?.name ||
+                  '';
+                return {
+                  ...d,
+                  user: resolvedName ? { id: d.user_id, name: resolvedName } : null,
+                };
+              });
+              const mapDrv = new Map<string, any>(enrichedDrivers.map((d: any) => [String(d.id), d]));
 
-              if (userIds.length > 0) {
-                const { data: usersData } = await supabase
-                  .from('users')
-                  .select('id, name')
-                  .in('id', userIds);
-
-                const mapU = new Map<string, any>((usersData || []).map((u: any) => [String(u.id), u]));
-                const enrichedDrivers = drvBulk.map((d: any) => ({ ...d, user: mapU.get(String(d.user_id)) || null }));
-                const mapDrv = new Map<string, any>(enrichedDrivers.map((d: any) => [String(d.id), d]));
-
-                // Enriquecer cada route_order com driver
-                roData = (roData as any[]).map((ro: any) => {
-                  const route = ro.route || {};
-                  const d = route.driver_id ? mapDrv.get(String(route.driver_id)) : null;
-                  return {
-                    ...ro,
-                    route: {
-                      ...route,
-                      driver: d,
-                      driver_name: d?.user?.name || d?.name || ''
-                    }
-                  };
-                });
-              }
+              // Enriquecer cada route_order com driver
+              roData = (roData as any[]).map((ro: any) => {
+                const route = ro.route || {};
+                const driverId = String(route.driver_id || '').trim();
+                const d = driverId ? mapDrv.get(driverId) : null;
+                const fallbackName = driverId
+                  ? (listDriversByDriverId[driverId] || extractPersonNameFromRouteName(route.name || ''))
+                  : extractPersonNameFromRouteName(route.name || '');
+                return {
+                  ...ro,
+                  route: {
+                    ...route,
+                    driver: d,
+                    driver_name: d?.user?.name || d?.name || fallbackName || ''
+                  }
+                };
+              });
+            } else {
+              // Se drivers vier vazio (dado legado/inconsistente), tenta ao menos resolver pelo list_drivers.
+              roData = (roData as any[]).map((ro: any) => {
+                const route = ro.route || {};
+                const driverId = String(route.driver_id || '').trim();
+                const fallbackName = driverId
+                  ? (listDriversByDriverId[driverId] || extractPersonNameFromRouteName(route.name || ''))
+                  : extractPersonNameFromRouteName(route.name || '');
+                return {
+                  ...ro,
+                  route: {
+                    ...route,
+                    driver_name: fallbackName || ''
+                  }
+                };
+              });
             }
           }
 
@@ -352,21 +463,8 @@ export default function OrderLookup() {
           );
 
           if (userIds.length > 0) {
-            const { data: usersData, error: usersError } = await supabase
-              .from('users')
-              .select('id, name')
-              .in('id', userIds);
-
-            if (usersError) {
-              console.warn('[OrderLookup] Falha ao carregar nomes de usuarios dos comprovantes:', usersError.message);
-              setDeliveryReceiptUserNames({});
-            } else {
-              const namesMap: Record<string, string> = {};
-              for (const userRow of (usersData || []) as Array<{ id: string; name: string }>) {
-                namesMap[String(userRow.id)] = String(userRow.name || '').trim();
-              }
-              setDeliveryReceiptUserNames(namesMap);
-            }
+            const namesMap = await fetchUserNamesByIds(userIds);
+            setDeliveryReceiptUserNames(namesMap);
           } else {
             setDeliveryReceiptUserNames({});
           }
@@ -383,15 +481,25 @@ export default function OrderLookup() {
         // Buscar nomes dos montadores manualmente
         const asmIds = Array.from(new Set(finalAssemblies.map(a => a.assembly_route?.assembler_id).filter(Boolean)));
         if (asmIds.length > 0) {
-          const { data: uData } = await supabase.from('users').select('id, name').in('id', asmIds);
-          const uMap: Record<string, string> = {};
-          (uData || []).forEach((u: any) => { uMap[u.id] = u.name; });
+          const uMap = await fetchUserNamesByIds(asmIds.map((id: any) => String(id)));
 
           finalAssemblies = finalAssemblies.map(a => ({
             ...a,
             assembly_route: {
               ...(a.assembly_route || {}),
-              assembler: { name: a.assembly_route?.assembler_id ? uMap[a.assembly_route.assembler_id] : null }
+              assembler: {
+                name: a.assembly_route?.assembler_id
+                  ? (uMap[a.assembly_route.assembler_id] || extractPersonNameFromRouteName(a.assembly_route?.name || ''))
+                  : extractPersonNameFromRouteName(a.assembly_route?.name || '')
+              }
+            }
+          }));
+        } else {
+          finalAssemblies = finalAssemblies.map(a => ({
+            ...a,
+            assembly_route: {
+              ...(a.assembly_route || {}),
+              assembler: { name: extractPersonNameFromRouteName(a.assembly_route?.name || '') }
             }
           }));
         }
@@ -440,8 +548,13 @@ export default function OrderLookup() {
 
   const assemblyStatus = useMemo(() => {
     if (!assemblies.length) return 'none';
-    const st = assemblies[0].status;
-    return st;
+    const firstAssembly = assemblies[0];
+    const status = String(firstAssembly.status || '').toLowerCase();
+
+    if (status === 'completed') return 'completed';
+    if (status === 'cancelled') return 'cancelled';
+    if (firstAssembly.assembly_route_id || (firstAssembly as any).assembly_route?.id) return 'in_route';
+    return 'none';
   }, [assemblies]);
 
   const formatDate = (d?: string | null) => {
@@ -454,6 +567,80 @@ export default function OrderLookup() {
     if (!d) return '-';
     const dt = new Date(d);
     return isNaN(dt.getTime()) ? '-' : dt.toLocaleString('pt-BR');
+  };
+
+  const normalizeText = (value: unknown) => {
+    if (value === null || typeof value === 'undefined') return '';
+    return String(value).trim();
+  };
+
+  const normalizeReturnReason = (value: unknown) => {
+    if (!value) return '';
+    if (typeof value === 'object') {
+      const reasonFromObject = normalizeText((value as any).reason);
+      if (reasonFromObject) return reasonFromObject;
+    }
+    return normalizeText(value);
+  };
+
+  const normalizeCompareText = (value: string) => {
+    return normalizeText(value)
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/\s+/g, ' ')
+      .toLowerCase()
+      .trim();
+  };
+
+  const isOtherReasonValue = (value: string) => {
+    const normalized = normalizeCompareText(value);
+    return normalized === 'outro' || normalized === 'other' || normalized === '99';
+  };
+
+  const buildReturnDisplay = (reasonInput: unknown, notesInput: unknown) => {
+    const rawReason = normalizeReturnReason(reasonInput);
+    const rawNotes = normalizeText(notesInput);
+
+    // Se o motivo for "Outro", mostramos o texto digitado como motivo principal.
+    const displayReason = isOtherReasonValue(rawReason) && rawNotes
+      ? rawNotes
+      : (rawReason || rawNotes);
+
+    // Evita repetir exatamente o mesmo texto em "Motivo" e "Observação".
+    const sameReasonAndNotes = Boolean(displayReason) &&
+      normalizeCompareText(displayReason) === normalizeCompareText(rawNotes);
+
+    return {
+      reason: displayReason,
+      notes: rawNotes && !sameReasonAndNotes ? rawNotes : '',
+    };
+  };
+
+  const parseAssemblyReturnDetails = (assembly: AssemblyInfo) => {
+    const directReason = normalizeReturnReason(assembly.return_reason);
+    const observations = normalizeText(assembly.observations);
+    let reasonFromObs = '';
+    let notesFromObs = '';
+
+    if (observations) {
+      const matchParens = observations.match(/^\(Retorno:\s*(.+?)\)\s*(.*)/i);
+      if (matchParens) {
+        reasonFromObs = normalizeText(matchParens[1]);
+        notesFromObs = normalizeText(matchParens[2]);
+      } else {
+        const matchSimple = observations.match(/^Retorno:\s*(.+)$/i);
+        if (matchSimple) {
+          reasonFromObs = normalizeText(matchSimple[1]);
+        } else {
+          notesFromObs = observations;
+        }
+      }
+    }
+
+    return {
+      reason: directReason || reasonFromObs,
+      notes: notesFromObs,
+    };
   };
 
   const asNumber = (value: unknown): number | null => {
@@ -647,12 +834,13 @@ export default function OrderLookup() {
   };
 
   const statusLabelMontagem: Record<string, string> = {
-    pending: 'Pendente',
-    assigned: 'Atribuído',
-    in_progress: 'Em andamento',
+    pending: 'Aguardando rota',
+    assigned: 'Em rota',
+    in_progress: 'Em rota',
+    in_route: 'Em rota',
     completed: 'Concluído',
     cancelled: 'Retornado',
-    none: 'Sem montagem',
+    none: 'Aguardando rota',
   };
 
   // Labels para etapa do processo (cabeçalho do card)
@@ -909,6 +1097,12 @@ export default function OrderLookup() {
                       const orderStatus = ro.status === 'returned' ? 'returned'
                         : ro.status === 'delivered' ? 'delivered'
                           : 'pending';
+                      const returnInfo = buildReturnDisplay(
+                        (ro as any)?.return_reason || (selectedOrder as any)?.last_return_reason,
+                        (ro as any)?.return_notes || (selectedOrder as any)?.last_return_notes
+                      );
+                      const returnReason = returnInfo.reason;
+                      const returnNotes = returnInfo.notes;
                       const receipt = deliveryReceiptsByRouteOrder[ro.id];
                       const proofStatus = getProofStatus(receipt);
                       const proofUserId = String(receipt?.delivered_by_user_id || '').trim();
@@ -950,8 +1144,22 @@ export default function OrderLookup() {
                           {ro.status === 'returned' && (
                             <div className="flex items-center gap-2 mt-1">
                               <p className="text-xs text-red-600 font-medium">
-                                Retornado em: {ro.delivered_at ? formatDate(ro.delivered_at) : formatDate(ro.route?.updated_at)}
+                                Retornado em: {formatDateTime(ro.returned_at || ro.delivered_at || ro.route?.updated_at)}
                               </p>
+                            </div>
+                          )}
+                          {ro.status === 'returned' && (returnReason || returnNotes) && (
+                            <div className="mt-2 p-2 rounded-lg border border-red-200 bg-red-50 space-y-1">
+                              {returnReason && (
+                                <p className="text-xs text-red-700">
+                                  <span className="font-semibold">Motivo do retorno:</span> {returnReason}
+                                </p>
+                              )}
+                              {returnNotes && (
+                                <p className="text-xs text-red-700">
+                                  <span className="font-semibold">Observação:</span> {returnNotes}
+                                </p>
+                              )}
                             </div>
                           )}
                           {(ro.status === 'delivered' || ro.status === 'returned') && (
@@ -1066,7 +1274,16 @@ export default function OrderLookup() {
                   <p className="text-sm text-gray-500">Nenhum romaneio de montagem.</p>
                 ) : (
                   <div className="space-y-2">
-                    {assemblies.map((ap) => (
+                    {assemblies.map((ap) => {
+                      const parsedAssemblyReturn = parseAssemblyReturnDetails(ap);
+                      const assemblyReturnInfo = buildReturnDisplay(
+                        parsedAssemblyReturn.reason || (selectedOrder as any)?.last_return_reason,
+                        parsedAssemblyReturn.notes || (selectedOrder as any)?.last_return_notes
+                      );
+                      const assemblyReturnReason = assemblyReturnInfo.reason;
+                      const assemblyReturnNotes = assemblyReturnInfo.notes;
+
+                      return (
                       <div key={ap.id} className="border border-gray-100 rounded-lg p-3 hover:border-purple-200 transition-colors">
                         <div className="flex justify-between items-start">
                           <div>
@@ -1080,15 +1297,26 @@ export default function OrderLookup() {
                         </div>
 
                         <p className="text-xs font-medium text-gray-700 mt-2 mb-1">{ap.product_name || 'Produto não identificado'}</p>
-                        <p className={`text-xs capitalize ${(ap.status || '').toLowerCase() === 'cancelled' ? 'text-red-600 font-semibold' : 'text-gray-500'}`}>
-                          Status: {statusLabelMontagem[(ap.status || '').toLowerCase()] || ap.status}
-                        </p>
                         <p className="text-xs text-gray-500">Montador: {ap.assembly_route?.assembler?.name || '-'}</p>
 
                         {ap.status === 'completed' ? (
                           <p className="text-xs text-green-600 font-medium">Montado em: {formatDate(ap.completion_date || ap.assembly_date || ap.updated_at)}</p>
-                        ) : (
-                          <p className="text-xs text-gray-500">Prazo: {formatDate(ap.assembly_route?.deadline)}</p>
+                        ) : ap.status === 'cancelled' ? (
+                          <p className="text-xs text-red-600 font-medium">Retornado em: {formatDateTime(ap.returned_at || ap.updated_at)}</p>
+                        ) : null}
+                        {ap.status === 'cancelled' && (assemblyReturnReason || assemblyReturnNotes) && (
+                          <div className="mt-2 p-2 rounded-lg border border-red-200 bg-red-50 space-y-1">
+                            {assemblyReturnReason && (
+                              <p className="text-xs text-red-700">
+                                <span className="font-semibold">Motivo do retorno:</span> {assemblyReturnReason}
+                              </p>
+                            )}
+                            {assemblyReturnNotes && (
+                              <p className="text-xs text-red-700">
+                                <span className="font-semibold">Observação:</span> {assemblyReturnNotes}
+                              </p>
+                            )}
+                          </div>
                         )}
                         {(ap as any).import_source && (
                           <p className="text-xs text-gray-400 mb-2">
@@ -1122,8 +1350,9 @@ export default function OrderLookup() {
                             />
                           </div>
                         )}
-                      </div>
-                    ))}
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
               </div>
