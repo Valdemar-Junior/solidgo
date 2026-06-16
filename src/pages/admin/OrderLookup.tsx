@@ -872,6 +872,18 @@ export default function OrderLookup() {
     <div className="w-full">
       <main className="w-full p-4 sm:p-6 lg:p-8 space-y-6">
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5 flex flex-col gap-4">
+          {isConsultor && (
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={handleLogout}
+                className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 font-semibold flex items-center justify-center gap-2"
+              >
+                <LogOut className="h-4 w-4" />
+                Sair
+              </button>
+            </div>
+          )}
           <div className="flex flex-col md:flex-row gap-3 md:items-end">
             <div className="flex-1">
               <label className="text-xs font-bold text-gray-500 uppercase">Busca Rápida</label>
