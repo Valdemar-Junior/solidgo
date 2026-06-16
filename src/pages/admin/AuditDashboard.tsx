@@ -557,7 +557,7 @@ export default function AuditDashboard() {
             missing_items: 0
         };
 
-        const missingDetails: any[] = [];
+        const auditDetails: any[] = [];
 
         normalizedOrders.forEach((entry: any) => {
             const order = entry.order;
@@ -595,7 +595,7 @@ export default function AuditDashboard() {
             if (totalMissing > 0) {
                 summary.missing_orders += 1;
                 summary.missing_items += totalMissing;
-                missingDetails.push({
+                auditDetails.push({
                     id: order.id,
                     order_id_erp: order.order_id_erp,
                     client_name: order.customer_name,
@@ -612,17 +612,43 @@ export default function AuditDashboard() {
                     data_venda: order.data_venda,
                     previsao_entrega: order.previsao_entrega,
                     previsao_montagem: order.previsao_montagem,
-                    has_assembly_tag: 'Sim'
+                    has_assembly_tag: 'Sim',
+                    assembly_status: 'missing',
+                    can_generate_assembly: true
                 });
             } else {
                 summary.assembled_orders += 1;
+                auditDetails.push({
+                    id: order.id,
+                    order_id_erp: order.order_id_erp,
+                    client_name: order.customer_name,
+                    items_json: assemblyItems,
+                    details: 'Montagem gerada automaticamente.',
+                    missing_skus: '',
+                    missing_total: 0,
+                    import_source: order.import_source,
+                    phone: order.phone,
+                    address_json: order.address_json,
+                    route_name: route?.name || '-',
+                    route_code: route?.route_code || '-',
+                    delivered_at: entry.delivered_at,
+                    data_venda: order.data_venda,
+                    previsao_entrega: order.previsao_entrega,
+                    previsao_montagem: order.previsao_montagem,
+                    has_assembly_tag: 'Sim',
+                    assembly_status: 'generated',
+                    can_generate_assembly: false
+                });
             }
         });
 
         return {
             summary,
-            details: missingDetails
+            details: auditDetails
                 .sort((a: any, b: any) => {
+                    if (a.can_generate_assembly !== b.can_generate_assembly) {
+                        return a.can_generate_assembly ? -1 : 1;
+                    }
                     const routeCompare = String(a.route_code || a.route_name || '').localeCompare(String(b.route_code || b.route_name || ''));
                     if (routeCompare !== 0) return routeCompare;
                     return String(a.order_id_erp || '').localeCompare(String(b.order_id_erp || ''));
@@ -1872,7 +1898,7 @@ export default function AuditDashboard() {
                                                             <tr>
                                                                 <td colSpan={10} className="p-12 text-center text-gray-500">
                                                                     <CheckCircle2 className="h-10 w-10 text-green-500 mx-auto mb-3" />
-                                                                    <p className="font-medium text-gray-900">Nenhum pedido em lote ficou sem montagem no período selecionado.</p>
+                                                                    <p className="font-medium text-gray-900">Nenhum pedido com tag de montagem foi encontrado no período selecionado.</p>
                                                                 </td>
                                                             </tr>
                                                         ) : (
@@ -1894,15 +1920,21 @@ export default function AuditDashboard() {
                                                                     <td className="p-4 text-sm text-gray-600">{formatDateOnly(item.previsao_montagem)}</td>
                                                                     <td className="p-4 text-sm text-gray-600">{formatDateTime(item.delivered_at)}</td>
                                                                     <td className="p-4 text-sm text-gray-500">
-                                                                        <div>{item.details}</div>
+                                                                        <div className={item.can_generate_assembly ? 'text-purple-700 font-medium' : 'text-green-700 font-medium'}>
+                                                                            {item.details}
+                                                                        </div>
                                                                         {item.missing_skus && <div className="mt-1 text-xs text-gray-400">{item.missing_skus}</div>}
                                                                     </td>
                                                                     <td className="p-4 text-right">
                                                                         <button
                                                                             onClick={() => generateAssembly(item.id, item.items_json)}
-                                                                            className="px-3 py-1.5 bg-purple-50 text-purple-700 rounded-md hover:bg-purple-100 border border-purple-200 text-sm font-medium"
+                                                                            disabled={!item.can_generate_assembly}
+                                                                            className={`px-3 py-1.5 rounded-md border text-sm font-medium ${item.can_generate_assembly
+                                                                                ? 'bg-purple-50 text-purple-700 hover:bg-purple-100 border-purple-200'
+                                                                                : 'bg-gray-50 text-gray-400 border-gray-200 cursor-not-allowed'
+                                                                                }`}
                                                                         >
-                                                                            Gerar Montagem
+                                                                            {item.can_generate_assembly ? 'Gerar Montagem' : 'Já Gerada'}
                                                                         </button>
                                                                     </td>
                                                                 </tr>
