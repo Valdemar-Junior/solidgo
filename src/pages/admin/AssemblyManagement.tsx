@@ -123,6 +123,7 @@ function AssemblyManagementContent() {
   const [assemblyProducts, setAssemblyProducts] = useState<AssemblyProductWithDetails[]>([]);
   const [assemblyPending, setAssemblyPending] = useState<AssemblyProductWithDetails[]>([]);
   const [assemblyInRoutes, setAssemblyInRoutes] = useState<AssemblyProductWithDetails[]>([]);
+  const [latestReturnedInfoByOrder, setLatestReturnedInfoByOrder] = useState<Record<string, { observations?: string | null; returned_at?: string | null; updated_at?: string | null }>>({});
   const [montadores, setMontadores] = useState<User[]>([]);
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [deliveryRouteCatalog, setDeliveryRouteCatalog] = useState<DeliveryRouteCatalog[]>([]);
@@ -747,13 +748,56 @@ function AssemblyManagementContent() {
         .from('assembly_products')
         .select(`
           id, order_id, product_name, product_sku, status, assembly_route_id, created_at, updated_at, was_returned, observations, returned_at,
-          order:order_id!inner (id, order_id_erp, customer_name, phone, address_json, raw_json, data_venda, previsao_entrega, previsao_montagem, observacoes_publicas, observacoes_internas, status, service_type, tem_frete_full, department, product_group, product_subgroup),
+          order:order_id!inner (id, order_id_erp, customer_name, phone, address_json, raw_json, data_venda, previsao_entrega, previsao_montagem, observacoes_publicas, observacoes_internas, status, service_type, tem_frete_full, return_flag, last_return_reason, last_return_notes, department, product_group, product_subgroup),
           installer:installer_id (id, name)
         `)
         .is('assembly_route_id', null)
         .eq('status', 'pending');
 
       // Trace removed
+
+      const pendingOrderIds = Array.from(new Set((productsPending || []).map((p: any) => String(p.order_id || '')).filter(Boolean)));
+      const returnedInfoByOrder: Record<string, { observations?: string | null; returned_at?: string | null; updated_at?: string | null }> = {};
+      if (pendingOrderIds.length > 0) {
+        const { data: returnedProducts } = await supabase
+          .from('assembly_products')
+          .select('order_id, observations, returned_at, updated_at, status, was_returned')
+          .in('order_id', pendingOrderIds)
+          .or('status.eq.cancelled,was_returned.eq.true');
+
+        const hasMeaningfulReturnedText = (value: unknown) => {
+          const text = String(value || '').trim();
+          if (!text) return false;
+          const normalized = text
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .toLowerCase()
+            .trim();
+          return normalized !== 'retorno:' && normalized !== 'pedido retornado';
+        };
+
+        for (const item of (returnedProducts || []) as Array<any>) {
+          const orderId = String(item.order_id || '').trim();
+          if (!orderId) continue;
+          const currentTs = new Date(item.returned_at || item.updated_at || 0).getTime();
+          const prev = returnedInfoByOrder[orderId];
+          const prevTs = prev ? new Date(prev.returned_at || prev.updated_at || 0).getTime() : 0;
+          const currentHasReason = hasMeaningfulReturnedText(item.observations);
+          const prevHasReason = hasMeaningfulReturnedText(prev?.observations);
+
+          if (
+            !prev ||
+            (currentHasReason && !prevHasReason) ||
+            (currentHasReason === prevHasReason && currentTs >= prevTs)
+          ) {
+            returnedInfoByOrder[orderId] = {
+              observations: item.observations || null,
+              returned_at: item.returned_at || null,
+              updated_at: item.updated_at || null,
+            };
+          }
+        }
+      }
 
 
       let productsInRoutes: any[] = [];
@@ -768,7 +812,7 @@ function AssemblyManagementContent() {
             .from('assembly_products')
             .select(`
               id, order_id, product_name, product_sku, status, assembly_route_id, created_at, updated_at, was_returned, completion_date, returned_at, observations,
-              order:order_id (id, order_id_erp, customer_name, phone, address_json, raw_json, items_json, data_venda, previsao_entrega, previsao_montagem, department, product_group, product_subgroup),
+              order:order_id (id, order_id_erp, customer_name, phone, address_json, raw_json, items_json, data_venda, previsao_entrega, previsao_montagem, return_flag, last_return_reason, last_return_notes, department, product_group, product_subgroup),
               installer:installer_id (id, name)
             `)
             .in('assembly_route_id', routeIds);
@@ -796,6 +840,7 @@ function AssemblyManagementContent() {
 
       setAssemblyProducts((productsPending || []) as any);
       setAssemblyPending((productsPending || []) as any);
+      setLatestReturnedInfoByOrder(returnedInfoByOrder);
       // Merge products: keep previously loaded products for routes not in current query
       // This preserves products loaded via "Detalhes" button for routes outside date filter
       setAssemblyInRoutes(prev => {
@@ -1712,8 +1757,8 @@ function AssemblyManagementContent() {
       const matchDeliveryDate = checkDateRange(deliveryDateStr, filterDeliveryDateStart, filterDeliveryDateEnd);
       const matchForecastDate = checkDateRange(forecastDateStr, filterForecastDateStart, filterForecastDateEnd);
 
-      // Retornados: verificar se algum produto do grupo foi retornado (was_returned)
-      const hasReturnedProduct = products.some((ap: any) => ap.was_returned === true);
+      // Retornados: considerar flag legada e status cancelado
+      const hasReturnedProduct = products.some((ap: any) => ap.was_returned === true || String(ap.status || '').toLowerCase() === 'cancelled');
       const isReturnedFlag = hasReturnedProduct || Boolean(order?.return_flag) || String(order?.status) === 'returned';
       const matchReturned = filterReturned ? isReturnedFlag : true;
 
@@ -1784,8 +1829,72 @@ function AssemblyManagementContent() {
     return filtered;
   }, [groupedProducts, filterCity, filterNeighborhood, filterDeadline, filterOrder, filterClient, filterSaleDateStart, filterSaleDateEnd, filterDeliveryDateStart, filterDeliveryDateEnd, filterForecastDateStart, filterForecastDateEnd, filterReturned, filterFull, filterServiceType, deliveryInfo, filterDepartment, filterSubgroup]);
 
+  const normalizeReturnedText = (value: unknown) => {
+    if (value === null || typeof value === 'undefined') return '';
+    return String(value).trim();
+  };
+
+  const normalizeCompareReturnedText = (value: string) => {
+    return normalizeReturnedText(value)
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/\s+/g, ' ')
+      .toLowerCase()
+      .trim();
+  };
+
+  const isOtherReturnedReason = (value: string) => {
+    const normalized = normalizeCompareReturnedText(value);
+    return normalized === 'outro' || normalized === 'other' || normalized === '99';
+  };
+
+  const buildReturnedDisplayInfo = (reasonInput: unknown, notesInput: unknown) => {
+    const rawReason = normalizeReturnedText(reasonInput);
+    const rawObservation = normalizeReturnedText(notesInput);
+
+    if (isOtherReturnedReason(rawReason) && rawObservation) {
+      return { reason: rawObservation, observation: '' };
+    }
+
+    if (rawReason) {
+      const sameText = normalizeCompareReturnedText(rawReason) === normalizeCompareReturnedText(rawObservation);
+      return {
+        reason: rawReason,
+        observation: rawObservation && !sameText ? rawObservation : '',
+      };
+    }
+
+    return { reason: rawObservation, observation: '' };
+  };
+
+  const parseAssemblyReturnInfo = (value: unknown) => {
+    const obsValue = normalizeReturnedText(value);
+    if (!obsValue) {
+      return { reason: '', observation: '' };
+    }
+
+    const matchParens = obsValue.match(/^\(Retorno:\s*(.+?)\)\s*(.*)$/i);
+    if (matchParens) {
+      const parsedReason = normalizeReturnedText(matchParens[1]);
+      const parsedObservation = normalizeReturnedText(matchParens[2]);
+      if (isOtherReturnedReason(parsedReason) && parsedObservation) {
+        return { reason: parsedObservation, observation: '' };
+      }
+      return { reason: parsedReason, observation: parsedObservation };
+    }
+
+    const matchSimple = obsValue.match(/^Retorno:\s*(.+)$/i);
+    if (matchSimple) {
+      const parsedReason = normalizeReturnedText(matchSimple[1]);
+      return { reason: parsedReason, observation: '' };
+    }
+
+    // Fallback para dados legados: se não vier no formato esperado, mostrar o texto inteiro.
+    return { reason: obsValue, observation: '' };
+  };
+
   const orderRows = useMemo(() => {
-    const rows: Array<{ key: string; orderId: string; dataVenda: string; entrega: string; previsao: string; pedido: string; cliente: string; telefone: string; produto: string; sku: string; obsPublicas: string; obsInternas: string; cidade: string; bairro: string; endereco: string; selected: boolean; wasReturned: boolean; prazoStatus: 'within' | 'out' | 'none'; temFreteFull: boolean; returnReason: string; returnObservation: string; department: string; subgroup: string; }> = [];
+    const rows: Array<{ key: string; orderId: string; dataVenda: string; entrega: string; previsao: string; pedido: string; cliente: string; telefone: string; produto: string; sku: string; obsPublicas: string; obsInternas: string; cidade: string; bairro: string; endereco: string; selected: boolean; wasReturned: boolean; prazoStatus: 'within' | 'out' | 'none'; temFreteFull: boolean; returnReason: string; returnObservation: string; returnTooltip: string; department: string; subgroup: string; }> = [];
 
     // Helper para verificar se pedido tem Frete Full
     const isTrueValue = (v: any) => {
@@ -1815,28 +1924,40 @@ function AssemblyManagementContent() {
       // Verificar Frete Full: campo direto OU observações internas com *frete full*
       const temFreteFull = isTrueValue(order?.tem_frete_full) || isTrueValue(raw?.tem_frete_full) || obsInternas.toLowerCase().includes('*frete full*');
       products.forEach((ap, idx) => {
-        const wasReturned = (ap as any).was_returned === true;
-        // Extract return reason from observations field (format: "Retorno: <motivo>" or "(Retorno: <motivo>) <obs>")
-        const obsValue = String((ap as any).observations || '');
-        let returnReason = '';
-        let returnObservation = '';
-        if (wasReturned && obsValue) {
-          const matchParens = obsValue.match(/^\(Retorno:\s*(.+?)\)\s*(.*)/);
-          const matchSimple = obsValue.match(/^Retorno:\s*(.+)$/);
-          if (matchParens) {
-            returnReason = matchParens[1].trim();
-            returnObservation = matchParens[2]?.trim() || '';
-          } else if (matchSimple) {
-            returnReason = matchSimple[1].trim();
-          }
-        }
+        const wasReturned = (ap as any).was_returned === true || String((ap as any).status || '').toLowerCase() === 'cancelled';
+        const latestReturnedInfo = latestReturnedInfoByOrder[String(orderId)] || {};
+        const parsedReturn = wasReturned ? parseAssemblyReturnInfo((ap as any).observations) : { reason: '', observation: '' };
+        const latestReturnedParsed = wasReturned ? parseAssemblyReturnInfo(latestReturnedInfo.observations) : { reason: '', observation: '' };
+        const fallbackReturn = wasReturned
+          ? buildReturnedDisplayInfo(
+            (order as any)?.last_return_reason || (raw as any)?.return_reason || '',
+            (order as any)?.last_return_notes || (raw as any)?.return_notes || '',
+          )
+          : { reason: '', observation: '' };
+        const returnReason = parsedReturn.reason || latestReturnedParsed.reason || fallbackReturn.reason;
+        const returnObservation = parsedReturn.observation || latestReturnedParsed.observation || fallbackReturn.observation;
+        const returnTooltip = [
+          returnReason,
+          returnObservation,
+          normalizeReturnedText((ap as any)?.observations),
+          normalizeReturnedText(latestReturnedInfo.observations),
+          normalizeReturnedText((order as any)?.last_return_reason),
+          normalizeReturnedText((order as any)?.last_return_notes),
+          normalizeReturnedText((raw as any)?.return_reason),
+          normalizeReturnedText((raw as any)?.return_notes),
+        ]
+          .filter(Boolean)
+          .filter((value, index, array) =>
+            array.findIndex((candidate) => normalizeCompareReturnedText(candidate) === normalizeCompareReturnedText(value)) === index
+          )
+          .join(' • ');
         const department = String(order?.product_group || order?.department || '-');
         const subgroup = String(order?.product_subgroup || '-');
-        rows.push({ key: `${orderId}-${ap.id}-${idx}`, orderId, dataVenda, entrega, previsao, pedido, cliente, telefone, produto: ap.product_name || '-', sku: ap.product_sku || '-', obsPublicas, obsInternas, cidade, bairro, endereco, selected, wasReturned, prazoStatus, temFreteFull, returnReason, returnObservation, department, subgroup });
+        rows.push({ key: `${orderId}-${ap.id}-${idx}`, orderId, dataVenda, entrega, previsao, pedido, cliente, telefone, produto: ap.product_name || '-', sku: ap.product_sku || '-', obsPublicas, obsInternas, cidade, bairro, endereco, selected, wasReturned, prazoStatus, temFreteFull, returnReason, returnObservation, returnTooltip, department, subgroup });
       });
     });
     return rows;
-  }, [filteredGroupedProducts, deliveryInfo, selectedOrders]);
+  }, [filteredGroupedProducts, deliveryInfo, selectedOrders, latestReturnedInfoByOrder]);
 
   // Apply sorting
   const sortedOrderRows = useMemo(() => {
@@ -2320,7 +2441,7 @@ function AssemblyManagementContent() {
                                                     const knownReasons = ['Cliente ausente', 'Endereço incorreto / não localizado', 'Cliente sem contato', 'Cliente recusou / cancelou', 'Horário excedido'];
                                                     const isKnownReason = knownReasons.some(r => row.returnReason.includes(r));
                                                     const displayReason = isKnownReason ? row.returnReason : (row.returnReason ? 'Outro' : '');
-                                                    const fullText = row.returnReason + (row.returnObservation ? ` - ${row.returnObservation}` : '');
+                                                    const fullText = row.returnTooltip || row.returnReason + (row.returnObservation ? ` - ${row.returnObservation}` : '');
                                                     return (
                                                       <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-orange-100 text-orange-800 cursor-default" title={fullText || 'Pedido retornado'}>
                                                         🔄 Retornado{displayReason ? ` · ${displayReason}` : ''}
