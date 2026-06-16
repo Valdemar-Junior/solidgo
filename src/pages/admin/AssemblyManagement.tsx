@@ -1893,6 +1893,15 @@ function AssemblyManagementContent() {
     return { reason: obsValue, observation: '' };
   };
 
+  const buildReturnedTooltipText = (reasonInput: unknown, observationInput: unknown) => {
+    return [normalizeReturnedText(reasonInput), normalizeReturnedText(observationInput)]
+      .filter(Boolean)
+      .filter((value, index, array) =>
+        array.findIndex((candidate) => normalizeCompareReturnedText(candidate) === normalizeCompareReturnedText(value)) === index
+      )
+      .join(' - ');
+  };
+
   const orderRows = useMemo(() => {
     const rows: Array<{ key: string; orderId: string; dataVenda: string; entrega: string; previsao: string; pedido: string; cliente: string; telefone: string; produto: string; sku: string; obsPublicas: string; obsInternas: string; cidade: string; bairro: string; endereco: string; selected: boolean; wasReturned: boolean; prazoStatus: 'within' | 'out' | 'none'; temFreteFull: boolean; returnReason: string; returnObservation: string; returnTooltip: string; department: string; subgroup: string; }> = [];
 
@@ -1936,21 +1945,7 @@ function AssemblyManagementContent() {
           : { reason: '', observation: '' };
         const returnReason = parsedReturn.reason || latestReturnedParsed.reason || fallbackReturn.reason;
         const returnObservation = parsedReturn.observation || latestReturnedParsed.observation || fallbackReturn.observation;
-        const returnTooltip = [
-          returnReason,
-          returnObservation,
-          normalizeReturnedText((ap as any)?.observations),
-          normalizeReturnedText(latestReturnedInfo.observations),
-          normalizeReturnedText((order as any)?.last_return_reason),
-          normalizeReturnedText((order as any)?.last_return_notes),
-          normalizeReturnedText((raw as any)?.return_reason),
-          normalizeReturnedText((raw as any)?.return_notes),
-        ]
-          .filter(Boolean)
-          .filter((value, index, array) =>
-            array.findIndex((candidate) => normalizeCompareReturnedText(candidate) === normalizeCompareReturnedText(value)) === index
-          )
-          .join(' • ');
+        const returnTooltip = buildReturnedTooltipText(returnReason, returnObservation);
         const department = String(order?.product_group || order?.department || '-');
         const subgroup = String(order?.product_subgroup || '-');
         rows.push({ key: `${orderId}-${ap.id}-${idx}`, orderId, dataVenda, entrega, previsao, pedido, cliente, telefone, produto: ap.product_name || '-', sku: ap.product_sku || '-', obsPublicas, obsInternas, cidade, bairro, endereco, selected, wasReturned, prazoStatus, temFreteFull, returnReason, returnObservation, returnTooltip, department, subgroup });
@@ -2438,13 +2433,10 @@ function AssemblyManagementContent() {
                                               c.id === 'sinais' ? (
                                                 <div className="flex items-center gap-1 flex-wrap">
                                                   {row.wasReturned && (() => {
-                                                    const knownReasons = ['Cliente ausente', 'Endereço incorreto / não localizado', 'Cliente sem contato', 'Cliente recusou / cancelou', 'Horário excedido'];
-                                                    const isKnownReason = knownReasons.some(r => row.returnReason.includes(r));
-                                                    const displayReason = isKnownReason ? row.returnReason : (row.returnReason ? 'Outro' : '');
-                                                    const fullText = row.returnTooltip || row.returnReason + (row.returnObservation ? ` - ${row.returnObservation}` : '');
+                                                    const fullText = row.returnTooltip || row.returnReason || row.returnObservation;
                                                     return (
                                                       <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-orange-100 text-orange-800 cursor-default" title={fullText || 'Pedido retornado'}>
-                                                        🔄 Retornado{displayReason ? ` · ${displayReason}` : ''}
+                                                        🔄 Retornado
                                                       </span>
                                                     );
                                                   })()}
