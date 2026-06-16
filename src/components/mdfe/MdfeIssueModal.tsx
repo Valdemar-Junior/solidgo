@@ -309,10 +309,7 @@ export default function MdfeIssueModal({
   }, [includedDocuments]);
 
   const effectiveGrossWeight = useMemo(() => {
-    const normalized = manualGrossWeight.trim().replace(',', '.');
-    if (!normalized) return 0;
-    const parsed = Number(normalized);
-    return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+    return parseManualWeight(manualGrossWeight);
   }, [manualGrossWeight]);
 
   const unloadingCities = useMemo(() => {
@@ -530,12 +527,13 @@ export default function MdfeIssueModal({
                       inputMode="decimal"
                       value={manualGrossWeight}
                       onChange={(event) => setManualGrossWeight(event.target.value)}
+                      onBlur={() => setManualGrossWeight(formatManualWeightInput(manualGrossWeight))}
                       className="w-full rounded-xl border border-slate-300 px-3 py-2 text-lg font-semibold text-slate-900 outline-none focus:border-blue-500"
                     />
                     <span className="text-sm font-medium text-slate-500">KG</span>
                   </div>
                   <p className="mt-1 text-sm text-slate-500">
-                    Ajuste manualmente ou apague o valor para enviar peso zerado.
+                    Digite o peso em KG. Ex.: 2820,30
                   </p>
                 </article>
                 <SummaryCard
@@ -961,7 +959,52 @@ function parseDecimal(value: string) {
 
 function formatWeightInput(value: number) {
   if (!Number.isFinite(value)) return '0';
-  return value.toFixed(4).replace(/\.?0+$/, '');
+  return new Intl.NumberFormat('pt-BR', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 4,
+  }).format(value);
+}
+
+function parseManualWeight(value: string) {
+  const raw = String(value || '').trim();
+  if (!raw) return 0;
+
+  const sanitized = raw.replace(/\s/g, '');
+  const lastComma = sanitized.lastIndexOf(',');
+  const lastDot = sanitized.lastIndexOf('.');
+  const lastSeparatorIndex = Math.max(lastComma, lastDot);
+
+  if (lastSeparatorIndex === -1) {
+    const digitsOnly = sanitized.replace(/\D/g, '');
+    const parsedInteger = Number(digitsOnly);
+    return Number.isFinite(parsedInteger) ? parsedInteger : 0;
+  }
+
+  const separator = sanitized[lastSeparatorIndex];
+  const integerPartRaw = sanitized.slice(0, lastSeparatorIndex);
+  const decimalPartRaw = sanitized.slice(lastSeparatorIndex + 1);
+  const integerDigits = integerPartRaw.replace(/\D/g, '');
+  const decimalDigits = decimalPartRaw.replace(/\D/g, '');
+
+  const looksLikeThousandsSeparatorOnly =
+    decimalDigits.length === 3 &&
+    integerDigits.length >= 1 &&
+    sanitized.indexOf(separator) === lastSeparatorIndex;
+
+  if (looksLikeThousandsSeparatorOnly) {
+    const parsedThousands = Number(`${integerDigits}${decimalDigits}`);
+    return Number.isFinite(parsedThousands) ? parsedThousands : 0;
+  }
+
+  const normalized = `${integerDigits || '0'}.${decimalDigits}`;
+  const parsedDecimal = Number(normalized);
+  return Number.isFinite(parsedDecimal) ? parsedDecimal : 0;
+}
+
+function formatManualWeightInput(value: string) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  return formatWeightInput(parseManualWeight(raw));
 }
 
 function formatCurrency(value: number) {
