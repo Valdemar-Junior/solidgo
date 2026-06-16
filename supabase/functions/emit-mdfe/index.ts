@@ -871,10 +871,37 @@ function parseDecimal(value: string) {
 
 function parseOptionalDecimal(value: unknown) {
   if (value === undefined || value === null) return null;
-  const normalized = String(value ?? '').trim().replace(',', '.');
-  if (!normalized) return 0;
-  const parsed = Number(normalized);
-  return Number.isFinite(parsed) ? parsed : null;
+  const raw = String(value ?? '').trim();
+  if (!raw) return 0;
+
+  const sanitized = raw.replace(/\s/g, '');
+  const hasComma = sanitized.includes(',');
+
+  if (hasComma) {
+    const withoutThousands = sanitized.replace(/\./g, '');
+    const normalized = withoutThousands.replace(',', '.').replace(/[^0-9.]/g, '');
+    const parsedWithComma = Number(normalized);
+    return Number.isFinite(parsedWithComma) ? parsedWithComma : null;
+  }
+
+  const dotCount = (sanitized.match(/\./g) || []).length;
+
+  if (dotCount === 1) {
+    const [left, right] = sanitized.split('.');
+    const leftDigits = String(left || '').replace(/\D/g, '');
+    const rightDigits = String(right || '').replace(/\D/g, '');
+
+    if (rightDigits.length > 0 && rightDigits.length <= 4) {
+      const normalized = `${leftDigits || '0'}.${rightDigits}`;
+      const parsedWithDot = Number(normalized);
+      return Number.isFinite(parsedWithDot) ? parsedWithDot : null;
+    }
+  }
+
+  const digitsOnly = sanitized.replace(/\D/g, '');
+  if (!digitsOnly) return 0;
+  const parsedInteger = Number(digitsOnly);
+  return Number.isFinite(parsedInteger) ? parsedInteger : null;
 }
 
 function cleanDigits(value: string | null | undefined) {

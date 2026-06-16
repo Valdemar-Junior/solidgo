@@ -533,7 +533,7 @@ export default function MdfeIssueModal({
                     <span className="text-sm font-medium text-slate-500">KG</span>
                   </div>
                   <p className="mt-1 text-sm text-slate-500">
-                    Digite o peso em KG. Ex.: 2820,30
+                    Digite o peso em KG usando virgula nos decimais. Ex.: 1248,528
                   </p>
                 </article>
                 <SummaryCard
@@ -970,35 +970,32 @@ function parseManualWeight(value: string) {
   if (!raw) return 0;
 
   const sanitized = raw.replace(/\s/g, '');
-  const lastComma = sanitized.lastIndexOf(',');
-  const lastDot = sanitized.lastIndexOf('.');
-  const lastSeparatorIndex = Math.max(lastComma, lastDot);
+  const hasComma = sanitized.includes(',');
 
-  if (lastSeparatorIndex === -1) {
-    const digitsOnly = sanitized.replace(/\D/g, '');
-    const parsedInteger = Number(digitsOnly);
-    return Number.isFinite(parsedInteger) ? parsedInteger : 0;
+  if (hasComma) {
+    const withoutThousands = sanitized.replace(/\./g, '');
+    const normalized = withoutThousands.replace(',', '.').replace(/[^0-9.]/g, '');
+    const parsedWithComma = Number(normalized);
+    return Number.isFinite(parsedWithComma) ? parsedWithComma : 0;
   }
 
-  const separator = sanitized[lastSeparatorIndex];
-  const integerPartRaw = sanitized.slice(0, lastSeparatorIndex);
-  const decimalPartRaw = sanitized.slice(lastSeparatorIndex + 1);
-  const integerDigits = integerPartRaw.replace(/\D/g, '');
-  const decimalDigits = decimalPartRaw.replace(/\D/g, '');
+  const dotCount = (sanitized.match(/\./g) || []).length;
 
-  const looksLikeThousandsSeparatorOnly =
-    decimalDigits.length === 3 &&
-    integerDigits.length >= 1 &&
-    sanitized.indexOf(separator) === lastSeparatorIndex;
+  if (dotCount === 1) {
+    const [left, right] = sanitized.split('.');
+    const leftDigits = String(left || '').replace(/\D/g, '');
+    const rightDigits = String(right || '').replace(/\D/g, '');
 
-  if (looksLikeThousandsSeparatorOnly) {
-    const parsedThousands = Number(`${integerDigits}${decimalDigits}`);
-    return Number.isFinite(parsedThousands) ? parsedThousands : 0;
+    if (rightDigits.length > 0 && rightDigits.length <= 4) {
+      const normalized = `${leftDigits || '0'}.${rightDigits}`;
+      const parsedWithDot = Number(normalized);
+      return Number.isFinite(parsedWithDot) ? parsedWithDot : 0;
+    }
   }
 
-  const normalized = `${integerDigits || '0'}.${decimalDigits}`;
-  const parsedDecimal = Number(normalized);
-  return Number.isFinite(parsedDecimal) ? parsedDecimal : 0;
+  const digitsOnly = sanitized.replace(/\D/g, '');
+  const parsedInteger = Number(digitsOnly);
+  return Number.isFinite(parsedInteger) ? parsedInteger : 0;
 }
 
 function formatManualWeightInput(value: string) {
