@@ -55,9 +55,7 @@ export default function AuditDashboard() {
     const [routeChanging, setRouteChanging] = useState(false);
     const [assemblyAuditLoading, setAssemblyAuditLoading] = useState(false);
     const [assemblyPeriodStart, setAssemblyPeriodStart] = useState(() => {
-        const date = new Date();
-        date.setDate(date.getDate() - 29);
-        return date.toISOString().slice(0, 10);
+        return new Date().toISOString().slice(0, 10);
     });
     const [assemblyPeriodEnd, setAssemblyPeriodEnd] = useState(() => {
         return new Date().toISOString().slice(0, 10);
@@ -461,7 +459,7 @@ export default function AuditDashboard() {
                     order_id,
                     status,
                     delivered_at,
-                    route:routes!route_id(id, name, route_code, status, updated_at, created_at),
+                    route:routes!inner(id, name, route_code, status, updated_at, created_at),
                     order:orders!order_id(
                         id,
                         order_id_erp,
@@ -564,7 +562,30 @@ export default function AuditDashboard() {
             const route = entry.route;
             const items = parseItemsJson(order.items_json);
             const assemblyItems = items.filter((item: any) => itemRequiresAssembly(item));
-            if (assemblyItems.length === 0) return;
+            if (assemblyItems.length === 0) {
+                auditDetails.push({
+                    id: order.id,
+                    order_id_erp: order.order_id_erp,
+                    client_name: order.customer_name,
+                    items_json: [],
+                    details: 'Pedido entregue sem tag de montagem.',
+                    missing_skus: '',
+                    missing_total: 0,
+                    import_source: order.import_source,
+                    phone: order.phone,
+                    address_json: order.address_json,
+                    route_name: route?.name || '-',
+                    route_code: route?.route_code || '-',
+                    delivered_at: entry.delivered_at,
+                    data_venda: order.data_venda,
+                    previsao_entrega: order.previsao_entrega,
+                    previsao_montagem: order.previsao_montagem,
+                    has_assembly_tag: 'Não',
+                    assembly_status: 'no_tag',
+                    can_generate_assembly: false
+                });
+                return;
+            }
 
             summary.eligible_orders += 1;
 
@@ -648,6 +669,10 @@ export default function AuditDashboard() {
                 .sort((a: any, b: any) => {
                     if (a.can_generate_assembly !== b.can_generate_assembly) {
                         return a.can_generate_assembly ? -1 : 1;
+                    }
+                    if (a.assembly_status !== b.assembly_status) {
+                        const statusWeight: Record<string, number> = { missing: 0, generated: 1, no_tag: 2 };
+                        return (statusWeight[a.assembly_status] ?? 99) - (statusWeight[b.assembly_status] ?? 99);
                     }
                     const routeCompare = String(a.route_code || a.route_name || '').localeCompare(String(b.route_code || b.route_name || ''));
                     if (routeCompare !== 0) return routeCompare;
@@ -1850,7 +1875,7 @@ export default function AuditDashboard() {
                                                 </div>
 
                                                 <p className="text-sm text-gray-500">
-                                                    Esta visão considera apenas pedidos importados em lote, entregues no período e com rota finalizada.
+                                                    Esta visão considera apenas pedidos importados em lote, entregues no período e com rota finalizada, mostrando pedidos com e sem tag de montagem.
                                                 </p>
 
                                                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4">
@@ -1898,7 +1923,7 @@ export default function AuditDashboard() {
                                                             <tr>
                                                                 <td colSpan={10} className="p-12 text-center text-gray-500">
                                                                     <CheckCircle2 className="h-10 w-10 text-green-500 mx-auto mb-3" />
-                                                                    <p className="font-medium text-gray-900">Nenhum pedido com tag de montagem foi encontrado no período selecionado.</p>
+                                                                    <p className="font-medium text-gray-900">Nenhum pedido entregue foi encontrado no período selecionado.</p>
                                                                 </td>
                                                             </tr>
                                                         ) : (
@@ -1911,7 +1936,10 @@ export default function AuditDashboard() {
                                                                     <td className="p-4 font-medium text-gray-900">{item.order_id_erp}</td>
                                                                     <td className="p-4 text-gray-600">{item.client_name}</td>
                                                                     <td className="p-4">
-                                                                        <span className="inline-flex px-2 py-1 rounded-full bg-orange-50 text-orange-700 border border-orange-200 text-xs font-medium">
+                                                                        <span className={`inline-flex px-2 py-1 rounded-full border text-xs font-medium ${item.has_assembly_tag === 'Sim'
+                                                                            ? 'bg-orange-50 text-orange-700 border-orange-200'
+                                                                            : 'bg-gray-50 text-gray-600 border-gray-200'
+                                                                            }`}>
                                                                             {item.has_assembly_tag || 'Sim'}
                                                                         </span>
                                                                     </td>
@@ -1934,7 +1962,7 @@ export default function AuditDashboard() {
                                                                                 : 'bg-gray-50 text-gray-400 border-gray-200 cursor-not-allowed'
                                                                                 }`}
                                                                         >
-                                                                            {item.can_generate_assembly ? 'Gerar Montagem' : 'Já Gerada'}
+                                                                            {item.can_generate_assembly ? 'Gerar Montagem' : item.has_assembly_tag === 'Sim' ? 'Já Gerada' : 'Sem Tag'}
                                                                         </button>
                                                                     </td>
                                                                 </tr>
