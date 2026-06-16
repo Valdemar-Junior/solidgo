@@ -5,6 +5,7 @@ import { toast } from 'sonner';
 import { CheckCircle2, AlertTriangle, AlertOctagon, RefreshCw, ArrowLeft, Search, Save, Truck, Hammer, History, ClipboardList, ShoppingBag, Route } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../../stores/authStore';
+import { isAssemblyRequired, syncAssemblyProductsForOrder } from '../../utils/assembly/syncAssemblyProducts';
 
 type ActiveSection = 'geral' | 'venda' | 'rotas';
 const AUDIT_ADMIN_PASSWORD = '0000';
@@ -31,7 +32,6 @@ export default function AuditDashboard() {
 
     const [details, setDetails] = useState<any[] | null>(null);
     const [activeCheck, setActiveCheck] = useState<string | null>(null);
-    const [assemblyTab, setAssemblyTab] = useState<'lote' | 'avulso'>('lote');
     const [processingReturnFix, setProcessingReturnFix] = useState<Set<string>>(new Set());
 
     // States for E2E Simulator
@@ -53,6 +53,36 @@ export default function AuditDashboard() {
     const [routeSearchLoading, setRouteSearchLoading] = useState(false);
     const [foundRoute, setFoundRoute] = useState<any | null>(null);
     const [routeChanging, setRouteChanging] = useState(false);
+    const [assemblyAuditLoading, setAssemblyAuditLoading] = useState(false);
+    const [assemblyPeriodStart, setAssemblyPeriodStart] = useState(() => {
+        const date = new Date();
+        date.setDate(date.getDate() - 29);
+        return date.toISOString().slice(0, 10);
+    });
+    const [assemblyPeriodEnd, setAssemblyPeriodEnd] = useState(() => {
+        return new Date().toISOString().slice(0, 10);
+    });
+    const [assemblyOverview, setAssemblyOverview] = useState({
+        delivered_orders: 0,
+        eligible_orders: 0,
+        assembled_orders: 0,
+        missing_orders: 0,
+        missing_items: 0
+    });
+    const [assemblyAuditDetails, setAssemblyAuditDetails] = useState<any[]>([]);
+
+    const createTestId = () => {
+        if (typeof globalThis.crypto?.randomUUID === 'function') {
+            return globalThis.crypto.randomUUID();
+        }
+
+        const template = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx';
+        return template.replace(/[xy]/g, (char) => {
+            const random = Math.floor(Math.random() * 16);
+            const value = char === 'x' ? random : ((random & 0x3) | 0x8);
+            return value.toString(16);
+        });
+    };
 
     useEffect(() => {
         runChecks(true);
@@ -359,63 +389,184 @@ export default function AuditDashboard() {
         return [];
     };
 
+    const chunkArray = <T,>(items: T[], size: number) => {
+        if (!Array.isArray(items) || items.length === 0) return [];
+        const normalizedSize = Math.max(1, Math.floor(size));
+        const chunks: T[][] = [];
+
+        for (let index = 0; index < items.length; index += normalizedSize) {
+            chunks.push(items.slice(index, index + normalizedSize));
+        }
+
+        return chunks;
+    };
+
+    const getAssemblyPeriodRange = () => {
+        const startValue = assemblyPeriodStart || new Date().toISOString().slice(0, 10);
+        const endValue = assemblyPeriodEnd || new Date().toISOString().slice(0, 10);
+        const start = new Date(`${startValue}T00:00:00`);
+        const end = new Date(`${endValue}T23:59:59.999`);
+
+        if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+            throw new Error('Período inválido para auditoria de montagem.');
+        }
+
+        if (start.getTime() > end.getTime()) {
+            throw new Error('A data inicial não pode ser maior que a data final.');
+        }
+
+        return {
+            startIso: start.toISOString(),
+            endIso: end.toISOString()
+        };
+    };
+
+    const formatDateTime = (value: any) => {
+        if (!value) return '-';
+        const parsed = new Date(value);
+        if (Number.isNaN(parsed.getTime())) return '-';
+        return parsed.toLocaleString('pt-BR', {
+            day: '2-digit',
+            month: '2-digit',
+            year: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit'
+        });
+    };
+
+    const formatDateOnly = (value: any) => {
+        if (!value) return '-';
+        const parsed = new Date(value);
+        if (Number.isNaN(parsed.getTime())) return '-';
+        return parsed.toLocaleDateString('pt-BR');
+    };
+
     const itemRequiresAssembly = (item: any) => {
-        const hasAssemblyRaw = String(item?.has_assembly ?? '').trim().toLowerCase();
-        return hasAssemblyRaw === 'sim';
+        return isAssemblyRequired(item?.has_assembly) || isAssemblyRequired(item?.possui_montagem);
+    };
+
+    const orderHasAnyAssemblyItem = (items: any[]) => {
+        return (items || []).some((item: any) => itemRequiresAssembly(item));
     };
 
     const computeMissingAssemblyOrders = async () => {
-        const seteDiasAtras = new Date();
-        seteDiasAtras.setDate(seteDiasAtras.getDate() - 7);
+        const { startIso, endIso } = getAssemblyPeriodRange();
+        const deliveredRouteOrders: any[] = [];
+        const pageSize = 1000;
 
-        const { data: deliveredOrders, error: deliveredErr } = await supabase
-            .from('orders')
-            .select('id, order_id_erp, customer_name, phone, address_json, items_json, import_source')
-            .eq('status', 'delivered')
-            .gte('updated_at', seteDiasAtras.toISOString())
-            .limit(10000);
+        for (let offset = 0; ; offset += pageSize) {
+            const { data: routeOrdersBatch, error: deliveredErr } = await supabase
+                .from('route_orders')
+                .select(`
+                    order_id,
+                    status,
+                    delivered_at,
+                    route:routes!route_id(id, name, route_code, status, updated_at, created_at),
+                    order:orders!order_id(
+                        id,
+                        order_id_erp,
+                        customer_name,
+                        phone,
+                        address_json,
+                        items_json,
+                        import_source,
+                        data_venda,
+                        previsao_entrega,
+                        previsao_montagem
+                    )
+                `)
+                .eq('status', 'delivered')
+                .not('delivered_at', 'is', null)
+                .gte('delivered_at', startIso)
+                .lte('delivered_at', endIso)
+                .eq('route.status', 'completed')
+                .order('delivered_at', { ascending: false })
+                .range(offset, offset + pageSize - 1);
 
-        if (deliveredErr) throw deliveredErr;
-        if (!deliveredOrders || deliveredOrders.length === 0) return [];
+            if (deliveredErr) throw deliveredErr;
+            if (!routeOrdersBatch?.length) break;
 
-        const orderIds = deliveredOrders.map((order: any) => order.id);
-        const { data: activeRouteOrders, error: activeRouteErr } = await supabase
-            .from('route_orders')
-            .select('order_id, route:routes(status)')
-            .in('order_id', orderIds)
-            .in('route.status', ['pending', 'in_progress', 'ready']);
+            deliveredRouteOrders.push(...routeOrdersBatch);
 
-        if (activeRouteErr) throw activeRouteErr;
+            if (routeOrdersBatch.length < pageSize) {
+                break;
+            }
+        }
 
-        const ordersWithActiveRoute = new Set(
-            (activeRouteOrders || [])
-                .map((row: any) => row.order_id)
-                .filter(Boolean)
-        );
+        const latestByOrder = new Map<string, any>();
+        (deliveredRouteOrders || []).forEach((row: any) => {
+            const orderData = Array.isArray(row.order) ? row.order[0] : row.order;
+            const routeData = Array.isArray(row.route) ? row.route[0] : row.route;
+            if (!orderData || String(orderData.import_source || '').trim().toLowerCase() !== 'lote') return;
 
-        const { data: existingAssemblies, error: assemblyErr } = await supabase
-            .from('assembly_products')
-            .select('order_id, product_sku')
-            .in('order_id', orderIds)
-            .limit(50000);
+            const current = latestByOrder.get(row.order_id);
+            const currentTs = current?.delivered_at ? new Date(current.delivered_at).getTime() : 0;
+            const incomingTs = row.delivered_at ? new Date(row.delivered_at).getTime() : 0;
+            if (!current || incomingTs >= currentTs) {
+                latestByOrder.set(row.order_id, {
+                    order_id: row.order_id,
+                    delivered_at: row.delivered_at,
+                    route: routeData,
+                    order: orderData
+                });
+            }
+        });
 
-        if (assemblyErr) throw assemblyErr;
+        const normalizedOrders = Array.from(latestByOrder.values());
+        if (normalizedOrders.length === 0) {
+            return {
+                summary: {
+                    delivered_orders: 0,
+                    eligible_orders: 0,
+                    assembled_orders: 0,
+                    missing_orders: 0,
+                    missing_items: 0
+                },
+                details: []
+            };
+        }
+
+        const orderIds = normalizedOrders.map((entry: any) => entry.order_id);
+        const assemblyChunks = chunkArray(orderIds, 200);
+        const existingAssemblies: any[] = [];
+
+        for (const orderIdChunk of assemblyChunks) {
+            const { data: assemblyBatch, error: assemblyErr } = await supabase
+                .from('assembly_products')
+                .select('order_id, product_sku')
+                .in('order_id', orderIdChunk)
+                .limit(10000);
+
+            if (assemblyErr) throw assemblyErr;
+            if (assemblyBatch?.length) {
+                existingAssemblies.push(...assemblyBatch);
+            }
+        }
 
         const existingByOrderSku = new Map<string, number>();
-        (existingAssemblies || []).forEach((row: any) => {
+        existingAssemblies.forEach((row: any) => {
             const key = `${row.order_id}::${normalizeSkuKey(row.product_sku)}`;
             existingByOrderSku.set(key, (existingByOrderSku.get(key) || 0) + 1);
         });
 
+        const summary = {
+            delivered_orders: normalizedOrders.length,
+            eligible_orders: 0,
+            assembled_orders: 0,
+            missing_orders: 0,
+            missing_items: 0
+        };
+
         const missingDetails: any[] = [];
 
-        (deliveredOrders || []).forEach((order: any) => {
-            // Pedido ainda em rota ativa de entrega nao deve entrar como pendente de montagem.
-            if (ordersWithActiveRoute.has(order.id)) return;
-
+        normalizedOrders.forEach((entry: any) => {
+            const order = entry.order;
+            const route = entry.route;
             const items = parseItemsJson(order.items_json);
             const assemblyItems = items.filter((item: any) => itemRequiresAssembly(item));
             if (assemblyItems.length === 0) return;
+
+            summary.eligible_orders += 1;
 
             const expectedBySku = new Map<string, { skuLabel: string; expected: number }>();
             assemblyItems.forEach((item: any) => {
@@ -442,23 +593,41 @@ export default function AuditDashboard() {
             });
 
             if (totalMissing > 0) {
+                summary.missing_orders += 1;
+                summary.missing_items += totalMissing;
                 missingDetails.push({
                     id: order.id,
                     order_id_erp: order.order_id_erp,
                     client_name: order.customer_name,
-                    delivery_date: 'Nos últimos 7 dias',
                     items_json: assemblyItems,
                     details: `${totalMissing} item(ns) faltando em ${missingBySku.length} SKU(s)`,
                     missing_skus: missingBySku.map((item) => `${item.sku} x${item.missing}`).join(', '),
                     missing_total: totalMissing,
                     import_source: order.import_source,
                     phone: order.phone,
-                    address_json: order.address_json
+                    address_json: order.address_json,
+                    route_name: route?.name || '-',
+                    route_code: route?.route_code || '-',
+                    delivered_at: entry.delivered_at,
+                    data_venda: order.data_venda,
+                    previsao_entrega: order.previsao_entrega,
+                    previsao_montagem: order.previsao_montagem,
+                    has_assembly_tag: 'Sim'
                 });
+            } else {
+                summary.assembled_orders += 1;
             }
         });
 
-        return missingDetails;
+        return {
+            summary,
+            details: missingDetails
+                .sort((a: any, b: any) => {
+                    const routeCompare = String(a.route_code || a.route_name || '').localeCompare(String(b.route_code || b.route_name || ''));
+                    if (routeCompare !== 0) return routeCompare;
+                    return String(a.order_id_erp || '').localeCompare(String(b.order_id_erp || ''));
+                })
+        };
     };
 
     const runChecks = async (isInitial = false) => {
@@ -496,8 +665,11 @@ export default function AuditDashboard() {
             });
             duplicateCount = Object.values(orderRouteCounts).filter(count => count > 1).length;
 
-            // 3. Montagem Pendente (entregues nos ultimos 7 dias, com validacao por SKU/quantidade)
-            const missingAssemblyCount = (await computeMissingAssemblyOrders()).length;
+            // 3. Montagem Pendente (periodo selecionado, somente pedidos em lote, validacao por SKU/quantidade)
+            const assemblyAudit = await computeMissingAssemblyOrders();
+            const missingAssemblyCount = assemblyAudit.summary.missing_orders;
+            setAssemblyOverview(assemblyAudit.summary);
+            setAssemblyAuditDetails(assemblyAudit.details);
 
             // 4. Retornos de montagem sem clones suficientes
             const returnCloneGaps = await computeReturnCloneGaps();
@@ -530,9 +702,10 @@ export default function AuditDashboard() {
 
         setE2eLoading(true);
         try {
-            const mockOrderId = crypto.randomUUID();
-            const mockRouteId = crypto.randomUUID();
-            const mockOrderIdErp = `TST-PED-${Date.now().toString().slice(-6)}`;
+            const suffix = Date.now().toString().slice(-6);
+            const mockOrderId = createTestId();
+            const mockRouteId = createTestId();
+            const mockOrderIdErp = `TST-PED-${suffix}`;
 
             const fakeItems = [{
                 sku: 'SKU-MOCK',
@@ -573,7 +746,7 @@ export default function AuditDashboard() {
             });
             if (errBind) throw new Error('Bind error: ' + errBind.message);
 
-            toast.success(`Mock criado com sucesso! Rota E2E atribuída ao motorista (Acesse a aba Rotas / App).`);
+            toast.success(`Cenario ${mockOrderIdErp} criado. Agora marque como entregue no app, confira que a montagem ainda nao nasceu e finalize a rota para validar a criacao.`);
         } catch (err: any) {
             console.error(err);
             toast.error(err.message);
@@ -631,8 +804,8 @@ export default function AuditDashboard() {
         setReturnGapLoading(true);
         try {
             const suffix = Date.now().toString().slice(-6);
-            const mockOrderId = crypto.randomUUID();
-            const mockAssemblyRouteId = crypto.randomUUID();
+            const mockOrderId = createTestId();
+            const mockAssemblyRouteId = createTestId();
             const mockOrderIdErp = `TST-RET-${suffix}`;
             const routeCode = `RM-TRT-${suffix}`;
 
@@ -810,13 +983,19 @@ export default function AuditDashboard() {
 
     const showMissingAssembly = async () => {
         setActiveCheck('assembly');
+        setAssemblyAuditLoading(true);
         try {
-            const missingDetails = await computeMissingAssemblyOrders();
-            setDetails(missingDetails);
+            const assemblyAudit = await computeMissingAssemblyOrders();
+            setAssemblyOverview(assemblyAudit.summary);
+            setAssemblyAuditDetails(assemblyAudit.details);
+            setDetails(assemblyAudit.details);
         } catch (err) {
             console.error(err);
             toast.error('Erro ao carregar pendencias de montagem.');
+            setAssemblyAuditDetails([]);
             setDetails([]);
+        } finally {
+            setAssemblyAuditLoading(false);
         }
     };
 
@@ -933,49 +1112,18 @@ export default function AuditDashboard() {
     const generateAssembly = async (orderId: string, items: any) => {
         try {
             if (!window.confirm("Deseja realmente gerar as ordens de montagem para este pedido?")) return;
+            if (!orderHasAnyAssemblyItem(items || [])) {
+                toast.error("Este pedido não possui itens marcados para montagem.");
+                return;
+            }
 
-            const assemblyItems: any[] = [];
-
-            // Buscar dados completos do pedido para preencher a montagem
-            const orderDetail = details.find(d => d.id === orderId);
-            if (!orderDetail) throw new Error("Dados do pedido não encontrados nos detalhes locais.");
-
-            // Para segurança máxima, recalcula o que já existe no banco
-            const { data: existingAssemblies } = await supabase
-                .from('assembly_products')
-                .select('product_sku')
-                .eq('order_id', orderId);
-
-            items.forEach((i: any) => {
-                if (String(i.has_assembly || '').toLowerCase() === 'sim') {
-                    const expected = parseInt(i.purchased_quantity || i.quantity || 1);
-                    const current = (existingAssemblies || []).filter(a => a.product_sku === i.sku).length;
-                    const missing = expected - current;
-
-                    for (let x = 0; x < missing; x++) {
-                        assemblyItems.push({
-                            order_id: orderId,
-                            product_sku: i.sku,
-                            product_name: i.nome_do_produto || i.name || i.descricao_produto || 'Produto sem nome',
-                            customer_name: orderDetail.client_name,
-                            customer_phone: orderDetail.phone || null,
-                            installation_address: orderDetail.address_json || null,
-                            import_source: orderDetail.import_source || null,
-                            status: 'pending'
-                        });
-                    }
-                }
-            });
-
-            if (assemblyItems.length === 0) {
+            const result = await syncAssemblyProductsForOrder(orderId);
+            if (result.inserted_products <= 0) {
                 toast.error("Este pedido já possui todas as montagens no banco.");
                 return;
             }
 
-            const { error } = await supabase.from('assembly_products').insert(assemblyItems);
-            if (error) throw error;
-
-            toast.success(`${assemblyItems.length} montagem(ns) gerada(s) com sucesso!`);
+            toast.success(`${result.inserted_products} montagem(ns) gerada(s) com sucesso!`);
             runChecks();
             if (activeCheck === 'assembly') showMissingAssembly();
 
@@ -1124,6 +1272,12 @@ export default function AuditDashboard() {
         }
 
         try {
+            const montagemChangedToSim = newItems.some((item: any, idx: number) => {
+                const oldItem = oldItems[idx] || {};
+                return String(oldItem.has_assembly || '').trim().toLowerCase() !== 'sim'
+                    && String(item.has_assembly || '').trim().toLowerCase() === 'sim';
+            });
+
             const syncedRawJson = buildSyncedObservationsRawJson(
                 searchedOrder.raw_json,
                 String(editedOrder.observacoes_publicas ?? ''),
@@ -1169,6 +1323,18 @@ export default function AuditDashboard() {
             await supabase.from('order_audit_log').insert(logs);
 
             toast.success(`${changes.length} alteração(ões) salva(s) com sucesso!`);
+
+            if (String(updatedOrder.status || '').toLowerCase() === 'delivered' && montagemChangedToSim) {
+                try {
+                    const syncResult = await syncAssemblyProductsForOrder(updatedOrder.id);
+                    if (syncResult.inserted_products > 0) {
+                        toast.success(`${syncResult.inserted_products} montagem(ns) criada(s) automaticamente após a correção.`);
+                    }
+                } catch (syncError) {
+                    console.error(syncError);
+                    toast.error('A correção do pedido foi salva, mas a montagem automática não foi gerada.');
+                }
+            }
 
             // Refresh order data
             const syncedOrder = {
@@ -1622,124 +1788,211 @@ export default function AuditDashboard() {
                                         <button onClick={() => setDetails(null)} className="text-gray-400 hover:text-gray-600 text-xl">×</button>
                                     </div>
 
-                                    {activeCheck === 'assembly' && (
-                                        <div className="border-b border-gray-200 bg-white px-6 flex gap-6">
-                                            <button
-                                                onClick={() => setAssemblyTab('lote')}
-                                                className={`py-3 px-1 border-b-2 font-medium text-sm transition-colors ${assemblyTab === 'lote' ? 'border-purple-500 text-purple-700' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}`}
-                                            >
-                                                Em Lote (Rotina Automática)
-                                            </button>
-                                            <button
-                                                onClick={() => setAssemblyTab('avulso')}
-                                                className={`py-3 px-1 border-b-2 font-medium text-sm transition-colors ${assemblyTab === 'avulso' ? 'border-purple-500 text-purple-700' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}`}
-                                            >
-                                                Lançamento Avulso (Manual)
-                                            </button>
-                                        </div>
-                                    )}
+                                    {activeCheck === 'assembly' ? (
+                                        <>
+                                            {(() => {
+                                                const assemblyRows = assemblyAuditDetails || [];
+                                                return (
+                                                    <>
+                                            <div className="border-b border-gray-200 bg-white px-6 py-5 space-y-5">
+                                                <div className="flex flex-col lg:flex-row lg:items-end gap-4">
+                                                    <div className="space-y-2">
+                                                        <label className="text-xs font-semibold uppercase tracking-wider text-gray-500">Data Entregue De</label>
+                                                        <input
+                                                            type="date"
+                                                            value={assemblyPeriodStart}
+                                                            onChange={(e) => setAssemblyPeriodStart(e.target.value)}
+                                                            className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                                                        />
+                                                    </div>
+                                                    <div className="space-y-2">
+                                                        <label className="text-xs font-semibold uppercase tracking-wider text-gray-500">Até</label>
+                                                        <input
+                                                            type="date"
+                                                            value={assemblyPeriodEnd}
+                                                            onChange={(e) => setAssemblyPeriodEnd(e.target.value)}
+                                                            className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                                                        />
+                                                    </div>
+                                                    <button
+                                                        onClick={showMissingAssembly}
+                                                        disabled={assemblyAuditLoading}
+                                                        className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50 text-sm font-medium"
+                                                    >
+                                                        {assemblyAuditLoading ? 'Atualizando...' : 'Consultar Auditoria'}
+                                                    </button>
+                                                </div>
 
-                                    <div className="overflow-x-auto">
-                                        <table className="w-full text-left">
-                                            <thead>
-                                                <tr className="bg-gray-100/50 text-gray-500 text-xs font-semibold uppercase tracking-wider">
-                                                    <th className="p-4">{activeCheck === 'duplicate' ? 'Info' : 'Pedido'}</th>
-                                                    <th className="p-4">{activeCheck === 'duplicate' ? 'Ocorrências' : 'Cliente'}</th>
-                                                    <th className="p-4">Detalhes</th>
-                                                    <th className="p-4 text-right">Ação</th>
-                                                </tr>
-                                            </thead>
-                                            <tbody className="divide-y divide-gray-50">
-                                                {(() => {
-                                                    const filtered = activeCheck === 'assembly'
-                                                        ? details.filter(item => {
-                                                            const isAvulso = ['manual', 'avulso', 'avulsa'].includes(String(item.import_source || '').toLowerCase()) ||
-                                                                /-[AT](-\d+)?$/i.test(item.order_id_erp || '');
-                                                            return assemblyTab === 'avulso' ? isAvulso : !isAvulso;
-                                                        })
-                                                        : details;
+                                                <p className="text-sm text-gray-500">
+                                                    Esta visão considera apenas pedidos importados em lote, entregues no período e com rota finalizada.
+                                                </p>
 
-                                                    if (filtered.length === 0) {
-                                                        return (
+                                                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4">
+                                                    <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
+                                                        <p className="text-xs font-semibold uppercase tracking-wider text-gray-500">Entregues no período</p>
+                                                        <p className="text-3xl font-bold text-gray-900 mt-2">{assemblyOverview.delivered_orders}</p>
+                                                    </div>
+                                                    <div className="rounded-xl border border-blue-200 bg-blue-50 p-4">
+                                                        <p className="text-xs font-semibold uppercase tracking-wider text-blue-600">Com tag de montagem</p>
+                                                        <p className="text-3xl font-bold text-blue-700 mt-2">{assemblyOverview.eligible_orders}</p>
+                                                    </div>
+                                                    <div className="rounded-xl border border-green-200 bg-green-50 p-4">
+                                                        <p className="text-xs font-semibold uppercase tracking-wider text-green-600">Montagem gerada</p>
+                                                        <p className="text-3xl font-bold text-green-700 mt-2">{assemblyOverview.assembled_orders}</p>
+                                                    </div>
+                                                    <div className="rounded-xl border border-purple-200 bg-purple-50 p-4">
+                                                        <p className="text-xs font-semibold uppercase tracking-wider text-purple-600">Pedidos faltando</p>
+                                                        <p className="text-3xl font-bold text-purple-700 mt-2">{assemblyOverview.missing_orders}</p>
+                                                    </div>
+                                                    <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
+                                                        <p className="text-xs font-semibold uppercase tracking-wider text-amber-600">Cards faltando</p>
+                                                        <p className="text-3xl font-bold text-amber-700 mt-2">{assemblyOverview.missing_items}</p>
+                                                    </div>
+                                                </div>
+                                            </div>
+
+                                            <div className="overflow-x-auto">
+                                                <table className="w-full text-left">
+                                                    <thead>
+                                                        <tr className="bg-gray-100/50 text-gray-500 text-xs font-semibold uppercase tracking-wider">
+                                                            <th className="p-4">Rota</th>
+                                                            <th className="p-4">Pedido</th>
+                                                            <th className="p-4">Cliente</th>
+                                                            <th className="p-4">Tag Montagem</th>
+                                                            <th className="p-4">Data Venda</th>
+                                                            <th className="p-4">Prev. Entrega</th>
+                                                            <th className="p-4">Prev. Montagem</th>
+                                                            <th className="p-4">Entregue Em</th>
+                                                            <th className="p-4">Pendência</th>
+                                                            <th className="p-4 text-right">Ação</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody className="divide-y divide-gray-50">
+                                                        {assemblyRows.length === 0 ? (
                                                             <tr>
-                                                                <td colSpan={4} className="p-12 text-center text-gray-500">
+                                                                <td colSpan={10} className="p-12 text-center text-gray-500">
                                                                     <CheckCircle2 className="h-10 w-10 text-green-500 mx-auto mb-3" />
-                                                                    <p className="font-medium text-gray-900">
-                                                                        {activeCheck === 'assembly'
-                                                                            ? (assemblyTab === 'lote' ? 'Nenhuma montagem em lote pendente' : 'Nenhuma montagem avulsa pendente')
-                                                                            : 'Nenhuma inconsistência'}
-                                                                    </p>
+                                                                    <p className="font-medium text-gray-900">Nenhum pedido em lote ficou sem montagem no período selecionado.</p>
                                                                 </td>
                                                             </tr>
-                                                        );
-                                                    }
-
-                                                    return filtered.map((item: any, idx: number) => (
-                                                        <tr key={item.id || idx} className="hover:bg-blue-50/50">
-                                                            <td className="p-4 font-medium text-gray-900">
-                                                                {activeCheck === 'duplicate' ? item.title : item.order_id_erp}
-                                                            </td>
-                                                            <td className="p-4 text-gray-600">
-                                                                {activeCheck === 'duplicate' ? `${item.count} registros` : item.client_name}
-                                                            </td>
-                                                            <td className="p-4 text-sm text-gray-500">
-                                                                {activeCheck === 'duplicate' ? item.details :
-                                                                    activeCheck === 'assembly' ? `${item.details}${item.missing_skus ? ` | ${item.missing_skus}` : ''}` :
-                                                                        activeCheck === 'return_clones' ? item.details :
-                                                                        item.route_orders?.[0]?.route?.name}
-                                                            </td>
-                                                            <td className="p-4 text-right">
-                                                                {activeCheck === 'stuck' && (
-                                                                    <div className="flex justify-end gap-2">
-                                                                        {item.route_orders?.[0]?.route_id && (
-                                                                            <button
-                                                                                onClick={() => navigate('/admin/routes', { state: { openRouteId: item.route_orders[0].route_id } })}
-                                                                                className="px-3 py-1.5 bg-blue-50 text-blue-700 rounded-md hover:bg-blue-100 border border-blue-200 text-sm font-medium"
-                                                                            >
-                                                                                Ver Rota
-                                                                            </button>
-                                                                        )}
+                                                        ) : (
+                                                            assemblyRows.map((item: any, idx: number) => (
+                                                                <tr key={item.id || idx} className="hover:bg-blue-50/50">
+                                                                    <td className="p-4 text-sm text-gray-700">
+                                                                        <div className="font-medium text-gray-900">{item.route_code || '-'}</div>
+                                                                        <div>{item.route_name || '-'}</div>
+                                                                    </td>
+                                                                    <td className="p-4 font-medium text-gray-900">{item.order_id_erp}</td>
+                                                                    <td className="p-4 text-gray-600">{item.client_name}</td>
+                                                                    <td className="p-4">
+                                                                        <span className="inline-flex px-2 py-1 rounded-full bg-orange-50 text-orange-700 border border-orange-200 text-xs font-medium">
+                                                                            {item.has_assembly_tag || 'Sim'}
+                                                                        </span>
+                                                                    </td>
+                                                                    <td className="p-4 text-sm text-gray-600">{formatDateOnly(item.data_venda)}</td>
+                                                                    <td className="p-4 text-sm text-gray-600">{formatDateOnly(item.previsao_entrega)}</td>
+                                                                    <td className="p-4 text-sm text-gray-600">{formatDateOnly(item.previsao_montagem)}</td>
+                                                                    <td className="p-4 text-sm text-gray-600">{formatDateTime(item.delivered_at)}</td>
+                                                                    <td className="p-4 text-sm text-gray-500">
+                                                                        <div>{item.details}</div>
+                                                                        {item.missing_skus && <div className="mt-1 text-xs text-gray-400">{item.missing_skus}</div>}
+                                                                    </td>
+                                                                    <td className="p-4 text-right">
                                                                         <button
-                                                                            onClick={() => resolveStuckOrder(item.id, 'delivered')}
-                                                                            className="px-3 py-1.5 bg-green-50 text-green-700 rounded-md hover:bg-green-100 border border-green-200 text-sm font-medium"
+                                                                            onClick={() => generateAssembly(item.id, item.items_json)}
+                                                                            className="px-3 py-1.5 bg-purple-50 text-purple-700 rounded-md hover:bg-purple-100 border border-purple-200 text-sm font-medium"
                                                                         >
-                                                                            Confirmar Entrega
+                                                                            Gerar Montagem
                                                                         </button>
-                                                                        <button
-                                                                            onClick={() => resolveStuckOrder(item.id, 'returned')}
-                                                                            className="px-3 py-1.5 bg-amber-50 text-amber-700 rounded-md hover:bg-amber-100 border border-amber-200 text-sm font-medium"
-                                                                        >
-                                                                            Devolução
-                                                                        </button>
-                                                                    </div>
-                                                                )}
-                                                                {activeCheck === 'assembly' && (
-                                                                    <button
-                                                                        onClick={() => generateAssembly(item.id, item.items_json)}
-                                                                        className="px-3 py-1.5 bg-purple-50 text-purple-700 rounded-md hover:bg-purple-100 border border-purple-200 text-sm font-medium"
-                                                                    >
-                                                                        Gerar Montagem
-                                                                    </button>
-                                                                )}
-                                                                {activeCheck === 'return_clones' && (
-                                                                    <button
-                                                                        onClick={() => reprocessReturnCloneGap(item)}
-                                                                        disabled={processingReturnFix.has(String(item.id))}
-                                                                        className="px-3 py-1.5 bg-rose-50 text-rose-700 rounded-md hover:bg-rose-100 border border-rose-200 text-sm font-medium disabled:opacity-50"
-                                                                    >
-                                                                        {processingReturnFix.has(String(item.id)) ? 'Reprocessando...' : 'Reprocessar'}
-                                                                    </button>
-                                                                )}
-                                                                {activeCheck === 'duplicate' && (
-                                                                    <span className="text-xs text-amber-600 bg-amber-50 px-2 py-1 rounded">Manual</span>
-                                                                )}
+                                                                    </td>
+                                                                </tr>
+                                                            ))
+                                                        )}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                                    </>
+                                                );
+                                            })()}
+                                        </>
+                                    ) : (
+                                        <div className="overflow-x-auto">
+                                            <table className="w-full text-left">
+                                                <thead>
+                                                    <tr className="bg-gray-100/50 text-gray-500 text-xs font-semibold uppercase tracking-wider">
+                                                        <th className="p-4">{activeCheck === 'duplicate' ? 'Info' : 'Pedido'}</th>
+                                                        <th className="p-4">{activeCheck === 'duplicate' ? 'Ocorrências' : 'Cliente'}</th>
+                                                        <th className="p-4">Detalhes</th>
+                                                        <th className="p-4 text-right">Ação</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody className="divide-y divide-gray-50">
+                                                    {details.length === 0 ? (
+                                                        <tr>
+                                                            <td colSpan={4} className="p-12 text-center text-gray-500">
+                                                                <CheckCircle2 className="h-10 w-10 text-green-500 mx-auto mb-3" />
+                                                                <p className="font-medium text-gray-900">Nenhuma inconsistência</p>
                                                             </td>
                                                         </tr>
-                                                    ));
-                                                })()}
-                                            </tbody>
-                                        </table>
-                                    </div>
+                                                    ) : (
+                                                        details.map((item: any, idx: number) => (
+                                                            <tr key={item.id || idx} className="hover:bg-blue-50/50">
+                                                                <td className="p-4 font-medium text-gray-900">
+                                                                    {activeCheck === 'duplicate' ? item.title : item.order_id_erp}
+                                                                </td>
+                                                                <td className="p-4 text-gray-600">
+                                                                    {activeCheck === 'duplicate' ? `${item.count} registros` : item.client_name}
+                                                                </td>
+                                                                <td className="p-4 text-sm text-gray-500">
+                                                                    {activeCheck === 'duplicate' ? item.details :
+                                                                        activeCheck === 'return_clones' ? item.details :
+                                                                        item.route_orders?.[0]?.route?.name}
+                                                                </td>
+                                                                <td className="p-4 text-right">
+                                                                    {activeCheck === 'stuck' && (
+                                                                        <div className="flex justify-end gap-2">
+                                                                            {item.route_orders?.[0]?.route_id && (
+                                                                                <button
+                                                                                    onClick={() => navigate('/admin/routes', { state: { openRouteId: item.route_orders[0].route_id } })}
+                                                                                    className="px-3 py-1.5 bg-blue-50 text-blue-700 rounded-md hover:bg-blue-100 border border-blue-200 text-sm font-medium"
+                                                                                >
+                                                                                    Ver Rota
+                                                                                </button>
+                                                                            )}
+                                                                            <button
+                                                                                onClick={() => resolveStuckOrder(item.id, 'delivered')}
+                                                                                className="px-3 py-1.5 bg-green-50 text-green-700 rounded-md hover:bg-green-100 border border-green-200 text-sm font-medium"
+                                                                            >
+                                                                                Confirmar Entrega
+                                                                            </button>
+                                                                            <button
+                                                                                onClick={() => resolveStuckOrder(item.id, 'returned')}
+                                                                                className="px-3 py-1.5 bg-amber-50 text-amber-700 rounded-md hover:bg-amber-100 border border-amber-200 text-sm font-medium"
+                                                                            >
+                                                                                Devolução
+                                                                            </button>
+                                                                        </div>
+                                                                    )}
+                                                                    {activeCheck === 'return_clones' && (
+                                                                        <button
+                                                                            onClick={() => reprocessReturnCloneGap(item)}
+                                                                            disabled={processingReturnFix.has(String(item.id))}
+                                                                            className="px-3 py-1.5 bg-rose-50 text-rose-700 rounded-md hover:bg-rose-100 border border-rose-200 text-sm font-medium disabled:opacity-50"
+                                                                        >
+                                                                            {processingReturnFix.has(String(item.id)) ? 'Reprocessando...' : 'Reprocessar'}
+                                                                        </button>
+                                                                    )}
+                                                                    {activeCheck === 'duplicate' && (
+                                                                        <span className="text-xs text-amber-600 bg-amber-50 px-2 py-1 rounded">Manual</span>
+                                                                    )}
+                                                                </td>
+                                                            </tr>
+                                                        ))
+                                                    )}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    )}
                                 </div>
                             )}
                         </>

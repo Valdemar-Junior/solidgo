@@ -1,6 +1,7 @@
 import { supabase } from '../../supabase/client';
 import { OfflineStorage, SyncQueue, NetworkStatus } from './storage';
 import { toast } from 'sonner';
+import { syncAssemblyProductsForRoute } from '../assembly/syncAssemblyProducts';
 
 export class BackgroundSyncService {
   private static instance: BackgroundSyncService;
@@ -269,62 +270,9 @@ export class BackgroundSyncService {
 
     console.log('[BackgroundSync] Route completed and returns released:', route_id);
 
-    // 3. (NEW) Generate Assembly Tasks for DELIVERED orders in this route
     try {
-      const { data: routeOrders } = await supabase
-        .from('route_orders')
-        .select(`
-          order_id,
-          status,
-          order:order_id (
-            id, order_id_erp, items_json, customer_name, phone, address_json
-          )
-        `)
-        .eq('route_id', route_id)
-        .eq('status', 'delivered');
-
-      if (routeOrders && routeOrders.length > 0) {
-        console.log(`[BackgroundSync] Checking assembly requirements for ${routeOrders.length} delivered orders in route ${route_id}`);
-
-        for (const ro of routeOrders) {
-          const orderData = ro.order as any;
-          if (!orderData || !orderData.items_json) continue;
-
-          const produtosComMontagem = orderData.items_json.filter((item: any) =>
-            ['SIM', 'sim', 'Sim', 'true', '1', 'yes', 'YES', 'Yes'].includes(String(item.has_assembly)) ||
-            item.possui_montagem === true || item.possui_montagem === 'true'
-          );
-
-          if (produtosComMontagem.length > 0) {
-            // Verificar se já existe registro de montagem para este pedido para evitar duplicidade
-            const { count } = await supabase
-              .from('assembly_products')
-              .select('id', { count: 'exact', head: true })
-              .eq('order_id', orderData.id);
-
-            if (!count || count === 0) {
-              const assemblyProducts = produtosComMontagem.map((item: any) => ({
-                order_id: orderData.id,
-                product_name: item.name,
-                product_sku: item.sku,
-                customer_name: orderData.customer_name,
-                customer_phone: orderData.phone,
-                installation_address: orderData.address_json,
-                status: 'pending',
-                created_at: new Date().toISOString(),
-                updated_at: new Date().toISOString()
-              }));
-
-              const { error: insertError } = await supabase.from('assembly_products').insert(assemblyProducts);
-              if (insertError) {
-                console.error('[BackgroundSync] Failed to insert assembly_products:', insertError);
-              } else {
-                console.log(`[BackgroundSync] Created ${assemblyProducts.length} assembly products for order ${orderData.id}`);
-              }
-            }
-          }
-        }
-      }
+      const assemblySyncResult = await syncAssemblyProductsForRoute(route_id);
+      console.log('[BackgroundSync] Assembly sync result:', assemblySyncResult);
     } catch (e) {
       console.error('[BackgroundSync] Error generating assembly tasks for route:', e);
     }

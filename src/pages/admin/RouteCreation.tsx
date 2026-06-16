@@ -60,6 +60,7 @@ import MdfeIssueModal from '../../components/mdfe/MdfeIssueModal';
 import DatePicker, { registerLocale } from 'react-datepicker';
 import { ptBR } from 'date-fns/locale';
 import 'react-datepicker/dist/react-datepicker.css';
+import { syncAssemblyProductsForRoute } from '../../utils/assembly/syncAssemblyProducts';
 
 registerLocale('pt-BR', ptBR);
 
@@ -3078,7 +3079,7 @@ function RouteCreationContent() {
         address_json: order.address_json,
         items_json: (order.items_json || []).map((item: any) => ({
           ...item,
-          // Importante: Remover flags de montagem para nÃ£o disparar trigger de assembly product ao entregar
+          // Importante: remover flags de montagem para que um pedido de coleta nao gere tarefas de montagem
           tem_montagem: false,
           has_assembly: false,
           assembly_status: null
@@ -5386,58 +5387,13 @@ function RouteCreationContent() {
                                       await supabase.from('orders').update({ status: 'delivered' }).in('id', oIds);
                                     }
 
-                                    // 3. Check for assembly products (SAME LOGIC AS DeliveryMarking.tsx)
-                                    // This creates assembly_products for orders with has_assembly = 'SIM'
+                                    // 3. Sync de montagem pela RPC única do banco
                                     try {
-                                      for (const orderId of oIds) {
-                                        // Fetch full order data with items_json
-                                        const { data: orderData, error: orderError } = await supabase
-                                          .from('orders')
-                                          .select('id, items_json, customer_name, phone, address_json, order_id_erp')
-                                          .eq('id', orderId)
-                                          .single();
-
-                                        if (orderError || !orderData?.items_json) continue;
-
-                                        // Find products with assembly
-                                        const produtosComMontagem = (orderData.items_json || []).filter((item: any) =>
-                                          item.has_assembly === 'SIM' || item.has_assembly === 'sim' ||
-                                          item.possui_montagem === true || item.possui_montagem === 'true'
-                                        );
-
-                                        if (produtosComMontagem.length === 0) continue;
-
-                                        // Check if assembly_products already exist for this order
-                                        const { data: existing } = await supabase
-                                          .from('assembly_products')
-                                          .select('id')
-                                          .eq('order_id', orderData.id);
-
-                                        // Only insert if NO existing records for this order
-                                        if (!existing || existing.length === 0) {
-                                          const assemblyProducts = produtosComMontagem.map((item: any) => ({
-                                            order_id: orderData.id,
-                                            product_name: item.name || item.produto || item.descricao || 'Produto',
-                                            product_sku: item.sku || item.codigo || '',
-                                            customer_name: orderData.customer_name,
-                                            customer_phone: orderData.phone,
-                                            installation_address: orderData.address_json,
-                                            status: 'pending',
-                                            created_at: new Date().toISOString(),
-                                            updated_at: new Date().toISOString()
-                                          }));
-
-                                          const { error: insertError } = await supabase.from('assembly_products').insert(assemblyProducts);
-
-                                          if (!insertError) {
-                                            console.log('[Pickup] Created', assemblyProducts.length, 'assembly products for order', orderData.order_id_erp);
-                                            toast.info(`Pedido ${orderData.order_id_erp} tem ${produtosComMontagem.length} produto(s) com montagem!`);
-                                          }
-                                        }
-                                      }
+                                      const assemblySyncResult = await syncAssemblyProductsForRoute(selectedRoute.id);
+                                      console.log('[Pickup] Assembly sync result:', assemblySyncResult);
                                     } catch (assemblyError) {
-                                      // Log but don't fail the pickup - assembly is secondary
-                                      console.error('[Pickup] Error creating assembly products:', assemblyError);
+                                      console.error('[Pickup] Error syncing assembly products:', assemblyError);
+                                      toast.error('Retirada confirmada, mas houve falha ao gerar as tarefas de montagem.');
                                     }
 
                                     // 4. Local State Update (Optimistic)

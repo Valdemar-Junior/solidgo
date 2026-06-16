@@ -7,6 +7,7 @@ import { Package, CheckCircle, XCircle, MapPin, Users, Search } from 'lucide-rea
 import { buildFullAddress, geocodeAddress, openWazeWithLL } from '../utils/maps';
 import { toast } from 'sonner';
 import { useDeliveryPhotos } from '../hooks/useDeliveryPhotos';
+import { syncAssemblyProductsForRoute } from '../utils/assembly/syncAssemblyProducts';
 
 const FALLBACK_RETURN_REASONS: ReturnReason[] = [
   { id: '1', reason: 'Cliente ausente', type: 'both' },
@@ -956,29 +957,11 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
       };
 
       if (isOnline) {
-        type FinalizeOrderItem = {
-          has_assembly?: unknown;
-          possui_montagem?: unknown;
-          purchased_quantity?: unknown;
-          quantity?: unknown;
-          sku?: string;
-          name?: string;
-        };
-
-        type FinalizeOrderData = {
-          id: string;
-          order_id_erp?: string;
-          items_json?: FinalizeOrderItem[] | null;
-          customer_name?: string;
-          phone?: string;
-          address_json?: unknown;
-        };
-
         type FinalizeRouteOrderRow = {
           id: string;
           order_id: string;
           status: RouteOrderWithDetails['status'];
-          order: FinalizeOrderData | FinalizeOrderData[] | null;
+          order: { id: string } | { id: string }[] | null;
         };
 
         await backgroundSync.forceSync(true);
@@ -1000,14 +983,7 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
             id,
             order_id,
             status,
-            order:orders!order_id (
-              id,
-              order_id_erp,
-              items_json,
-              customer_name,
-              phone,
-              address_json
-            )
+            order:orders!order_id (id)
           `)
           .eq('route_id', routeId);
 
@@ -1028,7 +1004,7 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
         const deliveredRouteOrders = routeOrdersFromDb.filter((ro) => ro.status === 'delivered');
         const deliveredIds = deliveredRouteOrders.map((ro) => ro.order_id);
 
-        // Garante delivered antes de concluir a rota, evitando que trigger legado gere montagem indevida.
+        // Garante o status final do pedido antes de concluir a rota e rodar a sincronizacao central de montagem.
         if (deliveredIds.length > 0) {
           await supabase
             .from('orders')
@@ -1069,74 +1045,13 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
             .in('id', returnedIds);
         }
 
-        // 4. Gerar tarefas de montagem para pedidos ENTREGUES (substitui o trigger removido)
+        // 4. Gerar tarefas de montagem pela RPC única do banco
         try {
-          for (const ro of deliveredRouteOrders) {
-            const orderData = Array.isArray(ro.order) ? ro.order[0] : ro.order;
-            if (!orderData || !orderData.items_json) {
-              console.warn('[FinalizeRoute] Pedido entregue sem dados de itens; montagem não avaliada:', ro.order_id);
-              continue;
-            }
-
-            const items: FinalizeOrderItem[] = Array.isArray(orderData.items_json) ? orderData.items_json : [];
-
-            // Filtra itens que possuem montagem 'SIM'
-            const produtosComMontagem = items.filter((item) =>
-              ['SIM', 'sim', 'Sim', 'true', '1', 'yes', 'YES', 'Yes'].includes(String(item.has_assembly)) ||
-              item.possui_montagem === true || item.possui_montagem === 'true'
-            );
-
-            if (produtosComMontagem.length > 0) {
-
-              // Gerar array final de produtos de montagem, respeitando purchased_quantity
-              const assemblyProductsToInsert: Array<Record<string, unknown>> = [];
-
-              for (const item of produtosComMontagem) {
-                // Calcula a quantidade (qty)
-                const qtyStr = item.purchased_quantity || item.quantity;
-                const qty = Math.max(1, parseInt(String(qtyStr)) || 1);
-
-                // Verificar se JÁ existe registro(s) de montagem para este pedido e SKU
-                const cleanSku = item.sku || 'SKU-INDEF';
-                const { count: currentCount } = await supabase
-                  .from('assembly_products')
-                  .select('*', { count: 'exact', head: true })
-                  .eq('order_id', ro.order_id)
-                  .eq('product_sku', cleanSku);
-
-                const existingCount = currentCount || 0;
-
-                // Só insere o que faltar
-                const itemsToGenerate = qty - existingCount;
-
-                for (let i = 0; i < itemsToGenerate; i++) {
-                  assemblyProductsToInsert.push({
-                    order_id: ro.order_id,
-                    product_name: item.name || 'Produto sem nome',
-                    product_sku: cleanSku,
-                    customer_name: orderData.customer_name,
-                    customer_phone: orderData.phone,
-                    installation_address: orderData.address_json,
-                    status: 'pending',
-                    created_at: new Date().toISOString(),
-                    updated_at: new Date().toISOString()
-                  });
-                }
-              }
-
-              if (assemblyProductsToInsert.length > 0) {
-                const { error: insertError } = await supabase.from('assembly_products').insert(assemblyProductsToInsert);
-                if (insertError) {
-                  console.error('[FinalizeRoute] Erro ao inserir assembly_products:', insertError);
-                } else {
-                  console.log(`[FinalizeRoute] Criados ${assemblyProductsToInsert.length} produtos de montagem para pedido ${orderData.order_id_erp}`);
-                }
-              }
-            }
-          }
+          const assemblySyncResult = await syncAssemblyProductsForRoute(routeId);
+          console.log('[FinalizeRoute] Assembly sync result:', assemblySyncResult);
         } catch (assemblyError) {
-          console.error('[FinalizeRoute] Erro ao gerar tarefas de montagem:', assemblyError);
-          // Não falha a finalização por erro de montagem
+          console.error('[FinalizeRoute] Erro ao sincronizar tarefas de montagem:', assemblyError);
+          toast.error('Rota finalizada, mas houve falha ao gerar as tarefas de montagem.');
         }
 
         toast.success('Rota finalizada com sucesso!');
