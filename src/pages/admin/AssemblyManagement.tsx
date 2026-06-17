@@ -3447,6 +3447,7 @@ function AssemblyManagementContent() {
                         <tr>
                           <th className="px-4 py-3 text-left font-semibold text-gray-600">Pedido</th>
                           <th className="px-4 py-3 text-left font-semibold text-gray-600">Cliente / Endereço</th>
+                          <th className="px-4 py-3 text-left font-semibold text-gray-600">Prev. Montagem</th>
                           <th className="px-4 py-3 text-left font-semibold text-gray-600">Status</th>
                           <th className="px-4 py-3 text-right font-semibold text-gray-600">Ações</th>
                         </tr>
@@ -3479,6 +3480,7 @@ function AssemblyManagementContent() {
                           return Object.entries(byOrder).map(([orderId, list]) => {
                             const order = list[0]?.order || {} as any;
                             const addr = order.address_json || {};
+                            const previsaoMontagem = formatDate(getPrevisaoMontagemValue(order) || null);
                             const statuses = list.map(i => i.status);
                             const derived = statuses.every(s => s === 'cancelled') ? 'cancelled' : (statuses.every(s => s === 'completed') ? 'completed' : 'pending');
 
@@ -3496,6 +3498,9 @@ function AssemblyManagementContent() {
                                     <MapPin className="h-3 w-3" />
                                     {addr.street}, {addr.number} - {addr.neighborhood}
                                   </div>
+                                </td>
+                                <td className="px-4 py-3 text-sm text-gray-700">
+                                  {previsaoMontagem || '-'}
                                 </td>
                                 <td className="px-4 py-3">
                                   <div className="flex flex-col items-start gap-1">
