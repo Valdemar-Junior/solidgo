@@ -640,9 +640,9 @@ function RouteCreationContent() {
 
   const [pickupOrderObservations, setPickupOrderObservations] = useState('');
 
-  const isStandardDeliveryRoute = (route: RouteWithDetails | null) => {
+  const isStandardDeliveryRoute = (route: Pick<RouteWithDetails, 'name'> | { name?: string | null } | null) => {
     if (!route) return false;
-    const routeName = String(route.name || '');
+    const routeName = String(route.name || '').trim().toUpperCase();
     return !routeName.startsWith('RETIRADA') && !routeName.startsWith('COLETA-');
   };
 
@@ -1547,7 +1547,7 @@ function RouteCreationContent() {
   }, [clientOptions, clientQuery]);
 
   const pendingExistingRoutes = useMemo(
-    () => allPendingRoutes,
+    () => allPendingRoutes.filter((route: any) => isStandardDeliveryRoute(route)),
     [allPendingRoutes]
   );
 
@@ -2370,8 +2370,10 @@ function RouteCreationContent() {
         driver_name: String(r?.driver?.user?.name || r?.driver?.name || '').trim(),
       }));
 
-      setAllPendingRoutes(normalized);
-      return normalized;
+      const filtered = normalized.filter((route: any) => isStandardDeliveryRoute(route));
+
+      setAllPendingRoutes(filtered);
+      return filtered;
     } catch (err) {
       console.error('Error fetching pending routes for modal:', err);
       return [];
@@ -2649,14 +2651,14 @@ function RouteCreationContent() {
         if (uids.length > 0) {
           const { data: usersData } = await supabase
             .from('users')
-            .select('id,name,email,role')
+            .select('id,name,email,role,active')
             .in('id', uids);
 
           const mapU = new Map<string, any>((usersData || []).map((u: any) => [String(u.id), u]));
-          driverList = driversRes.data.map((d: any) => ({ ...d, user: mapU.get(String(d.user_id)) || null }));
+          driverList = driversRes.data
+            .map((d: any) => ({ ...d, user: mapU.get(String(d.user_id)) || null }))
+            .filter((d: any) => d.active !== false && d?.user?.active !== false);
         }
-        // Filter only drivers - RELAXED: Trust 'drivers' table membership
-        // driverList = driverList.filter((d: any) => String(d?.user?.role || '').toLowerCase() === 'driver');
       }
       setDrivers(driverList);
 
@@ -2664,7 +2666,7 @@ function RouteCreationContent() {
       if (vehiclesRes.data) setVehicles(vehiclesRes.data as Vehicle[]);
 
       // Conferentes
-      setConferentes((conferentesRes.data || []).map((u: any) => ({
+      setConferentes((conferentesRes.data || []).filter((u: any) => u.active !== false).map((u: any) => ({
         id: String(u.id),
         name: String(u.name || u.id)
       })));
@@ -2690,11 +2692,13 @@ function RouteCreationContent() {
         .select(`
           id, 
           name, 
+          active,
           driver_user_id, 
           helper_user_id,
-          driver:users!teams_user_driver_user_id_fkey(id, name),
-          helper:users!teams_user_helper_user_id_fkey(id, name)
-        `);
+          driver:users!teams_user_driver_user_id_fkey(id, name, active),
+          helper:users!teams_user_helper_user_id_fkey(id, name, active)
+        `)
+        .eq('active', true);
 
       if (teamsError) {
         console.error('Error fetching teams:', teamsError);
@@ -2707,7 +2711,8 @@ function RouteCreationContent() {
       const { data: helpersData, error: helpersError } = await supabase
         .from('users')
         .select('id, name')
-        .eq('role', 'helper');
+        .eq('role', 'helper')
+        .eq('active', true);
       if (helpersError) {
         console.error('Error fetching helpers:', helpersError);
         toast.error('Erro ao carregar ajudantes: ' + helpersError.message);

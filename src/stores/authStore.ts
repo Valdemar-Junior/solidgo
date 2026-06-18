@@ -70,6 +70,7 @@ export const useAuthStore = create<AuthState>()(
                 email: data.user.email,
                 name: fallbackName,
                 role: roleDefault,
+                active: true,
                 must_change_password: true,
               });
               if (insertErr) throw new Error('Perfil de Usuario nao encontrado');
@@ -84,17 +85,24 @@ export const useAuthStore = create<AuthState>()(
                 name: newProfile!.name,
                 role: newProfile!.role,
                 phone: newProfile!.phone,
+                active: newProfile!.active ?? true,
                 must_change_password: newProfile!.must_change_password,
                 created_at: newProfile!.created_at,
               };
               set({ user, isAuthenticated: true, isLoading: false, error: null });
             } else {
+              if (profile.active === false) {
+                await supabase.auth.signOut({ scope: 'local' });
+                throw new Error('Usuario inativo. Procure um administrador.');
+              }
+
               const user: User = {
                 id: profile.id,
                 email: profile.email,
                 name: profile.name,
                 role: profile.role,
                 phone: profile.phone,
+                active: profile.active ?? true,
                 must_change_password: profile.must_change_password,
                 created_at: profile.created_at,
               };
@@ -177,9 +185,21 @@ export const useAuthStore = create<AuthState>()(
                 name: profile.name,
                 role: profile.role,
                 phone: profile.phone,
+                active: profile.active ?? true,
                 must_change_password: profile.must_change_password,
                 created_at: profile.created_at,
               };
+
+              if (user.active === false) {
+                await supabase.auth.signOut({ scope: 'local' });
+                set({
+                  user: null,
+                  isAuthenticated: false,
+                  isLoading: false,
+                  error: 'Usuario inativo. Procure um administrador.',
+                });
+                return;
+              }
 
               set({
                 user,
@@ -195,6 +215,7 @@ export const useAuthStore = create<AuthState>()(
                 email: session.user.email,
                 name: defaultName,
                 role: 'driver',
+                active: true,
               });
               if (!insertErr) {
                 const { data: created } = await supabase
@@ -210,6 +231,7 @@ export const useAuthStore = create<AuthState>()(
                       name: created.name,
                       role: created.role,
                       phone: created.phone,
+                      active: created.active ?? true,
                       must_change_password: created.must_change_password,
                       created_at: created.created_at,
                     },

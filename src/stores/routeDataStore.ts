@@ -94,8 +94,9 @@ export const useRouteDataStore = create<RouteDataState>((set, get) => ({
         // Conferentes
         supabase
           .from('users')
-          .select('id,name,role')
-          .eq('role', 'conferente'),
+          .select('id,name,role,active')
+          .eq('role', 'conferente')
+          .eq('active', true),
 
         // Routes with details (OTIMIZAÇÃO: route_orders sem orders pesados, enriquecimento feito a seguir)
         supabase
@@ -123,11 +124,13 @@ export const useRouteDataStore = create<RouteDataState>((set, get) => ({
         if (uids.length > 0) {
           const { data: usersData } = await supabase
             .from('users')
-            .select('id,name,email,role')
+            .select('id,name,email,role,active')
             .in('id', uids);
 
           const mapU = new Map<string, any>((usersData || []).map((u: any) => [String(u.id), u]));
-          drivers = driversRes.data.map((d: any) => ({ ...d, user: mapU.get(String(d.user_id)) || null }));
+          drivers = driversRes.data
+            .map((d: any) => ({ ...d, user: mapU.get(String(d.user_id)) || null }))
+            .filter((d: any) => d.active !== false && d?.user?.active !== false);
         }
         // Filter only drivers
         drivers = drivers.filter((d: any) => String(d?.user?.role || '').toLowerCase() === 'driver');
@@ -180,11 +183,13 @@ export const useRouteDataStore = create<RouteDataState>((set, get) => ({
             if (userIds.length > 0) {
               const { data: usersData } = await supabase
                 .from('users')
-                .select('id,name,email,role')
+                .select('id,name,email,role,active')
                 .in('id', userIds);
 
               const mapU = new Map<string, any>((usersData || []).map((u: any) => [String(u.id), u]));
-              const enrichedDrivers = drvBulk.map((d: any) => ({ ...d, user: mapU.get(String(d.user_id)) || null }));
+              const enrichedDrivers = drvBulk
+                .map((d: any) => ({ ...d, user: mapU.get(String(d.user_id)) || null }))
+                .filter((d: any) => d.active !== false && d?.user?.active !== false);
               const mapDrv = new Map<string, any>(enrichedDrivers.map((d: any) => [String(d.id), d]));
 
               for (const r of routes as any[]) {

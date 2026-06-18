@@ -2,6 +2,56 @@ import fs from 'fs'
 import path from 'path'
 import { createClient } from '@supabase/supabase-js'
 
+async function getUserRouteLinks(supa: any, userId: string) {
+  const { data: driverRows, error: driverError } = await supa
+    .from('drivers')
+    .select('id')
+    .eq('user_id', userId)
+
+  if (driverError) throw driverError
+
+  const driverIds = (driverRows || []).map((row: any) => row.id).filter(Boolean)
+
+  const [
+    driverRoutesRes,
+    helperRoutesRes,
+    conferenteRoutesRes,
+    assemblyRoutesRes,
+    routeConferencesRes,
+    assemblyProductsRes,
+  ] = await Promise.all([
+    driverIds.length > 0
+      ? supa.from('routes').select('id', { count: 'exact', head: true }).in('driver_id', driverIds)
+      : Promise.resolve({ count: 0, error: null }),
+    supa.from('routes').select('id', { count: 'exact', head: true }).eq('helper_id', userId),
+    supa.from('routes').select('id', { count: 'exact', head: true }).eq('conferente_id', userId),
+    supa.from('assembly_routes').select('id', { count: 'exact', head: true }).eq('assembler_id', userId),
+    supa.from('route_conferences').select('id', { count: 'exact', head: true }).or(`user_id.eq.${userId},resolved_by.eq.${userId}`),
+    supa.from('assembly_products').select('id', { count: 'exact', head: true }).eq('installer_id', userId),
+  ])
+
+  const results = [
+    driverRoutesRes,
+    helperRoutesRes,
+    conferenteRoutesRes,
+    assemblyRoutesRes,
+    routeConferencesRes,
+    assemblyProductsRes,
+  ]
+
+  const firstError = results.find((result: any) => result?.error)?.error
+  if (firstError) throw firstError
+
+  return {
+    driverRoutes: Number(driverRoutesRes.count || 0),
+    helperRoutes: Number(helperRoutesRes.count || 0),
+    conferenteRoutes: Number(conferenteRoutesRes.count || 0),
+    assemblyRoutes: Number(assemblyRoutesRes.count || 0),
+    routeConferences: Number(routeConferencesRes.count || 0),
+    assemblyProducts: Number(assemblyProductsRes.count || 0),
+  }
+}
+
 // Load env from .env.local if present (dev) — sanitized later
 try {
   const p = path.resolve(process.cwd(), '.env.local')
@@ -71,7 +121,17 @@ export default async function handler(req: any, res: any) {
 
     // Perform deletions
     let deleted = 0
+    let skipped = 0
+    const blockedUsers: Array<{ id: string, email: string, details: Record<string, number> }> = []
     for (const u of list) {
+      const links = await getUserRouteLinks(supa, u.id)
+      const totalLinks = Object.values(links).reduce((sum, value) => sum + Number(value || 0), 0)
+      if (totalLinks > 0) {
+        skipped++
+        blockedUsers.push({ id: u.id, email: u.email, details: links })
+        continue
+      }
+
       const delAuth = await supa.auth.admin.deleteUser(u.id)
       if (delAuth.error) continue
       await supa.from('drivers').delete().eq('user_id', u.id)
@@ -80,9 +140,8 @@ export default async function handler(req: any, res: any) {
       deleted++
     }
 
-    return res.status(200).json({ ok: true, deleted, attempted: list.length })
+    return res.status(200).json({ ok: true, deleted, skipped, attempted: list.length, blocked_users: blockedUsers })
   } catch (e: any) {
     return res.status(500).json({ error: e.message || 'Internal error' })
   }
 }
-

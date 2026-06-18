@@ -4,6 +4,7 @@ export interface User {
   name: string;
   role: 'admin' | 'driver' | 'helper' | 'montador' | 'conferente' | 'consultor';
   phone?: string;
+  active: boolean;
   must_change_password?: boolean;
   created_at: string;
 }

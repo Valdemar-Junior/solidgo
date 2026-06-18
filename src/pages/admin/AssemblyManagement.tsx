@@ -826,7 +826,8 @@ function AssemblyManagementContent() {
       const { data: montadoresData } = await supabase
         .from('users')
         .select('*')
-        .eq('role', 'montador');
+        .eq('role', 'montador')
+        .eq('active', true);
 
       // Load vehicles
       const { data: vehiclesData } = await supabase

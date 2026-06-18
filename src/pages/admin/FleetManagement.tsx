@@ -293,8 +293,9 @@ export default function FleetManagement() {
           .order('display_name'),
         supabase
           .from('users')
-          .select('id,email,name,role,phone,must_change_password,created_at')
+          .select('id,email,name,role,phone,active,must_change_password,created_at')
           .eq('role', 'driver')
+          .eq('active', true)
           .order('name'),
         supabase
           .from('fleet_inspections')

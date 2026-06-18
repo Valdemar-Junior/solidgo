@@ -85,7 +85,8 @@ export const useAssemblyDataStore = create<AssemblyDataState>((set, get) => ({
                 supabase
                     .from('users')
                     .select('*')
-                    .eq('role', 'montador'),
+                    .eq('role', 'montador')
+                    .eq('active', true),
 
                 // Vehicles
                 supabase
