@@ -21,6 +21,8 @@ import RouteCreation from './pages/admin/RouteCreation';
 import AssemblyManagement from './pages/admin/AssemblyManagement';
 import OrderLookup from './pages/admin/OrderLookup';
 import Reports from './pages/admin/Reports';
+import ReportsDeliveryOperational from './pages/admin/ReportsDeliveryOperational';
+import ReportsAssemblyOperational from './pages/admin/ReportsAssemblyOperational';
 import Mdfe from './pages/admin/Mdfe';
 import MdfeEmitters from './pages/admin/MdfeEmitters';
 import MdfeVehicles from './pages/admin/MdfeVehicles';
@@ -159,6 +161,26 @@ function App() {
               <ProtectedRoute allowedRoles={['admin']}>
                 <AdminLayout>
                   <Reports />
+                </AdminLayout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/reports/delivery-operational"
+            element={
+              <ProtectedRoute allowedRoles={['admin']}>
+                <AdminLayout>
+                  <ReportsDeliveryOperational />
+                </AdminLayout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/reports/assembly-operational"
+            element={
+              <ProtectedRoute allowedRoles={['admin']}>
+                <AdminLayout>
+                  <ReportsAssemblyOperational />
                 </AdminLayout>
               </ProtectedRoute>
             }
