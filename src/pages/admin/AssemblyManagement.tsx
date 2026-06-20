@@ -82,6 +82,8 @@ const getHighestMountPriority = (priorities: Array<string | null | undefined>): 
   return null;
 };
 
+const normalizeCpf = (value: unknown): string => String(value || '').replace(/\D/g, '').trim();
+
 // --- ERROR BOUNDARY ---
 class AssemblyManagementErrorBoundary extends React.Component<
   { children: React.ReactNode },
@@ -177,6 +179,11 @@ function AssemblyManagementContent() {
   const [showRouteModal, setShowRouteModal] = useState(false);
   const [showOrderProductsModal, setShowOrderProductsModal] = useState(false);
   const [orderProductsModal, setOrderProductsModal] = useState<{ orderId: string; products: AssemblyProductWithDetails[] } | null>(null);
+  const [sameCpfSelectionModal, setSameCpfSelectionModal] = useState<{
+    orderId: string;
+    cpf: string;
+    relatedOrderIds: string[];
+  } | null>(null);
   const [waSending, setWaSending] = useState(false);
   const [groupSending, setGroupSending] = useState(false);
   const [startingRoute, setStartingRoute] = useState(false);
@@ -779,7 +786,7 @@ function AssemblyManagementContent() {
         .from('assembly_products')
         .select(`
           id, order_id, product_name, product_sku, mount_priority, status, assembly_route_id, created_at, updated_at, was_returned, observations, returned_at,
-          order:order_id!inner (id, order_id_erp, customer_name, phone, address_json, raw_json, data_venda, previsao_entrega, previsao_montagem, observacoes_publicas, observacoes_internas, status, service_type, tem_frete_full, return_flag, last_return_reason, last_return_notes, department, product_group, product_subgroup),
+          order:order_id!inner (id, order_id_erp, customer_name, customer_cpf, phone, address_json, raw_json, data_venda, previsao_entrega, previsao_montagem, observacoes_publicas, observacoes_internas, status, service_type, tem_frete_full, return_flag, last_return_reason, last_return_notes, department, product_group, product_subgroup),
           installer:installer_id (id, name)
         `)
         .is('assembly_route_id', null)
@@ -1108,9 +1115,40 @@ function AssemblyManagementContent() {
     if (wasSelected) {
       newSelected.delete(orderId);
     } else {
-      newSelected.add(orderId);
+      const relatedProducts = filteredGroupedProducts[orderId] || groupedProducts[orderId] || [];
+      const cpf = normalizeCpf(relatedProducts[0]?.order?.customer_cpf);
+      const orderIdsFromSameCpf = cpf ? (filteredOrderIdsByCpf.get(cpf) || []) : [];
+      const siblingOrderIds = orderIdsFromSameCpf.filter((id) => id !== orderId);
+      const hasUnselectedSibling = siblingOrderIds.some((id) => !newSelected.has(id));
+
+      if (cpf && siblingOrderIds.length > 0 && hasUnselectedSibling) {
+        newSelected.add(orderId);
+        setSelectedOrders(newSelected);
+        setSameCpfSelectionModal({
+          orderId,
+          cpf,
+          relatedOrderIds: siblingOrderIds,
+        });
+        return;
+      } else {
+        newSelected.add(orderId);
+      }
     }
     setSelectedOrders(newSelected);
+  };
+
+  const confirmSameCpfSelection = () => {
+    if (!sameCpfSelectionModal) return;
+
+    const nextSelected = new Set(selectedOrders);
+    nextSelected.add(sameCpfSelectionModal.orderId);
+    sameCpfSelectionModal.relatedOrderIds.forEach((id) => nextSelected.add(id));
+    setSelectedOrders(nextSelected);
+    setSameCpfSelectionModal(null);
+  };
+
+  const cancelSameCpfSelection = () => {
+    setSameCpfSelectionModal(null);
   };
 
   // Generate unique route code: RM-DDMMYY-XXX for assembly routes
@@ -1921,6 +1959,20 @@ function AssemblyManagementContent() {
     return filtered;
   }, [groupedProducts, filterCity, filterNeighborhood, filterDeadline, filterOrder, filterClient, filterSaleDateStart, filterSaleDateEnd, filterDeliveryDateStart, filterDeliveryDateEnd, filterForecastDateStart, filterForecastDateEnd, filterReturned, filterFull, filterServiceType, deliveryInfo, filterDepartment, filterSubgroup, filterMountPriority]);
 
+  const filteredOrderIdsByCpf = useMemo(() => {
+    const map = new Map<string, string[]>();
+
+    Object.entries(filteredGroupedProducts).forEach(([orderId, products]) => {
+      const cpf = normalizeCpf(products[0]?.order?.customer_cpf);
+      if (!cpf) return;
+      const current = map.get(cpf) || [];
+      if (!current.includes(orderId)) current.push(orderId);
+      map.set(cpf, current);
+    });
+
+    return map;
+  }, [filteredGroupedProducts]);
+
   const normalizeReturnedText = (value: unknown) => {
     if (value === null || typeof value === 'undefined') return '';
     return String(value).trim();
@@ -1995,7 +2047,7 @@ function AssemblyManagementContent() {
   };
 
   const orderRows = useMemo(() => {
-    const rows: Array<{ key: string; productId: string; orderId: string; dataVenda: string; entrega: string; previsao: string; pedido: string; cliente: string; telefone: string; produto: string; sku: string; obsPublicas: string; obsInternas: string; cidade: string; bairro: string; endereco: string; selected: boolean; wasReturned: boolean; prazoStatus: 'within' | 'out' | 'none'; temFreteFull: boolean; returnReason: string; returnObservation: string; returnTooltip: string; department: string; subgroup: string; mountPriority: MountPriority | null; }> = [];
+    const rows: Array<{ key: string; productId: string; orderId: string; dataVenda: string; entrega: string; previsao: string; pedido: string; cliente: string; telefone: string; produto: string; sku: string; obsPublicas: string; obsInternas: string; cidade: string; bairro: string; endereco: string; selected: boolean; wasReturned: boolean; prazoStatus: 'within' | 'out' | 'none'; temFreteFull: boolean; returnReason: string; returnObservation: string; returnTooltip: string; department: string; subgroup: string; mountPriority: MountPriority | null; sameCpfPendingCount: number; }> = [];
 
     // Helper para verificar se pedido tem Frete Full
     const isTrueValue = (v: any) => {
@@ -2022,6 +2074,8 @@ function AssemblyManagementContent() {
       const endereco = [addr.street, addr.number, addr.complement].filter(Boolean).join(', ') || '-';
       const selected = selectedOrders.has(orderId);
       const prazoStatus = getPrazoStatusForOrder(order);
+      const cpf = normalizeCpf(order?.customer_cpf);
+      const sameCpfPendingCount = cpf ? Math.max(0, (filteredOrderIdsByCpf.get(cpf)?.length || 0) - 1) : 0;
       // Verificar Frete Full: campo direto OU observações internas com *frete full*
       const temFreteFull = isTrueValue(order?.tem_frete_full) || isTrueValue(raw?.tem_frete_full) || obsInternas.toLowerCase().includes('*frete full*');
       products.forEach((ap, idx) => {
@@ -2040,11 +2094,11 @@ function AssemblyManagementContent() {
         const returnTooltip = buildReturnedTooltipText(returnReason, returnObservation);
         const department = String(order?.product_group || order?.department || '-');
         const subgroup = String(order?.product_subgroup || '-');
-        rows.push({ key: `${orderId}-${ap.id}-${idx}`, productId: ap.id, orderId, dataVenda, entrega, previsao, pedido, cliente, telefone, produto: ap.product_name || '-', sku: ap.product_sku || '-', obsPublicas, obsInternas, cidade, bairro, endereco, selected, wasReturned, prazoStatus, temFreteFull, returnReason, returnObservation, returnTooltip, department, subgroup, mountPriority: (ap.mount_priority || null) as MountPriority | null });
+        rows.push({ key: `${orderId}-${ap.id}-${idx}`, productId: ap.id, orderId, dataVenda, entrega, previsao, pedido, cliente, telefone, produto: ap.product_name || '-', sku: ap.product_sku || '-', obsPublicas, obsInternas, cidade, bairro, endereco, selected, wasReturned, prazoStatus, temFreteFull, returnReason, returnObservation, returnTooltip, department, subgroup, mountPriority: (ap.mount_priority || null) as MountPriority | null, sameCpfPendingCount });
       });
     });
     return rows;
-  }, [filteredGroupedProducts, deliveryInfo, selectedOrders, latestReturnedInfoByOrder]);
+  }, [filteredGroupedProducts, deliveryInfo, selectedOrders, latestReturnedInfoByOrder, filteredOrderIdsByCpf]);
 
   // Apply sorting
   const sortedOrderRows = useMemo(() => {
@@ -2555,6 +2609,11 @@ function AssemblyManagementContent() {
                                                   {row.mountPriority && (
                                                     <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold ${MOUNT_PRIORITY_BADGE_CLASS[row.mountPriority]}`} title="Prioridade de montagem definida manualmente">
                                                       Prioridade {MOUNT_PRIORITY_LABEL[row.mountPriority]}
+                                                    </span>
+                                                  )}
+                                                  {row.sameCpfPendingCount > 0 && (
+                                                    <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-indigo-100 text-indigo-800 border border-indigo-200" title="Cliente com outros pedidos aguardando roteirização neste mesmo CPF">
+                                                      +{row.sameCpfPendingCount} pedido{row.sameCpfPendingCount > 1 ? 's' : ''} no CPF
                                                     </span>
                                                   )}
                                                   {row.prazoStatus === 'out' ? (
@@ -3827,6 +3886,53 @@ function AssemblyManagementContent() {
                     </li>
                   ))}
                 </ul>
+              </div>
+            </div>
+          </div>
+        )
+      }
+
+      {
+        sameCpfSelectionModal && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[70] flex items-center justify-center p-4 animate-in fade-in duration-200">
+            <div className="w-full max-w-md overflow-hidden rounded-2xl bg-white shadow-2xl border border-gray-100">
+              <div className="bg-gradient-to-r from-amber-500 to-orange-500 px-6 py-5">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-white/20">
+                    <AlertTriangle className="h-6 w-6 text-white" />
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-bold text-white">Pedidos do Mesmo Cliente</h3>
+                    <p className="text-sm text-orange-50">Mesmo CPF aguardando roteirização</p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="px-6 py-5 space-y-4">
+                <p className="text-sm leading-relaxed text-gray-700">
+                  Este cliente possui <strong>{sameCpfSelectionModal.relatedOrderIds.length}</strong> outro(s) pedido(s) aguardando roteirização.
+                  Se confirmar, o sistema marcará todos os pedidos visíveis deste mesmo CPF.
+                </p>
+
+                <div className="rounded-xl border border-amber-100 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                  <div><strong>CPF:</strong> {sameCpfSelectionModal.cpf}</div>
+                  <div><strong>Pedidos adicionais:</strong> {sameCpfSelectionModal.relatedOrderIds.length}</div>
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-3 bg-gray-50 px-6 py-4">
+                <button
+                  onClick={cancelSameCpfSelection}
+                  className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-xl hover:bg-gray-50"
+                >
+                  Manter só este
+                </button>
+                <button
+                  onClick={confirmSameCpfSelection}
+                  className="inline-flex items-center px-4 py-2 text-sm font-semibold text-white bg-orange-600 rounded-xl hover:bg-orange-700 shadow-sm"
+                >
+                  Marcar todos deste CPF
+                </button>
               </div>
             </div>
           </div>
