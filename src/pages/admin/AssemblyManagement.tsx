@@ -55,6 +55,33 @@ import { calculateAssemblyStats } from '../../utils/assemblyKitLogic';
 
 registerLocale('pt-BR', ptBR);
 
+const MOUNT_PRIORITY_OPTIONS = [
+  { value: 'alta', label: 'Alta' },
+  { value: 'media', label: 'Média' },
+  { value: 'baixa', label: 'Baixa' },
+] as const;
+
+type MountPriority = typeof MOUNT_PRIORITY_OPTIONS[number]['value'];
+
+const MOUNT_PRIORITY_LABEL: Record<MountPriority, string> = {
+  alta: 'Alta',
+  media: 'Média',
+  baixa: 'Baixa',
+};
+
+const MOUNT_PRIORITY_BADGE_CLASS: Record<MountPriority, string> = {
+  alta: 'bg-red-100 text-red-800 border border-red-200',
+  media: 'bg-amber-100 text-amber-800 border border-amber-200',
+  baixa: 'bg-sky-100 text-sky-800 border border-sky-200',
+};
+
+const getHighestMountPriority = (priorities: Array<string | null | undefined>): MountPriority | null => {
+  if (priorities.some((priority) => priority === 'alta')) return 'alta';
+  if (priorities.some((priority) => priority === 'media')) return 'media';
+  if (priorities.some((priority) => priority === 'baixa')) return 'baixa';
+  return null;
+};
+
 // --- ERROR BOUNDARY ---
 class AssemblyManagementErrorBoundary extends React.Component<
   { children: React.ReactNode },
@@ -225,6 +252,8 @@ function AssemblyManagementContent() {
   const [filterFreightFull, setFilterFreightFull] = useState<string>('');
   const [filterHasAssembly, setFilterHasAssembly] = useState<boolean>(false);
   const [strictDepartment, setStrictDepartment] = useState<boolean>(false);
+  const [filterMountPriority, setFilterMountPriority] = useState<'all' | MountPriority>('all');
+  const [updatingPriorityIds, setUpdatingPriorityIds] = useState<Set<string>>(new Set());
 
   const [showFilters, setShowFilters] = useState(true);
 
@@ -387,6 +416,7 @@ function AssemblyManagementContent() {
           if ('returned' in f) setFilterReturned(Boolean(f.returned));
           if ('full' in f) setFilterFull(Boolean(f.full));
           if ('serviceType' in f) setFilterServiceType(f.serviceType || '');
+          if ('mountPriority' in f) setFilterMountPriority(f.mountPriority || 'all');
         }
       }
     } catch { }
@@ -409,10 +439,11 @@ function AssemblyManagementContent() {
         returned: filterReturned,
         full: filterFull,
         serviceType: filterServiceType,
+        mountPriority: filterMountPriority,
       };
       localStorage.setItem('am_filters', JSON.stringify(payload));
     } catch { }
-  }, [filterCity, filterNeighborhood, filterDeadline, filterOrder, filterClient, filterSaleDateStart, filterSaleDateEnd, filterDeliveryDateStart, filterDeliveryDateEnd, filterForecastDateStart, filterForecastDateEnd, filterReturned, filterFull, filterServiceType]);
+  }, [filterCity, filterNeighborhood, filterDeadline, filterOrder, filterClient, filterSaleDateStart, filterSaleDateEnd, filterDeliveryDateStart, filterDeliveryDateEnd, filterForecastDateStart, filterForecastDateEnd, filterReturned, filterFull, filterServiceType, filterMountPriority]);
 
   // --- MEMOS (Options) ---
   const cityOptions = useMemo(() => {
@@ -747,7 +778,7 @@ function AssemblyManagementContent() {
       const { data: productsPending } = await supabase
         .from('assembly_products')
         .select(`
-          id, order_id, product_name, product_sku, status, assembly_route_id, created_at, updated_at, was_returned, observations, returned_at,
+          id, order_id, product_name, product_sku, mount_priority, status, assembly_route_id, created_at, updated_at, was_returned, observations, returned_at,
           order:order_id!inner (id, order_id_erp, customer_name, phone, address_json, raw_json, data_venda, previsao_entrega, previsao_montagem, observacoes_publicas, observacoes_internas, status, service_type, tem_frete_full, return_flag, last_return_reason, last_return_notes, department, product_group, product_subgroup),
           installer:installer_id (id, name)
         `)
@@ -811,7 +842,7 @@ function AssemblyManagementContent() {
           const { data: productsR } = await supabase
             .from('assembly_products')
             .select(`
-              id, order_id, product_name, product_sku, status, assembly_route_id, created_at, updated_at, was_returned, completion_date, returned_at, observations,
+              id, order_id, product_name, product_sku, mount_priority, status, assembly_route_id, created_at, updated_at, was_returned, completion_date, returned_at, observations,
               order:order_id (id, order_id_erp, customer_name, phone, address_json, raw_json, items_json, data_venda, previsao_entrega, previsao_montagem, return_flag, last_return_reason, last_return_notes, department, product_group, product_subgroup),
               installer:installer_id (id, name)
             `)
@@ -997,6 +1028,60 @@ function AssemblyManagementContent() {
       fetchDeliveryRouteCatalog();
     }
   }, [showCreateModal]);
+
+  const handleMountPriorityChange = async (productId: string, priority: '' | MountPriority) => {
+    const nextPriority = priority || null;
+    setUpdatingPriorityIds((prev) => new Set(prev).add(productId));
+
+    const updateLocalPriority = (products: AssemblyProductWithDetails[]) =>
+      products.map((product) => (
+        product.id === productId
+          ? { ...product, mount_priority: nextPriority }
+          : product
+      ));
+
+    try {
+      const { error } = await supabase
+        .from('assembly_products')
+        .update({
+          mount_priority: nextPriority,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', productId);
+
+      if (error) throw error;
+
+      setAssemblyProducts((prev) => updateLocalPriority(prev));
+      setAssemblyPending((prev) => updateLocalPriority(prev));
+      setAssemblyInRoutes((prev) => updateLocalPriority(prev));
+      setOrderProductsModal((prev) => (
+        prev
+          ? {
+            ...prev,
+            products: updateLocalPriority(prev.products),
+          }
+          : prev
+      ));
+      setSelectedRoute((prev) => {
+        if (!prev || !(prev as any).assembly_products) return prev;
+        return {
+          ...prev,
+          assembly_products: updateLocalPriority((prev as any).assembly_products),
+        } as any;
+      });
+
+      toast.success(nextPriority ? `Prioridade ${MOUNT_PRIORITY_LABEL[nextPriority].toLowerCase()} definida` : 'Prioridade removida');
+    } catch (error) {
+      console.error('Erro ao atualizar prioridade de montagem:', error);
+      toast.error('Erro ao atualizar prioridade');
+    } finally {
+      setUpdatingPriorityIds((prev) => {
+        const next = new Set(prev);
+        next.delete(productId);
+        return next;
+      });
+    }
+  };
 
   // Realtime removido: assinaturas sem filtro em assembly_routes/assembly_products
   // sobrecarregavam o pool de conexões do Supabase durante operações em lote.
@@ -1715,7 +1800,13 @@ function AssemblyManagementContent() {
     };
 
     Object.entries(groupedProducts).forEach(([orderId, products]) => {
-      const firstProduct = products[0];
+      const productsByPriority = filterMountPriority === 'all'
+        ? products
+        : products.filter((product) => product.mount_priority === filterMountPriority);
+
+      if (productsByPriority.length === 0) return;
+
+      const firstProduct = productsByPriority[0];
       const order = firstProduct?.order as any;
       const addr = (order?.address_json || {}) as any;
 
@@ -1804,7 +1895,7 @@ function AssemblyManagementContent() {
       // Assembly Management works on Order Grouping.
       // We'll check if the order (or its products) match.
       // Simplified: check field on order record if available or first product.
-      const brand = String((order as any)?.brand || raw?.marca || (products[0] as any)?.product_brand || '').toLowerCase();
+      const brand = String((order as any)?.brand || raw?.marca || (productsByPriority[0] as any)?.product_brand || '').toLowerCase();
 
       const matchFilial = filterFilialVenda ? filial === filterFilialVenda.toLowerCase() : true;
       const matchSeller = filterSeller ? seller === filterSeller.toLowerCase() : true;
@@ -1817,18 +1908,18 @@ function AssemblyManagementContent() {
       // We check if order.items_json has any helper or if products list implies it.
       // Since this is Assembly Management, MOST items should have assembly.
       // But maybe some don't?
-      const matchHasAssembly = filterHasAssembly ? (products.some(p => isTrueValue((p as any).produto_e_montavel) || isTrueValue((p as any).has_assembly))) : true;
+      const matchHasAssembly = filterHasAssembly ? (productsByPriority.some(p => isTrueValue((p as any).produto_e_montavel) || isTrueValue((p as any).has_assembly))) : true;
 
       // Strict Department (if enabled) - usually means only show orders where ALL items match department? 
       // Ignored for now as strictDepartment state isn't toggleable in UI yet.
 
       if (matchCity && matchNeighborhood && matchPrazo && matchOrder && matchClient && matchSaleDate && matchDeliveryDate && matchForecastDate && matchReturned && matchFull && matchServiceType && matchDepartment && matchSubgroup && matchFilial && matchSeller && matchOperation && matchHasAssembly) {
-        filtered[orderId] = products;
+        filtered[orderId] = productsByPriority;
       }
     });
 
     return filtered;
-  }, [groupedProducts, filterCity, filterNeighborhood, filterDeadline, filterOrder, filterClient, filterSaleDateStart, filterSaleDateEnd, filterDeliveryDateStart, filterDeliveryDateEnd, filterForecastDateStart, filterForecastDateEnd, filterReturned, filterFull, filterServiceType, deliveryInfo, filterDepartment, filterSubgroup]);
+  }, [groupedProducts, filterCity, filterNeighborhood, filterDeadline, filterOrder, filterClient, filterSaleDateStart, filterSaleDateEnd, filterDeliveryDateStart, filterDeliveryDateEnd, filterForecastDateStart, filterForecastDateEnd, filterReturned, filterFull, filterServiceType, deliveryInfo, filterDepartment, filterSubgroup, filterMountPriority]);
 
   const normalizeReturnedText = (value: unknown) => {
     if (value === null || typeof value === 'undefined') return '';
@@ -1904,7 +1995,7 @@ function AssemblyManagementContent() {
   };
 
   const orderRows = useMemo(() => {
-    const rows: Array<{ key: string; orderId: string; dataVenda: string; entrega: string; previsao: string; pedido: string; cliente: string; telefone: string; produto: string; sku: string; obsPublicas: string; obsInternas: string; cidade: string; bairro: string; endereco: string; selected: boolean; wasReturned: boolean; prazoStatus: 'within' | 'out' | 'none'; temFreteFull: boolean; returnReason: string; returnObservation: string; returnTooltip: string; department: string; subgroup: string; }> = [];
+    const rows: Array<{ key: string; productId: string; orderId: string; dataVenda: string; entrega: string; previsao: string; pedido: string; cliente: string; telefone: string; produto: string; sku: string; obsPublicas: string; obsInternas: string; cidade: string; bairro: string; endereco: string; selected: boolean; wasReturned: boolean; prazoStatus: 'within' | 'out' | 'none'; temFreteFull: boolean; returnReason: string; returnObservation: string; returnTooltip: string; department: string; subgroup: string; mountPriority: MountPriority | null; }> = [];
 
     // Helper para verificar se pedido tem Frete Full
     const isTrueValue = (v: any) => {
@@ -1949,7 +2040,7 @@ function AssemblyManagementContent() {
         const returnTooltip = buildReturnedTooltipText(returnReason, returnObservation);
         const department = String(order?.product_group || order?.department || '-');
         const subgroup = String(order?.product_subgroup || '-');
-        rows.push({ key: `${orderId}-${ap.id}-${idx}`, orderId, dataVenda, entrega, previsao, pedido, cliente, telefone, produto: ap.product_name || '-', sku: ap.product_sku || '-', obsPublicas, obsInternas, cidade, bairro, endereco, selected, wasReturned, prazoStatus, temFreteFull, returnReason, returnObservation, returnTooltip, department, subgroup });
+        rows.push({ key: `${orderId}-${ap.id}-${idx}`, productId: ap.id, orderId, dataVenda, entrega, previsao, pedido, cliente, telefone, produto: ap.product_name || '-', sku: ap.product_sku || '-', obsPublicas, obsInternas, cidade, bairro, endereco, selected, wasReturned, prazoStatus, temFreteFull, returnReason, returnObservation, returnTooltip, department, subgroup, mountPriority: (ap.mount_priority || null) as MountPriority | null });
       });
     });
     return rows;
@@ -2255,6 +2346,20 @@ function AssemblyManagementContent() {
                   </div>
                 </div>
 
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-gray-500 uppercase">Prioridade Montagem</label>
+                  <select
+                    value={filterMountPriority}
+                    onChange={(e) => setFilterMountPriority(e.target.value as 'all' | MountPriority)}
+                    className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-700"
+                  >
+                    <option value="all">Todas</option>
+                    {MOUNT_PRIORITY_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                </div>
+
               </div>
 
               <div className="flex justify-end mt-4 pt-4 border-t border-gray-100">
@@ -2283,6 +2388,7 @@ function AssemblyManagementContent() {
                     setFilterBrand('');
                     setFilterFreightFull('');
                     setFilterHasAssembly(false);
+                    setFilterMountPriority('all');
                     setStrictLocal(false);
                   }}
                   className="text-sm text-red-600 hover:text-red-800 font-medium flex items-center"
@@ -2446,6 +2552,11 @@ function AssemblyManagementContent() {
                                                       ⚡ Full
                                                     </span>
                                                   )}
+                                                  {row.mountPriority && (
+                                                    <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold ${MOUNT_PRIORITY_BADGE_CLASS[row.mountPriority]}`} title="Prioridade de montagem definida manualmente">
+                                                      Prioridade {MOUNT_PRIORITY_LABEL[row.mountPriority]}
+                                                    </span>
+                                                  )}
                                                   {row.prazoStatus === 'out' ? (
                                                     <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-800">
                                                       ⏰ Fora do Prazo
@@ -2459,6 +2570,22 @@ function AssemblyManagementContent() {
                                                       Sem Previsao
                                                     </span>
                                                   )}
+                                                  <select
+                                                    value={row.mountPriority || ''}
+                                                    disabled={updatingPriorityIds.has(row.productId)}
+                                                    onClick={(e) => e.stopPropagation()}
+                                                    onChange={(e) => {
+                                                      e.stopPropagation();
+                                                      void handleMountPriorityChange(row.productId, e.target.value as '' | MountPriority);
+                                                    }}
+                                                    className="h-7 rounded-md border border-gray-200 bg-white px-2 text-xs text-gray-700 disabled:opacity-60"
+                                                    title="Definir prioridade do produto"
+                                                  >
+                                                    <option value="">Sem prioridade</option>
+                                                    {MOUNT_PRIORITY_OPTIONS.map((option) => (
+                                                      <option key={option.value} value={option.value}>{option.label}</option>
+                                                    ))}
+                                                  </select>
                                                 </div>
                                               ) :
                                                 c.id === 'produto' ? row.produto :
@@ -2794,6 +2921,12 @@ function AssemblyManagementContent() {
                                   route_code: (route as any).route_code,
                                 };
 
+                                const assemblyPrioritiesByOrder = products.reduce((acc, product) => {
+                                  const orderId = String(product.order_id || '');
+                                  acc[orderId] = getHighestMountPriority([acc[orderId], product.mount_priority]);
+                                  return acc;
+                                }, {} as Record<string, MountPriority | null>);
+
                                 const data = {
                                   route: routeData,
                                   routeOrders,
@@ -2801,6 +2934,7 @@ function AssemblyManagementContent() {
                                   vehicle: undefined,
                                   orders: orders as any,
                                   generatedAt: new Date().toISOString(),
+                                  assemblyPrioritiesByOrder,
                                   assemblyInstallerName: montador?.name || montador?.email || '—',
                                   assemblyVehicleModel: vehicle?.model || '',
                                   assemblyVehiclePlate: vehicle?.plate || '',
@@ -3578,6 +3712,9 @@ function AssemblyManagementContent() {
                                             vehicle: undefined,
                                             orders: [order] as any,
                                             generatedAt: new Date().toISOString(),
+                                            assemblyPrioritiesByOrder: {
+                                              [String(order.id)]: getHighestMountPriority(list.map((item) => item.mount_priority)),
+                                            },
                                             assemblyInstallerName: m?.name || m?.email || '—',
                                             assemblyVehicleModel: v?.model || '',
                                             assemblyVehiclePlate: v?.plate || ''
@@ -3670,8 +3807,23 @@ function AssemblyManagementContent() {
                 <ul className="divide-y divide-gray-200">
                   {orderProductsModal.products.map((p) => (
                     <li key={p.id} className="py-3">
-                      <div className="text-sm font-medium text-gray-900">{p.product_name}</div>
-                      <div className="text-xs text-gray-500">SKU: {p.product_sku || '-'}</div>
+                      <div className="flex items-start justify-between gap-4">
+                        <div>
+                          <div className="text-sm font-medium text-gray-900">{p.product_name}</div>
+                          <div className="text-xs text-gray-500">SKU: {p.product_sku || '-'}</div>
+                        </div>
+                        <select
+                          value={p.mount_priority || ''}
+                          disabled={updatingPriorityIds.has(p.id)}
+                          onChange={(e) => void handleMountPriorityChange(p.id, e.target.value as '' | MountPriority)}
+                          className="h-9 rounded-lg border border-gray-200 bg-white px-3 text-sm text-gray-700 disabled:opacity-60"
+                        >
+                          <option value="">Sem prioridade</option>
+                          {MOUNT_PRIORITY_OPTIONS.map((option) => (
+                            <option key={option.value} value={option.value}>{option.label}</option>
+                          ))}
+                        </select>
+                      </div>
                     </li>
                   ))}
                 </ul>
@@ -4015,6 +4167,11 @@ function AssemblyManagementContent() {
                       };
                       const m = montadores.find(m => m.id === (route as any).assembler_id);
                       const v = vehicles.find(v => v.id === (route as any).vehicle_id);
+                      const assemblyPrioritiesByOrder = products.reduce((acc, product) => {
+                        const orderId = String(product.order_id || '');
+                        acc[orderId] = getHighestMountPriority([acc[orderId], product.mount_priority]);
+                        return acc;
+                      }, {} as Record<string, MountPriority | null>);
                       const data = {
                         route: routeData,
                         routeOrders,
@@ -4022,6 +4179,7 @@ function AssemblyManagementContent() {
                         vehicle: undefined,
                         orders: orders as any,
                         generatedAt: new Date().toISOString(),
+                        assemblyPrioritiesByOrder,
                         assemblyInstallerName: m?.name || m?.email || '—',
                         assemblyVehicleModel: v?.model || '',
                         assemblyVehiclePlate: v?.plate || ''

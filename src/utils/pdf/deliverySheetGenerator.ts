@@ -10,6 +10,7 @@ export interface DeliverySheetData {
   orders: Order[];
   generatedAt: string;
   printScope?: 'all' | 'full' | 'carrier' | 'normal';
+  assemblyPrioritiesByOrder?: Record<string, 'baixa' | 'media' | 'alta' | null | undefined>;
   assemblyInstallerName?: string;
   assemblyVehicleModel?: string;
   assemblyVehiclePlate?: string;
@@ -250,6 +251,20 @@ export class DeliverySheetGenerator {
           font: helveticaBoldFont,
           color: rgb(0.86, 0.1, 0.1),
           opacity: 0.22,
+          rotate: degrees(35),
+        });
+      }
+
+      const assemblyPriority = data.assemblyPrioritiesByOrder?.[oid] || null;
+      if (isAssemblySheet && assemblyPriority) {
+        const watermarkY = Math.max(margin + 48, y - (totalBlockHeight * 0.58));
+        page.drawText(this.getAssemblyPriorityWatermarkText(assemblyPriority), {
+          x: width - margin - 250,
+          y: watermarkY,
+          size: assemblyPriority === 'alta' ? 36 : 30,
+          font: helveticaBoldFont,
+          color: this.getAssemblyPriorityWatermarkColor(assemblyPriority),
+          opacity: assemblyPriority === 'alta' ? 0.18 : 0.14,
           rotate: degrees(35),
         });
       }
@@ -559,6 +574,18 @@ export class DeliverySheetGenerator {
   // Use centralized sanitization from pdfTextSanitizer.ts
   private static wrapText(text: string, maxWidth: number, font: any, size: number): string[] {
     return wrapTextSafe(text, maxWidth, font, size);
+  }
+
+  private static getAssemblyPriorityWatermarkText(priority: 'baixa' | 'media' | 'alta'): string {
+    if (priority === 'alta') return 'PRIORIDADE ALTA';
+    if (priority === 'media') return 'PRIORIDADE MEDIA';
+    return 'PRIORIDADE BAIXA';
+  }
+
+  private static getAssemblyPriorityWatermarkColor(priority: 'baixa' | 'media' | 'alta') {
+    if (priority === 'alta') return rgb(0.78, 0.15, 0.15);
+    if (priority === 'media') return rgb(0.8, 0.5, 0.08);
+    return rgb(0.1, 0.45, 0.75);
   }
 
   private static resolveSaleDateRaw(order: any): any {

@@ -327,6 +327,7 @@ export interface AssemblyProduct {
   order_id: string;
   product_name: string;
   product_sku?: string;
+  mount_priority?: 'baixa' | 'media' | 'alta' | null;
   customer_name: string;
   customer_phone?: string;
   installation_address: Address;
