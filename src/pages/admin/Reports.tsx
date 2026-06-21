@@ -1,4 +1,4 @@
-import { ArrowRight, FileSpreadsheet, Hammer, Truck } from 'lucide-react';
+import { ArrowRight, FileSpreadsheet, Goal, Hammer, Truck } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
 type ReportCard = {
@@ -29,6 +29,15 @@ const REPORT_CARDS: ReportCard[] = [
     icon: Hammer,
     accent: 'from-orange-500 to-amber-500',
     iconBg: 'bg-orange-50 text-orange-700',
+  },
+  {
+    id: 'delivery-goal',
+    title: 'Relatorio de Meta de Entrega',
+    description: 'Acompanhe metas semanais e mensais por motorista ou ajudante usando apenas rotas finalizadas.',
+    href: '/admin/reports/delivery-goal',
+    icon: Goal,
+    accent: 'from-emerald-600 to-teal-500',
+    iconBg: 'bg-emerald-50 text-emerald-700',
   },
 ];
 
