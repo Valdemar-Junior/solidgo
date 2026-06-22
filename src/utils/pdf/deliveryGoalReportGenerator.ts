@@ -14,6 +14,7 @@ export type DeliveryGoalRouteBreakdown = {
 export type DeliveryGoalPersonRow = {
   personId: string;
   personName: string;
+  personType: string;
   received: number;
   delivered: number;
   returned: number;
@@ -32,9 +33,11 @@ export type DeliveryGoalWeekSection = {
 };
 
 export type DeliveryGoalReportData = {
-  monthLabel: string;
+  periodLabel: string;
   viewLabel: string;
-  personLabel?: string;
+  peopleLabel?: string;
+  quantityTarget: number;
+  showRouteDetails?: boolean;
   generatedAt: string;
   weeklySections: DeliveryGoalWeekSection[];
   monthlyRows: DeliveryGoalPersonRow[];
@@ -118,9 +121,9 @@ export class DeliveryGoalReportGenerator {
       drawText(`Gerado em ${formatDateTime(data.generatedAt)}`, pageWidth - 240, y + 2, 9, false, rgb(0.45, 0.45, 0.5));
       y -= 24;
 
-      drawText(`Periodo: ${data.monthLabel}`, margin, y, 9, false, rgb(0.35, 0.35, 0.4));
+      drawText(`Periodo: ${data.periodLabel}`, margin, y, 9, false, rgb(0.35, 0.35, 0.4));
       drawText(`Visao: ${data.viewLabel}`, margin + 170, y, 9, false, rgb(0.35, 0.35, 0.4));
-      drawText(`Pessoa: ${data.personLabel || 'Todas'}`, margin + 320, y, 9, false, rgb(0.35, 0.35, 0.4));
+      drawText(`Pessoas: ${data.peopleLabel || 'Todas'}`, margin + 320, y, 9, false, rgb(0.35, 0.35, 0.4));
       y -= 16;
 
       page.drawLine({
@@ -142,7 +145,7 @@ export class DeliveryGoalReportGenerator {
         { label: 'Meta atingida', value: approved, color: rgb(0.07, 0.63, 0.34) },
         { label: 'Atingida por desempenho', value: approvedByPerformance, color: rgb(0.12, 0.43, 0.82) },
         { label: 'Meta nao atingida', value: failed, color: rgb(0.75, 0.22, 0.17) },
-        { label: 'Recebido no mes', value: totalReceived, color: rgb(0.78, 0.45, 0.08) },
+        { label: 'Recebido no periodo', value: totalReceived, color: rgb(0.78, 0.45, 0.08) },
       ];
 
       ensureSpace(92);
@@ -184,14 +187,14 @@ export class DeliveryGoalReportGenerator {
     const drawTable = (rows: DeliveryGoalPersonRow[]) => {
       const columns = [
         { key: 'personName', label: 'Pessoa', width: 128 },
+        { key: 'personType', label: 'Tipo', width: 54 },
         { key: 'received', label: 'Recebido', width: 58 },
         { key: 'delivered', label: 'Entregue', width: 58 },
         { key: 'returned', label: 'Retornado', width: 60 },
         { key: 'quantity', label: 'Meta qtd.', width: 72 },
         { key: 'performance', label: '% desempenho', width: 78 },
         { key: 'perfMet', label: 'Meta desp.', width: 70 },
-        { key: 'result', label: 'Resultado', width: 104 },
-        { key: 'routes', label: 'Rotas', width: 129 },
+        { key: 'result', label: 'Resultado', width: 120 },
       ] as const;
 
       const tableWidth = columns.reduce((sum, column) => sum + column.width, 0);
@@ -220,20 +223,13 @@ export class DeliveryGoalReportGenerator {
       }
 
       rows.forEach((row) => {
-        const routeLines = row.routes.length
-          ? row.routes.map((route) => {
-              const routeLabel = route.routeCode ? `${route.routeCode} - ${route.routeName}` : route.routeName;
-              return `${routeLabel} (${route.received}/${route.delivered}/${route.returned})`;
-            })
-          : ['-'];
-
-        const detailsHeight = Math.max(routeLines.length * 10, 10);
-        const rowHeight = 14 + detailsHeight + 12;
+        const rowHeight = 28;
         ensureSpace(rowHeight);
 
         let x = margin + 4;
         const values = {
           personName: fitTextSafe(row.personName, 120, font, 8),
+          personType: fitTextSafe(row.personType, 46, font, 8),
           received: String(row.received),
           delivered: String(row.delivered),
           returned: String(row.returned),
@@ -242,22 +238,13 @@ export class DeliveryGoalReportGenerator {
           perfMet: row.performanceTargetMet ? 'Sim' : 'Nao',
           result: fitTextSafe(
             row.finalResult === 'Meta Nao Atingida' ? 'Meta nao atingida' : row.finalResult,
-            96,
+            112,
             font,
             8
           ),
         };
 
         columns.forEach((column) => {
-          if (column.key === 'routes') {
-            const routeText = routeLines.map((line) => fitTextSafe(line, column.width - 8, font, 7));
-            routeText.forEach((line, index) => {
-              drawText(line, x, y - 2 - index * 10, 7, false, rgb(0.18, 0.18, 0.2));
-            });
-            x += column.width;
-            return;
-          }
-
           const rawValue = values[column.key as keyof typeof values] || '-';
           drawText(
             rawValue,
@@ -271,9 +258,7 @@ export class DeliveryGoalReportGenerator {
         });
 
         y -= 14;
-
-        drawText(`Analise: ${row.analysis}`, margin + 8, y - 1, 7, false, rgb(0.45, 0.45, 0.5));
-        y -= detailsHeight + 10;
+        y -= 8;
 
         page.drawLine({
           start: { x: margin, y: y + 2 },
@@ -286,14 +271,44 @@ export class DeliveryGoalReportGenerator {
       y -= 8;
     };
 
+    const drawRouteDetails = (title: string, rows: DeliveryGoalPersonRow[]) => {
+      if (!data.showRouteDetails) return;
+
+      rows.forEach((row) => {
+        if (row.routes.length === 0) return;
+
+        ensureSpace(24);
+        drawText(`${title} - ${row.personName}`, margin, y, 10, true, rgb(0.16, 0.18, 0.24));
+        y -= 14;
+
+        row.routes.forEach((route) => {
+          ensureSpace(18);
+          const label = route.routeCode ? `${route.routeCode} - ${route.routeName}` : route.routeName;
+          drawText(
+            `${label} | Finalizada em ${formatDateTime(route.completedAt)} | ${route.received}/${route.delivered}/${route.returned}`,
+            margin + 8,
+            y,
+            8,
+            false,
+            rgb(0.35, 0.35, 0.4)
+          );
+          y -= 12;
+        });
+
+        y -= 8;
+      });
+    };
+
     drawHeader();
     drawSummary();
-    drawSectionTitle('Consolidado mensal');
+    drawSectionTitle(`Consolidado do periodo - meta base ${data.quantityTarget}`);
     drawTable(data.monthlyRows);
+    drawRouteDetails('Rotas do consolidado', data.monthlyRows);
 
     data.weeklySections.forEach((section) => {
       drawSectionTitle(section.label);
       drawTable(section.rows);
+      drawRouteDetails(section.label, section.rows);
     });
 
     const pages = pdfDoc.getPages();

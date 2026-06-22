@@ -1014,7 +1014,11 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
         }
 
         // 1. Marcar rota como concluída
-        const { error } = await supabase.from('routes').update({ status: 'completed' }).eq('id', routeId);
+        const completedAt = new Date().toISOString();
+        const { error } = await supabase
+          .from('routes')
+          .update({ status: 'completed', completed_at: completedAt, updated_at: completedAt })
+          .eq('id', routeId);
         if (error) throw error;
 
         try {
@@ -1055,7 +1059,7 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
         }
 
         toast.success('Rota finalizada com sucesso!');
-        setRouteDetails((prev: any) => ({ ...prev, status: 'completed' }));
+        setRouteDetails((prev: any) => ({ ...prev, status: 'completed', completed_at: completedAt, updated_at: completedAt }));
         if (onUpdated) onUpdated();
       } else {
         // Offline: Queue route completion
@@ -1065,7 +1069,7 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
         });
 
         // Local update
-        setRouteDetails((prev: any) => ({ ...prev, status: 'completed' }));
+        setRouteDetails((prev: any) => ({ ...prev, status: 'completed', completed_at: confirmation.local_timestamp, updated_at: confirmation.local_timestamp }));
         toast.success('Rota finalizada (offline). Será sincronizada quando online.');
       }
 

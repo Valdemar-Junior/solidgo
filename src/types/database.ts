@@ -225,6 +225,7 @@ export interface Route {
   status: 'pending' | 'in_progress' | 'completed';
   created_at: string;
   updated_at: string;
+  completed_at?: string | null;
   team_id?: string;
   helper_id?: string;
   conferente_id?: string;

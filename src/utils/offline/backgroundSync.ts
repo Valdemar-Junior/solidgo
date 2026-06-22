@@ -234,7 +234,11 @@ export class BackgroundSyncService {
     if (!route_id) throw new Error('Invalid route_completion payload');
 
     // 1. Mark route as completed
-    const { error } = await supabase.from('routes').update({ status: 'completed' }).eq('id', route_id);
+    const completedAt = data.local_timestamp || new Date().toISOString();
+    const { error } = await supabase
+      .from('routes')
+      .update({ status: 'completed', completed_at: completedAt, updated_at: completedAt })
+      .eq('id', route_id);
     if (error) throw error;
 
     try {

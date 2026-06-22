@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { ArrowLeft, CalendarRange, Eye, FileSpreadsheet, Loader2, Route, RotateCcw, Truck, UserCircle2, Users } from 'lucide-react';
+import { Fragment, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { ArrowDown, ArrowLeft, ArrowRight, CalendarRange, Eye, FileSpreadsheet, Loader2, RotateCcw, Route, Truck, UserCircle2, Users } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
+import { MultiSelect } from '../../components/ui/MultiSelect';
 import { supabase } from '../../supabase/client';
 import { DeliverySheetGenerator } from '../../utils/pdf/deliverySheetGenerator';
 import {
@@ -17,12 +18,14 @@ type ViewMode = 'driver' | 'helper';
 type PersonOption = {
   id: string;
   name: string;
+  type: ViewMode;
 };
 
 type FiltersState = {
-  month: string;
-  viewMode: ViewMode;
-  personId: string;
+  startDate: string;
+  endDate: string;
+  viewModes: ViewMode[];
+  personIds: string[];
 };
 
 type CompletedRouteRow = {
@@ -30,6 +33,7 @@ type CompletedRouteRow = {
   name?: string | null;
   route_code?: string | null;
   status: string;
+  completed_at?: string | null;
   updated_at?: string | null;
   driver_id?: string | null;
   helper_id?: string | null;
@@ -57,30 +61,16 @@ type PreviewData = {
 const MONTHLY_TARGET = 480;
 const WEEKLY_TARGET = 120;
 
-const getCurrentMonth = () => new Date().toISOString().slice(0, 7);
-
 const createInitialFilters = (): FiltersState => ({
-  month: getCurrentMonth(),
-  viewMode: 'driver',
-  personId: '',
+  startDate: new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().slice(0, 10),
+  endDate: new Date().toISOString().slice(0, 10),
+  viewModes: ['driver', 'helper'],
+  personIds: [],
 });
-
-const formatMonthLabel = (month: string) => {
-  const [year, monthIndex] = month.split('-').map(Number);
-  const date = new Date(year, (monthIndex || 1) - 1, 1);
-  return date.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
-};
 
 const normalizeText = (value: unknown) => String(value || '').trim();
 
 const formatPercent = (value: number) => `${value.toFixed(2).replace('.', ',')}%`;
-
-const getMonthBounds = (month: string) => {
-  const [year, monthIndex] = month.split('-').map(Number);
-  const start = new Date(year, (monthIndex || 1) - 1, 1);
-  const end = new Date(year, monthIndex || 1, 0);
-  return { start, end };
-};
 
 const toStartOfDayIso = (date: Date) => {
   const local = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0, 0);
@@ -92,15 +82,23 @@ const toEndOfDayIso = (date: Date) => {
   return local.toISOString();
 };
 
-const getCalendarWeekSections = (month: string) => {
-  const { start, end } = getMonthBounds(month);
+const formatPeriodLabel = (startDate: string, endDate: string) => {
+  const start = new Date(`${startDate}T00:00:00`);
+  const end = new Date(`${endDate}T00:00:00`);
+  return `${start.toLocaleDateString('pt-BR')} a ${end.toLocaleDateString('pt-BR')}`;
+};
+
+const getCalendarWeekSections = (startDate: string, endDate: string) => {
+  const start = new Date(`${startDate}T00:00:00`);
+  const end = new Date(`${endDate}T00:00:00`);
   const result: Array<{ start: Date; end: Date; label: string }> = [];
   let current = new Date(start);
 
   while (current <= end) {
     const periodStart = new Date(current);
     const periodEnd = new Date(current);
-    periodEnd.setDate(periodEnd.getDate() + (6 - periodEnd.getDay()));
+    const offset = periodEnd.getDay() === 0 ? 0 : 6 - periodEnd.getDay() + 1;
+    periodEnd.setDate(periodEnd.getDate() + offset);
     if (periodEnd > end) {
       periodEnd.setTime(end.getTime());
     }
@@ -116,6 +114,21 @@ const getCalendarWeekSections = (month: string) => {
   }
 
   return result;
+};
+
+const getPeriodQuantityTarget = (startDate: string, endDate: string) => {
+  const start = new Date(`${startDate}T00:00:00`);
+  const end = new Date(`${endDate}T00:00:00`);
+  let target = 0;
+  const cursor = new Date(start);
+
+  while (cursor <= end) {
+    const daysInMonth = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 0).getDate();
+    target += MONTHLY_TARGET / daysInMonth;
+    cursor.setDate(cursor.getDate() + 1);
+  }
+
+  return Math.max(1, Math.round(target));
 };
 
 const evaluateTarget = (received: number, delivered: number, quantityTarget: number) => {
@@ -185,6 +198,7 @@ export default function ReportsDeliveryGoal() {
             .map((row) => ({
               id: String(row.id),
               name: normalizeText(row?.user?.name) || 'Motorista sem nome',
+              type: 'driver' as const,
             }))
             .sort((a, b) => a.name.localeCompare(b.name))
         );
@@ -195,6 +209,7 @@ export default function ReportsDeliveryGoal() {
             .map((row) => ({
               id: String(row.id),
               name: normalizeText(row.name) || 'Ajudante sem nome',
+              type: 'helper' as const,
             }))
             .sort((a, b) => a.name.localeCompare(b.name))
         );
@@ -209,8 +224,14 @@ export default function ReportsDeliveryGoal() {
     loadOptions();
   }, []);
 
-  const personOptions = filters.viewMode === 'driver' ? driverOptions : helperOptions;
-  const selectedPerson = personOptions.find((person) => person.id === filters.personId);
+  const personOptions = useMemo(() => {
+    const options: PersonOption[] = [];
+    if (filters.viewModes.includes('driver')) options.push(...driverOptions);
+    if (filters.viewModes.includes('helper')) options.push(...helperOptions);
+    return options.sort((a, b) => a.name.localeCompare(b.name));
+  }, [driverOptions, filters.viewModes, helperOptions]);
+
+  const selectedPeople = personOptions.filter((person) => filters.personIds.includes(person.id));
 
   const loadPreview = async () => {
     try {
@@ -240,10 +261,13 @@ export default function ReportsDeliveryGoal() {
       const freshData = await fetchPreviewData(filters);
       setPreviewData(freshData);
 
+      const quantityTarget = getPeriodQuantityTarget(filters.startDate, filters.endDate);
       const reportData: DeliveryGoalReportData = {
-        monthLabel: formatMonthLabel(filters.month),
-        viewLabel: filters.viewMode === 'driver' ? 'Motoristas' : 'Ajudantes',
-        personLabel: selectedPerson?.name,
+        periodLabel: formatPeriodLabel(filters.startDate, filters.endDate),
+        viewLabel: getViewModesLabel(filters.viewModes),
+        peopleLabel: getPeopleLabel(selectedPeople),
+        quantityTarget,
+        showRouteDetails: selectedPeople.length === 1,
         generatedAt: new Date().toISOString(),
         weeklySections: freshData.weeklySections,
         monthlyRows: freshData.monthlyRows,
@@ -263,7 +287,13 @@ export default function ReportsDeliveryGoal() {
     setFilters((prev) => ({
       ...prev,
       [key]: value,
-      ...(key === 'viewMode' ? { personId: '' } : {}),
+      ...(key === 'viewModes'
+        ? { personIds: prev.personIds.filter((id) => {
+            const selectedModes = value as ViewMode[];
+            const option = [...driverOptions, ...helperOptions].find((person) => person.id === id);
+            return option ? selectedModes.includes(option.type) : false;
+          }) }
+        : {}),
     }));
   };
 
@@ -324,14 +354,23 @@ export default function ReportsDeliveryGoal() {
             <FilterCard
               icon={<CalendarRange className="h-5 w-5 text-blue-600" />}
               title="Periodo"
-              description="O relatorio considera um unico mes e agrupa por semanas calendario dentro dele."
+              description="Selecione um intervalo livre de datas. O consolidado usa meta proporcional ao periodo e os blocos semanais seguem semana calendario."
             >
               <label className="block">
-                <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500">Mes</span>
+                <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500">Inicio</span>
                 <input
-                  type="month"
-                  value={filters.month}
-                  onChange={(event) => updateFilter('month', event.target.value)}
+                  type="date"
+                  value={filters.startDate}
+                  onChange={(event) => updateFilter('startDate', event.target.value)}
+                  className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                />
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500">Fim</span>
+                <input
+                  type="date"
+                  value={filters.endDate}
+                  onChange={(event) => updateFilter('endDate', event.target.value)}
                   className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
                 />
               </label>
@@ -340,44 +379,40 @@ export default function ReportsDeliveryGoal() {
             <FilterCard
               icon={<Users className="h-5 w-5 text-violet-600" />}
               title="Visao"
-              description="Escolha se a avaliacao sera por motorista ou por ajudante."
+              description="Selecione uma ou mais visoes para combinar motorista e ajudante no mesmo relatorio."
             >
-              <label className="block">
+              <div className="block">
                 <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500">Agrupamento</span>
-                <select
-                  value={filters.viewMode}
-                  onChange={(event) => updateFilter('viewMode', event.target.value as ViewMode)}
-                  className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                >
-                  <option value="driver">Motoristas</option>
-                  <option value="helper">Ajudantes</option>
-                </select>
-              </label>
+                <MultiSelect
+                  options={[
+                    { value: 'driver', label: 'Motoristas' },
+                    { value: 'helper', label: 'Ajudantes' },
+                  ]}
+                  selected={filters.viewModes}
+                  onChange={(selected) => updateFilter('viewModes', selected as ViewMode[])}
+                  placeholder="Selecione uma ou mais visoes"
+                />
+              </div>
             </FilterCard>
 
             <FilterCard
               icon={<UserCircle2 className="h-5 w-5 text-emerald-600" />}
               title="Pessoa"
-              description="Filtre uma pessoa especifica para gerar um PDF individual."
+              description="Filtre uma ou varias pessoas para gerar um PDF mais direcionado."
             >
-              <label className="block">
-                <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500">
-                  {filters.viewMode === 'driver' ? 'Motorista' : 'Ajudante'}
-                </span>
-                <select
-                  value={filters.personId}
-                  disabled={loadingOptions}
-                  onChange={(event) => updateFilter('personId', event.target.value)}
-                  className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-gray-100"
-                >
-                  <option value="">Todos</option>
-                  {personOptions.map((person) => (
-                    <option key={person.id} value={person.id}>
-                      {person.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              <div className="block">
+                <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500">Pessoas</span>
+                <MultiSelect
+                  options={personOptions.map((person) => ({
+                    value: person.id,
+                    label: person.type === 'driver' ? `${person.name} (Motorista)` : `${person.name} (Ajudante)`,
+                  }))}
+                  selected={filters.personIds}
+                  onChange={(selected) => updateFilter('personIds', selected)}
+                  placeholder="Todas as pessoas"
+                  disabled={loadingOptions || filters.viewModes.length === 0}
+                />
+              </div>
             </FilterCard>
           </div>
         </section>
@@ -398,8 +433,8 @@ export default function ReportsDeliveryGoal() {
           <SummaryTile
             icon={<CalendarRange className="h-5 w-5 text-amber-700" />}
             title="Periodo"
-            value={formatMonthLabel(filters.month)}
-            helper={filters.viewMode === 'driver' ? 'Visao por motoristas.' : 'Visao por ajudantes.'}
+            value={formatPeriodLabel(filters.startDate, filters.endDate)}
+            helper={getViewModesLabel(filters.viewModes)}
           />
         </section>
 
@@ -407,6 +442,7 @@ export default function ReportsDeliveryGoal() {
           title="Consolidado mensal"
           rows={previewData.monthlyRows}
           loading={loadingPreview}
+          compact
         />
 
         {previewData.weeklySections.map((section) => (
@@ -415,6 +451,7 @@ export default function ReportsDeliveryGoal() {
             title={section.label}
             rows={section.rows}
             loading={loadingPreview}
+            compact
           />
         ))}
       </main>
@@ -476,11 +513,19 @@ function ReportTable({
   title,
   rows,
   loading,
+  compact,
 }: {
   title: string;
   rows: DeliveryGoalPersonRow[];
   loading: boolean;
+  compact?: boolean;
 }) {
+  const [expandedRows, setExpandedRows] = useState<string[]>([]);
+
+  const toggleRow = (rowId: string) => {
+    setExpandedRows((prev) => (prev.includes(rowId) ? prev.filter((item) => item !== rowId) : [...prev, rowId]));
+  };
+
   return (
     <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
       <div className="border-b border-gray-100 px-6 py-4">
@@ -498,7 +543,7 @@ function ReportTable({
               <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">% desempenho</th>
               <th className="px-4 py-3 text-center text-xs font-semibold uppercase tracking-wide text-gray-500">Meta desp.</th>
               <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">Resultado</th>
-              <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">Rotas</th>
+              <th className="px-4 py-3 text-center text-xs font-semibold uppercase tracking-wide text-gray-500">Rotas</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100 bg-white">
@@ -515,39 +560,66 @@ function ReportTable({
                 </td>
               </tr>
             ) : (
-              rows.map((row) => (
-                <tr key={`${title}-${row.personId}`} className="align-top">
-                  <td className="px-4 py-4">
-                    <p className="font-semibold text-gray-900">{row.personName}</p>
-                    <p className="mt-1 text-xs leading-5 text-gray-500">{row.analysis}</p>
-                  </td>
-                  <td className="px-4 py-4 text-right font-semibold text-gray-900">{row.received}</td>
-                  <td className="px-4 py-4 text-right font-semibold text-gray-900">{row.delivered}</td>
-                  <td className="px-4 py-4 text-right font-semibold text-gray-900">{row.returned}</td>
-                  <td className="px-4 py-4 text-center">
-                    <StatusBadge ok={row.quantityTargetMet} trueLabel="Sim" falseLabel="Nao" />
-                  </td>
-                  <td className="px-4 py-4 text-right font-semibold text-gray-900">{formatPercent(row.performancePercent)}</td>
-                  <td className="px-4 py-4 text-center">
-                    <StatusBadge ok={row.performanceTargetMet} trueLabel="Sim" falseLabel="Nao" />
-                  </td>
-                  <td className="px-4 py-4">
-                    <ResultBadge result={row.finalResult} />
-                  </td>
-                  <td className="px-4 py-4">
-                    <div className="space-y-2">
-                      {row.routes.map((route) => (
-                        <div key={route.routeId} className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
-                          <p className="text-sm font-semibold text-gray-800">{routeLabel(route)}</p>
-                          <p className="mt-1 text-xs text-gray-500">
-                            Finalizada em {new Date(route.completedAt).toLocaleString('pt-BR')}
-                          </p>
+              rows.map((row) => {
+                const isExpanded = expandedRows.includes(row.personId);
+                return (
+                  <Fragment key={`${title}-${row.personId}`}>
+                    <tr key={`${title}-${row.personId}`} className="align-middle">
+                      <td className="px-4 py-4">
+                        <div className="flex items-center gap-2">
+                          <p className="font-semibold text-gray-900">{row.personName}</p>
+                          <span className="inline-flex rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-semibold text-gray-600">
+                            {row.personType}
+                          </span>
                         </div>
-                      ))}
-                    </div>
-                  </td>
-                </tr>
-              ))
+                      </td>
+                      <td className="px-4 py-4 text-right font-semibold text-gray-900">{row.received}</td>
+                      <td className="px-4 py-4 text-right font-semibold text-gray-900">{row.delivered}</td>
+                      <td className="px-4 py-4 text-right font-semibold text-gray-900">{row.returned}</td>
+                      <td className="px-4 py-4 text-center">
+                        <StatusBadge ok={row.quantityTargetMet} trueLabel="Sim" falseLabel="Nao" />
+                      </td>
+                      <td className="px-4 py-4 text-right font-semibold text-gray-900">{formatPercent(row.performancePercent)}</td>
+                      <td className="px-4 py-4 text-center">
+                        <StatusBadge ok={row.performanceTargetMet} trueLabel="Sim" falseLabel="Nao" />
+                      </td>
+                      <td className="px-4 py-4">
+                        <ResultBadge result={row.finalResult} />
+                      </td>
+                      <td className="px-4 py-4 text-center">
+                        {row.routes.length > 0 ? (
+                          <button
+                            type="button"
+                            onClick={() => toggleRow(row.personId)}
+                            className="inline-flex items-center gap-1 rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-gray-700 hover:bg-gray-50"
+                          >
+                            {isExpanded ? <ArrowDown className="h-3.5 w-3.5" /> : <ArrowRight className="h-3.5 w-3.5" />}
+                            {row.routes.length} rota(s)
+                          </button>
+                        ) : (
+                          <span className="text-xs text-gray-400">0 rota</span>
+                        )}
+                      </td>
+                    </tr>
+                    {isExpanded && (
+                      <tr>
+                        <td colSpan={9} className="bg-gray-50 px-4 py-4">
+                          <div className={`grid gap-3 ${compact ? 'grid-cols-1 xl:grid-cols-2' : 'grid-cols-1'}`}>
+                            {row.routes.map((route) => (
+                              <div key={route.routeId} className="rounded-lg border border-gray-200 bg-white px-3 py-3">
+                                <p className="text-sm font-semibold text-gray-800">{routeLabel(route)}</p>
+                                <p className="mt-1 text-xs text-gray-500">
+                                  Finalizada em {new Date(route.completedAt).toLocaleString('pt-BR')}
+                                </p>
+                              </div>
+                            ))}
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                );
+              })
             )}
           </tbody>
         </table>
@@ -590,14 +662,26 @@ function ResultBadge({
 }
 
 async function fetchPreviewData(filters: FiltersState): Promise<PreviewData> {
-  const { start, end } = getMonthBounds(filters.month);
-  let query = supabase
+  if (!filters.startDate || !filters.endDate) {
+    return { monthlyRows: [], weeklySections: [] };
+  }
+
+  if (filters.startDate > filters.endDate) {
+    throw new Error('Periodo invalido');
+  }
+
+  const start = new Date(`${filters.startDate}T00:00:00`);
+  const end = new Date(`${filters.endDate}T00:00:00`);
+  const quantityTarget = getPeriodQuantityTarget(filters.startDate, filters.endDate);
+
+  const { data, error } = await supabase
     .from('routes')
     .select(`
       id,
       name,
       route_code,
       status,
+      completed_at,
       updated_at,
       driver_id,
       helper_id,
@@ -615,57 +699,21 @@ async function fetchPreviewData(filters: FiltersState): Promise<PreviewData> {
       )
     `)
     .eq('status', 'completed')
-    .gte('updated_at', toStartOfDayIso(start))
-    .lte('updated_at', toEndOfDayIso(end))
-    .order('updated_at', { ascending: true });
-
-  if (filters.viewMode === 'driver' && filters.personId) {
-    query = query.eq('driver_id', filters.personId);
-  }
-
-  if (filters.viewMode === 'helper' && filters.personId) {
-    query = query.eq('helper_id', filters.personId);
-  }
-
-  const { data, error } = await query;
+    .gte('completed_at', toStartOfDayIso(start))
+    .lte('completed_at', toEndOfDayIso(end))
+    .order('completed_at', { ascending: true });
   if (error) throw error;
 
-  const routes = ((data || []) as CompletedRouteRow[]).filter((route) => {
-    if (filters.viewMode === 'driver') {
-      return !!route.driver_id && !!normalizeText(route.driver?.user?.name);
-    }
-    return !!route.helper_id && !!normalizeText(route.helper?.name);
-  });
-
-  const weeks = getCalendarWeekSections(filters.month);
-  const weeklyMaps = weeks.map(() => new Map<string, {
-    personName: string;
-    received: number;
-    delivered: number;
-    returned: number;
-    routes: DeliveryGoalRouteBreakdown[];
-  }>());
-  const monthlyMap = new Map<string, {
-    personName: string;
-    received: number;
-    delivered: number;
-    returned: number;
-    routes: DeliveryGoalRouteBreakdown[];
-  }>();
+  const routes = (data || []) as CompletedRouteRow[];
+  const weeks = getCalendarWeekSections(filters.startDate, filters.endDate);
+  const weeklyMaps = weeks.map(() => new Map<string, AggregationBucket>());
+  const monthlyMap = new Map<string, AggregationBucket>();
 
   routes.forEach((route) => {
-    const completedAt = route.updated_at || '';
+    const completedAt = route.completed_at || route.updated_at || '';
     if (!completedAt) return;
     const completedDate = new Date(completedAt);
     if (Number.isNaN(completedDate.getTime())) return;
-
-    const personId = filters.viewMode === 'driver' ? String(route.driver_id || '') : String(route.helper_id || '');
-    const personName =
-      filters.viewMode === 'driver'
-        ? normalizeText(route.driver?.user?.name)
-        : normalizeText(route.helper?.name);
-
-    if (!personId || !personName) return;
 
     const received = route.route_orders?.length || 0;
     const delivered = route.route_orders?.filter((item) => item.status === 'delivered').length || 0;
@@ -681,52 +729,46 @@ async function fetchPreviewData(filters: FiltersState): Promise<PreviewData> {
       returned,
     };
 
-    const monthlyEntry = monthlyMap.get(personId) || {
-      personName,
-      received: 0,
-      delivered: 0,
-      returned: 0,
-      routes: [],
-    };
-    monthlyEntry.received += received;
-    monthlyEntry.delivered += delivered;
-    monthlyEntry.returned += returned;
-    monthlyEntry.routes.push(routeBreakdown);
-    monthlyMap.set(personId, monthlyEntry);
-
     const weekIndex = weeks.findIndex((week) => completedDate >= week.start && completedDate <= week.end);
-    if (weekIndex < 0) return;
+    const addRole = (type: ViewMode, personId: string | null | undefined, personName: string | null | undefined) => {
+      if (!filters.viewModes.includes(type)) return;
+      const normalizedId = String(personId || '');
+      const normalizedName = normalizeText(personName);
+      if (!normalizedId || !normalizedName) return;
+      if (filters.personIds.length > 0 && !filters.personIds.includes(normalizedId)) return;
 
-    const weeklyEntry = weeklyMaps[weekIndex].get(personId) || {
-      personName,
-      received: 0,
-      delivered: 0,
-      returned: 0,
-      routes: [],
+      const key = `${type}:${normalizedId}`;
+      const personType = type === 'driver' ? 'Motorista' : 'Ajudante';
+
+      const monthlyEntry = monthlyMap.get(key) || createAggregationBucket(normalizedName, personType);
+      monthlyEntry.received += received;
+      monthlyEntry.delivered += delivered;
+      monthlyEntry.returned += returned;
+      monthlyEntry.routes.push(routeBreakdown);
+      monthlyMap.set(key, monthlyEntry);
+
+      if (weekIndex >= 0) {
+        const weeklyEntry = weeklyMaps[weekIndex].get(key) || createAggregationBucket(normalizedName, personType);
+        weeklyEntry.received += received;
+        weeklyEntry.delivered += delivered;
+        weeklyEntry.returned += returned;
+        weeklyEntry.routes.push(routeBreakdown);
+        weeklyMaps[weekIndex].set(key, weeklyEntry);
+      }
     };
-    weeklyEntry.received += received;
-    weeklyEntry.delivered += delivered;
-    weeklyEntry.returned += returned;
-    weeklyEntry.routes.push(routeBreakdown);
-    weeklyMaps[weekIndex].set(personId, weeklyEntry);
+
+    addRole('driver', route.driver_id, route.driver?.user?.name);
+    addRole('helper', route.helper_id, route.helper?.name);
   });
 
-  const buildRows = (
-    map: Map<string, {
-      personName: string;
-      received: number;
-      delivered: number;
-      returned: number;
-      routes: DeliveryGoalRouteBreakdown[];
-    }>,
-    quantityTarget: number
-  ) =>
+  const buildRows = (map: Map<string, AggregationBucket>, target: number) =>
     Array.from(map.entries())
       .map(([personId, entry]) => {
-        const evaluation = evaluateTarget(entry.received, entry.delivered, quantityTarget);
+        const evaluation = evaluateTarget(entry.received, entry.delivered, target);
         return {
           personId,
           personName: entry.personName,
+          personType: entry.personType,
           received: entry.received,
           delivered: entry.delivered,
           returned: entry.returned,
@@ -737,10 +779,42 @@ async function fetchPreviewData(filters: FiltersState): Promise<PreviewData> {
       .sort((a, b) => a.personName.localeCompare(b.personName));
 
   return {
-    monthlyRows: buildRows(monthlyMap, MONTHLY_TARGET),
+    monthlyRows: buildRows(monthlyMap, quantityTarget),
     weeklySections: weeks.map((week, index) => ({
       label: `Semana ${week.label}`,
       rows: buildRows(weeklyMaps[index], WEEKLY_TARGET),
     })),
   };
+}
+
+type AggregationBucket = {
+  personName: string;
+  personType: string;
+  received: number;
+  delivered: number;
+  returned: number;
+  routes: DeliveryGoalRouteBreakdown[];
+};
+
+function createAggregationBucket(personName: string, personType: string): AggregationBucket {
+  return {
+    personName,
+    personType,
+    received: 0,
+    delivered: 0,
+    returned: 0,
+    routes: [],
+  };
+}
+
+function getViewModesLabel(viewModes: ViewMode[]) {
+  if (viewModes.length === 0) return 'Nenhuma visao selecionada';
+  if (viewModes.length === 2) return 'Motoristas e ajudantes';
+  return viewModes[0] === 'driver' ? 'Motoristas' : 'Ajudantes';
+}
+
+function getPeopleLabel(people: PersonOption[]) {
+  if (people.length === 0) return undefined;
+  if (people.length <= 2) return people.map((person) => person.name).join(', ');
+  return `${people.length} pessoas selecionadas`;
 }

@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { Check, ChevronDown, X, Search } from 'lucide-react';
 
 interface MultiSelectProps {
-    options: string[];
+    options: string[] | { value: string; label: string }[];
     selected: string[];
     onChange: (selected: string[]) => void;
     placeholder?: string;
@@ -37,12 +37,17 @@ export function MultiSelect({
         return () => document.removeEventListener('mousedown', handleClickOutside);
     }, []);
 
+    const normalizedOptions = useMemo(
+        () => options.map((option) => typeof option === 'string' ? { value: option, label: option } : option),
+        [options]
+    );
+
     // Filter options based on search term
     const filteredOptions = useMemo(() => {
-        return options.filter(option =>
-            option.toLowerCase().includes(searchTerm.toLowerCase())
+        return normalizedOptions.filter(option =>
+            option.label.toLowerCase().includes(searchTerm.toLowerCase())
         );
-    }, [options, searchTerm]);
+    }, [normalizedOptions, searchTerm]);
 
     const handleSelect = (option: string) => {
         if (selected.includes(option)) {
@@ -53,13 +58,14 @@ export function MultiSelect({
     };
 
     const handleSelectAll = () => {
-        if (filteredOptions.every(option => selected.includes(option))) {
+        const filteredValues = filteredOptions.map(option => option.value);
+        if (filteredValues.every(option => selected.includes(option))) {
             // If all filtered options are already selected, deselect them
-            onChange(selected.filter(item => !filteredOptions.includes(item)));
+            onChange(selected.filter(item => !filteredValues.includes(item)));
         } else {
             // Select all filtered options (add missing ones)
             const newSelected = [...selected];
-            filteredOptions.forEach(option => {
+            filteredValues.forEach(option => {
                 if (!newSelected.includes(option)) {
                     newSelected.push(option);
                 }
@@ -78,7 +84,13 @@ export function MultiSelect({
         onChange([]);
     };
 
-    const isAllSelected = filteredOptions.length > 0 && filteredOptions.every(option => selected.includes(option));
+    const selectedLabels = useMemo(
+        () => selected
+            .map(value => normalizedOptions.find(option => option.value === value)?.label || value),
+        [normalizedOptions, selected]
+    );
+
+    const isAllSelected = filteredOptions.length > 0 && filteredOptions.every(option => selected.includes(option.value));
 
     return (
         <div className={`relative ${className}`} ref={containerRef}>
@@ -101,9 +113,9 @@ export function MultiSelect({
                         <span className="text-gray-400">{placeholder}</span>
                     ) : (
                         selected.length <= 2 ? (
-                            selected.map(item => (
+                            selected.map((item, index) => (
                                 <span key={item} className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-blue-100 text-blue-800 border border-blue-200">
-                                    {item}
+                                    {selectedLabels[index] || item}
                                     <span
                                         role="button"
                                         className="ml-1 hover:text-blue-900 focus:outline-none"
@@ -171,15 +183,15 @@ export function MultiSelect({
                             </div>
                         ) : (
                             filteredOptions.map((option) => {
-                                const isSelected = selected.includes(option);
+                                const isSelected = selected.includes(option.value);
                                 return (
                                     <div
-                                        key={option}
+                                        key={option.value}
                                         className={`
                       cursor-pointer select-none relative py-2 pl-3 pr-9 hover:bg-blue-50 transition-colors
                       ${isSelected ? 'bg-blue-50' : ''}
                     `}
-                                        onClick={() => handleSelect(option)}
+                                        onClick={() => handleSelect(option.value)}
                                     >
                                         <div className="flex items-center">
                                             <div className={`
@@ -189,7 +201,7 @@ export function MultiSelect({
                                                 {isSelected && <Check className="h-3 w-3 text-white" />}
                                             </div>
                                             <span className={`block truncate ${isSelected ? 'font-medium text-blue-900' : 'text-gray-900'}`}>
-                                                {option}
+                                                {option.label}
                                             </span>
                                         </div>
                                     </div>

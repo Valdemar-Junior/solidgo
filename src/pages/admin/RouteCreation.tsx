@@ -5371,10 +5371,12 @@ function RouteCreationContent() {
                                     setSaving(true);
 
                                     // 1. Update Route Status
-                                    const { error: rErr } = await supabase.from('routes').update({ status: 'completed' }).eq('id', selectedRoute.id);
-                                    if (rErr) throw rErr;
-
                                     const now = new Date().toISOString();
+                                    const { error: rErr } = await supabase
+                                      .from('routes')
+                                      .update({ status: 'completed', completed_at: now, updated_at: now })
+                                      .eq('id', selectedRoute.id);
+                                    if (rErr) throw rErr;
 
                                     // Update route_orders one by one
                                     const routeOrdersToUpdate = selectedRoute.route_orders || [];
@@ -5402,7 +5404,7 @@ function RouteCreationContent() {
                                     }
 
                                     // 4. Local State Update (Optimistic)
-                                    const updated = { ...selectedRoute, status: 'completed' };
+                                    const updated = { ...selectedRoute, status: 'completed', completed_at: now, updated_at: now };
                                     updated.route_orders = (updated.route_orders || []).map((ro: any) => ({
                                       ...ro,
                                       status: 'delivered',
