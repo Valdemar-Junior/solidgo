@@ -638,7 +638,11 @@ function RouteCreationContent() {
 
   // Estados para pedidos bloqueados e coletas pendentes
   const [blockedOrders, setBlockedOrders] = useState<Order[]>([]);
+  const [blockedOrdersTotal, setBlockedOrdersTotal] = useState(0);
+  const [blockedOrdersPage, setBlockedOrdersPage] = useState(1);
+  const [blockedOrdersLoading, setBlockedOrdersLoading] = useState(false);
   const [pickupPendingOrders, setPickupPendingOrders] = useState<Order[]>([]);
+  const BLOCKED_ORDERS_PAGE_SIZE = 25;
 
   // Estados para modal de coleta individual
   const [showPickupOrderModal, setShowPickupOrderModal] = useState(false);
@@ -656,6 +660,40 @@ function RouteCreationContent() {
     if (!route) return false;
     const routeName = String(route.name || '').trim().toUpperCase();
     return !isLegacyPickupRouteName(routeName) && !routeName.startsWith('COLETA-');
+  };
+
+  const fetchBlockedOrdersPage = async (page: number, silent: boolean = false) => {
+    const safePage = Math.max(1, page);
+    const from = (safePage - 1) * BLOCKED_ORDERS_PAGE_SIZE;
+    const to = from + BLOCKED_ORDERS_PAGE_SIZE - 1;
+
+    try {
+      if (!silent) setBlockedOrdersLoading(true);
+
+      const { data, error, count } = await supabase
+        .from('orders')
+        .select('id, order_id_erp, customer_name, erp_status, blocked_at, blocked_reason, return_nfe_number', { count: 'exact' })
+        .not('blocked_at', 'is', null)
+        .order('blocked_at', { ascending: false })
+        .range(from, to);
+
+      if (error) throw error;
+
+      const total = Number(count || 0);
+      const lastPage = Math.max(1, Math.ceil(total / BLOCKED_ORDERS_PAGE_SIZE));
+      if (safePage > lastPage) {
+        setBlockedOrdersPage(lastPage);
+        return;
+      }
+
+      setBlockedOrders((data || []) as Order[]);
+      setBlockedOrdersTotal(total);
+    } catch (error) {
+      console.error('Error fetching blocked orders:', error);
+      if (!silent) toast.error('Erro ao carregar pedidos bloqueados');
+    } finally {
+      if (!silent) setBlockedOrdersLoading(false);
+    }
   };
 
   // --- EDIT ROUTE LOGIC ---
@@ -1334,6 +1372,16 @@ function RouteCreationContent() {
   useEffect(() => {
     try { localStorage.setItem('rc_selectedOrders', JSON.stringify(Array.from(selectedOrders))); } catch { }
   }, [selectedOrders]);
+
+  useEffect(() => {
+    fetchBlockedOrdersPage(blockedOrdersPage, true);
+  }, [blockedOrdersPage]);
+
+  useEffect(() => {
+    if (activeRoutesTab === 'blocked') {
+      fetchBlockedOrdersPage(blockedOrdersPage, true);
+    }
+  }, [activeRoutesTab]);
 
   const onProductsScroll = () => {
     try { if (productsScrollRef.current) localStorage.setItem('rc_productsScrollLeft', String(productsScrollRef.current.scrollLeft || 0)); } catch { }
@@ -2475,8 +2523,6 @@ function RouteCreationContent() {
         carrierCitiesRes,
         // routesRes, (REMOVED)
         activeRouteOrdersRes,
-        // Pedidos bloqueados (cancelados/devolvidos via n8n)
-        blockedOrdersRes,
         // Pedidos que precisam de coleta (foram entregues e depois devolvidos)
         pickupPendingRes,
       ] = await Promise.all([
@@ -2535,14 +2581,6 @@ function RouteCreationContent() {
           .from('route_orders')
           .select('order_id, route:routes!inner(id,name,status,route_code)')
           .neq('route.status', 'completed'),
-
-        // Pedidos bloqueados (para aba "Bloqueados") â€” sem colunas pesadas
-        supabase
-          .from('orders')
-          .select('id, order_id_erp, customer_name, phone, address_json, items_json, status, created_at, updated_at, filial_venda, data_venda, previsao_entrega, tem_frete_full, observacoes_publicas, observacoes_internas, customer_cpf, vendedor_nome, return_flag, last_return_reason, last_return_notes, brand, department, service_type, erp_status, blocked_at, blocked_reason, requires_pickup, pickup_created_at, return_nfe_number, return_nfe_key, return_date, return_type, import_source, previsao_montagem, product_group, product_subgroup, danfe_gerada_em, raw_operacoes:raw_json->>operacoes, raw_lancamento_venda:raw_json->>lancamento_venda')
-          .not('blocked_at', 'is', null)
-          .order('blocked_at', { ascending: false })
-          .limit(100),
 
         // Pedidos que precisam de coleta (para aba "Coletas Pendentes") â€” sem colunas pesadas
         supabase
@@ -2639,15 +2677,6 @@ function RouteCreationContent() {
         setFullUrgentAlert(null);
       }
 
-      // Processar pedidos bloqueados
-      if (blockedOrdersRes.data) {
-        setBlockedOrders(blockedOrdersRes.data.map((o: any) => ({
-          ...o,
-          is_carrier_delivery: Boolean((o as any).is_carrier_delivery),
-          raw_json: { operacoes: o.raw_operacoes, lancamento_venda: o.raw_lancamento_venda }
-        })) as Order[]);
-      }
-
       // Processar pedidos que precisam de coleta
       if (pickupPendingRes.data) {
         setPickupPendingOrders(pickupPendingRes.data.map((o: any) => ({
@@ -2702,6 +2731,8 @@ function RouteCreationContent() {
       } else {
         setCarrierCities((((carrierCitiesRes as any)?.data) || []) as CarrierCity[]);
       }
+
+      await fetchBlockedOrdersPage(blockedOrdersPage, true);
 
       // Teams and Helpers
       console.log('Fetching teams and helpers...');
@@ -4224,8 +4255,8 @@ function RouteCreationContent() {
               >
                 <Ban className="h-4 w-4" />
                 Bloqueados
-                {blockedOrders.length > 0 && (
-                  <span className="bg-red-500 text-white text-xs px-1.5 py-0.5 rounded-full">{blockedOrders.length}</span>
+                {blockedOrdersTotal > 0 && (
+                  <span className="bg-red-500 text-white text-xs px-1.5 py-0.5 rounded-full">{blockedOrdersTotal}</span>
                 )}
               </button>
               <button
@@ -4260,7 +4291,7 @@ function RouteCreationContent() {
                 });
                 count = filtered.length;
               } else if (activeRoutesTab === 'blocked') {
-                count = blockedOrders.length;
+                count = blockedOrdersTotal;
               } else if (activeRoutesTab === 'pickupOrders') {
                 count = pickupPendingOrders.length;
               }
@@ -4481,7 +4512,11 @@ function RouteCreationContent() {
           {/* Aba: Pedidos Bloqueados */}
           {activeRoutesTab === 'blocked' && (
             <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-              {blockedOrders.length === 0 ? (
+              {blockedOrdersLoading ? (
+                <div className="p-12 text-center text-gray-500">
+                  Carregando pedidos bloqueados...
+                </div>
+              ) : blockedOrdersTotal === 0 ? (
                 <div className="p-12 text-center">
                   <div className="mx-auto w-16 h-16 bg-green-50 rounded-full flex items-center justify-center mb-4">
                     <CheckCircle2 className="h-8 w-8 text-green-500" />
@@ -4490,38 +4525,63 @@ function RouteCreationContent() {
                   <p className="text-gray-500">Todos os pedidos estão disponíveis para roteamento.</p>
                 </div>
               ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full">
-                    <thead className="bg-gray-50 border-b border-gray-200">
-                      <tr>
-                        <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">Pedido</th>
-                        <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">Cliente</th>
-                        <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">Status ERP</th>
-                        <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">Motivo</th>
-                        <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">Data Bloqueio</th>
-                        <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">NF Devolução</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-100">
-                      {blockedOrders.map((order) => (
-                        <tr key={order.id} className="hover:bg-gray-50">
-                          <td className="px-4 py-3 font-medium text-gray-900">{order.order_id_erp}</td>
-                          <td className="px-4 py-3 text-gray-600">{order.customer_name}</td>
-                          <td className="px-4 py-3">
-                            <span className={`px-2 py-1 rounded-full text-xs font-bold ${order.erp_status === 'devolvido' ? 'bg-red-100 text-red-700' : 'bg-orange-100 text-orange-700'
-                              }`}>
-                              {order.erp_status?.toUpperCase() || '-'}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3 text-gray-600 text-sm">{order.blocked_reason || '-'}</td>
-                          <td className="px-4 py-3 text-gray-500 text-sm">
-                            {order.blocked_at ? new Date(order.blocked_at).toLocaleString('pt-BR') : '-'}
-                          </td>
-                          <td className="px-4 py-3 text-gray-600">{order.return_nfe_number || '-'}</td>
+                <div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full">
+                      <thead className="bg-gray-50 border-b border-gray-200">
+                        <tr>
+                          <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">Pedido</th>
+                          <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">Cliente</th>
+                          <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">Status ERP</th>
+                          <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">Motivo</th>
+                          <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">Data Bloqueio</th>
+                          <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">NF Devolução</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100">
+                        {blockedOrders.map((order) => (
+                          <tr key={order.id} className="hover:bg-gray-50">
+                            <td className="px-4 py-3 font-medium text-gray-900">{order.order_id_erp}</td>
+                            <td className="px-4 py-3 text-gray-600">{order.customer_name}</td>
+                            <td className="px-4 py-3">
+                              <span className={`px-2 py-1 rounded-full text-xs font-bold ${order.erp_status === 'devolvido' ? 'bg-red-100 text-red-700' : 'bg-orange-100 text-orange-700'
+                                }`}>
+                                {order.erp_status?.toUpperCase() || '-'}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3 text-gray-600 text-sm">{order.blocked_reason || '-'}</td>
+                            <td className="px-4 py-3 text-gray-500 text-sm">
+                              {order.blocked_at ? new Date(order.blocked_at).toLocaleString('pt-BR') : '-'}
+                            </td>
+                            <td className="px-4 py-3 text-gray-600">{order.return_nfe_number || '-'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div className="flex flex-col gap-3 border-t border-gray-200 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                    <p className="text-sm text-gray-500">
+                      Página {blockedOrdersPage} de {Math.max(1, Math.ceil(blockedOrdersTotal / BLOCKED_ORDERS_PAGE_SIZE))}
+                    </p>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setBlockedOrdersPage((prev) => Math.max(1, prev - 1))}
+                        disabled={blockedOrdersPage <= 1 || blockedOrdersLoading}
+                        className="rounded-lg border border-gray-300 px-3 py-2 text-sm font-medium text-gray-600 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        Anterior
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setBlockedOrdersPage((prev) => prev + 1)}
+                        disabled={blockedOrdersPage >= Math.max(1, Math.ceil(blockedOrdersTotal / BLOCKED_ORDERS_PAGE_SIZE)) || blockedOrdersLoading}
+                        className="rounded-lg border border-gray-300 px-3 py-2 text-sm font-medium text-gray-600 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        Próxima
+                      </button>
+                    </div>
+                  </div>
                 </div>
               )}
             </div>

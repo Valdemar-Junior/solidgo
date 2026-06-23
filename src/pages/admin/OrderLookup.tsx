@@ -168,7 +168,7 @@ export default function OrderLookup() {
   const [deliveryReceiptUserNames, setDeliveryReceiptUserNames] = useState<Record<string, string>>({});
   const [proofPdfLoadingByRouteOrder, setProofPdfLoadingByRouteOrder] = useState<Record<string, boolean>>({});
   const [showObservations, setShowObservations] = useState(false);
-  const [withdrawalActionLoading, setWithdrawalActionLoading] = useState<'receipt' | 'danfe' | null>(null);
+  const [withdrawalActionLoading, setWithdrawalActionLoading] = useState<'receipt' | 'danfe' | 'return_danfe' | null>(null);
 
   // Check if user is consultor to hide certain elements
   const { user, logout } = useAuthStore();
@@ -452,6 +452,117 @@ export default function OrderLookup() {
     }
   };
 
+  const resolveDanfeWebhookUrl = async () => {
+    const fallbackUrl = 'https://n8n.lojaodosmoveis.shop/webhook/gera_nf_devolucao';
+
+    try {
+      const { data } = await supabase
+        .from('webhook_settings')
+        .select('url')
+        .eq('key', 'gera_nf_devolucao')
+        .eq('active', true)
+        .single();
+
+      if (data?.url) return String(data.url);
+    } catch { }
+
+    return fallbackUrl;
+  };
+
+  const openBase64Pdf = async (base64: string) => {
+    const bytes = Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
+    const source = await PDFDocument.load(bytes);
+    const merged = await PDFDocument.create();
+    const pages = await merged.copyPages(source, source.getPageIndices());
+    pages.forEach((page) => merged.addPage(page));
+    const out = await merged.save();
+    DeliverySheetGenerator.openPDFInNewTab(out);
+  };
+
+  const reprintReturnDanfe = async () => {
+    if (!selectedOrder) return;
+
+    try {
+      setWithdrawalActionLoading('return_danfe');
+
+      const fetchReturnDanfeState = async () => {
+        const { data, error } = await supabase
+          .from('orders')
+          .select('return_danfe_base64, return_nfe_xml, return_nfe_number')
+          .eq('id', selectedOrder.id)
+          .single();
+
+        if (error) throw error;
+        return data;
+      };
+
+      let orderData = await fetchReturnDanfeState();
+
+      let base64 = String(orderData?.return_danfe_base64 || '');
+      const xml = String(orderData?.return_nfe_xml || '');
+
+      if (base64.startsWith('JVBER')) {
+        await openBase64Pdf(base64);
+        toast.success('Nota de devolução aberta com sucesso!');
+        return;
+      }
+
+      if (!base64.startsWith('JVBER')) {
+        if (!xml) {
+          toast.error('A nota de devolução ainda não foi gerada para este pedido.');
+          return;
+        }
+
+        const webhookUrl = await resolveDanfeWebhookUrl();
+        const response = await fetch(webhookUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            route_id: `DEVOLUCAO-${selectedOrder.order_id_erp || selectedOrder.id}`,
+            documentos: [{
+              order_id: selectedOrder.id,
+              numero: orderData?.return_nfe_number || selectedOrder.order_id_erp || selectedOrder.id,
+              xml,
+            }],
+            count: 1,
+            tipo: 'devolucao',
+          }),
+        });
+
+        if (!response.ok) {
+          throw new Error(`Erro ao gerar DANFE de devolução: ${response.status}`);
+        }
+
+        // O webhook persiste o PDF no banco. Após a chamada, reconsulta o pedido
+        // em pequenas tentativas para abrir a versão gravada, sem depender do body HTTP.
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          if (attempt > 0) {
+            await new Promise((resolve) => setTimeout(resolve, 500));
+          }
+
+          orderData = await fetchReturnDanfeState();
+          base64 = String(orderData?.return_danfe_base64 || '');
+          if (base64.startsWith('JVBER')) {
+            break;
+          }
+        }
+
+        if (!base64.startsWith('JVBER')) {
+          toast.error('Não foi possível gerar a nota de devolução.');
+          return;
+        }
+      }
+
+      await openBase64Pdf(base64);
+      toast.success('Nota de devolução aberta com sucesso!');
+    } catch (error) {
+      console.error(error);
+      toast.error('Erro ao imprimir nota de devolução');
+    } finally {
+      setWithdrawalActionLoading(null);
+    }
+  };
+
   useEffect(() => {
     const fetchDetails = async () => {
       if (!selectedOrder) return;
@@ -695,6 +806,8 @@ export default function OrderLookup() {
   // Etapa do processo (exibida no cabeçalho do card)
   const processStage = useMemo(() => {
     if (withdrawal) return 'withdrawn';
+    if (isBlockedReturnOrder(selectedOrder)) return 'blocked_return';
+    if (isBlockedOrder(selectedOrder)) return 'blocked';
     const latestRO = routeOrders[0];
     const routeStatus = latestRO?.route?.status;
 
@@ -708,6 +821,8 @@ export default function OrderLookup() {
   // Status específico do pedido (exibido dentro do card da rota)
   const derivedStatus = useMemo(() => {
     if (withdrawal) return 'pickup';
+    if (isBlockedReturnOrder(selectedOrder)) return 'blocked_return';
+    if (isBlockedOrder(selectedOrder)) return 'blocked';
     const base = selectedOrder?.status || '';
     const latestRO = routeOrders[0];
     const routeStatus = latestRO?.route?.status;
@@ -799,6 +914,22 @@ export default function OrderLookup() {
     const notes = normalizeText(notesInput);
     return notes ? notes.replace(/\s+/g, ' ').trim() : '';
   };
+
+  function isBlockedReturnOrder(order: Order | null) {
+    if (!order?.blocked_at) return false;
+    const erpStatus = String(order.erp_status || '').trim().toLowerCase();
+    const blockedReason = String(order.blocked_reason || '').trim().toLowerCase();
+    return (
+      erpStatus === 'devolvido' ||
+      Boolean(order.requires_pickup) ||
+      Boolean(order.return_nfe_number) ||
+      blockedReason.includes('devol')
+    );
+  }
+
+  function isBlockedOrder(order: Order | null) {
+    return Boolean(order?.blocked_at);
+  }
   const parseAssemblyReturnDetails = (assembly: AssemblyInfo) => {
     const directReason = normalizeReturnReason(assembly.return_reason);
     const observations = normalizeText(assembly.observations);
@@ -1013,6 +1144,8 @@ export default function OrderLookup() {
     in_progress: 'Em rota',
     delivered: 'Entregue',
     returned: 'Retornado',
+    blocked: 'Bloqueado',
+    blocked_return: 'Bloqueado por devolução',
     pickup: 'Retirado pelo cliente',
   };
 
@@ -1032,6 +1165,8 @@ export default function OrderLookup() {
     separating: 'Em Separação',
     in_route: 'Em Rota',
     completed: 'Rota Finalizada',
+    blocked: 'Bloqueado no ERP',
+    blocked_return: 'Bloqueado por devolução',
     withdrawn: 'Retirado pelo cliente',
   };
 
@@ -1041,6 +1176,8 @@ export default function OrderLookup() {
     separating: 'text-orange-600',
     in_route: 'text-blue-600',
     completed: 'text-green-600',
+    blocked: 'text-orange-700',
+    blocked_return: 'text-red-700',
     withdrawn: 'text-purple-600',
   };
 
@@ -1050,6 +1187,8 @@ export default function OrderLookup() {
     in_progress: 'Pendente',
     delivered: 'Entregue',
     returned: 'Retornado',
+    blocked: 'Bloqueado',
+    blocked_return: 'Bloqueado por devolução',
     pickup: 'Retirado pelo cliente',
   };
 
@@ -1197,6 +1336,11 @@ export default function OrderLookup() {
                       <AlertTriangle className="h-3 w-3" /> Retornado
                     </span>
                   )}
+                  {selectedOrder.blocked_at && (
+                    <span className="px-2 py-1 rounded-full bg-orange-100 text-orange-700 border border-orange-200 flex items-center gap-1">
+                      <AlertTriangle className="h-3 w-3" /> {isBlockedReturnOrder(selectedOrder) ? 'Bloqueado por devolução' : 'Bloqueado no ERP'}
+                    </span>
+                  )}
                 </div>
                 <div className="mt-3 flex flex-wrap gap-2 text-xs">
                   {(() => {
@@ -1327,6 +1471,36 @@ export default function OrderLookup() {
                         Reimprimir nota fiscal
                       </button>
                     </div>
+                  </div>
+                ) : isBlockedOrder(selectedOrder) ? (
+                  <div className={`rounded-lg border p-4 space-y-2 ${isBlockedReturnOrder(selectedOrder) ? 'border-red-200 bg-red-50' : 'border-orange-200 bg-orange-50'}`}>
+                    <p className={`text-xs ${isBlockedReturnOrder(selectedOrder) ? 'text-red-800' : 'text-orange-800'}`}>
+                      <span className="font-semibold">Status:</span> {isBlockedReturnOrder(selectedOrder) ? 'Bloqueado por devolução' : 'Bloqueado no ERP'}
+                    </p>
+                    <p className={`text-xs ${isBlockedReturnOrder(selectedOrder) ? 'text-red-800' : 'text-orange-800'}`}>
+                      <span className="font-semibold">Motivo:</span> {selectedOrder?.blocked_reason || '-'}
+                    </p>
+                    <p className={`text-xs ${isBlockedReturnOrder(selectedOrder) ? 'text-red-800' : 'text-orange-800'}`}>
+                      <span className="font-semibold">Data do bloqueio:</span> {selectedOrder?.blocked_at ? formatDateTime(selectedOrder.blocked_at) : '-'}
+                    </p>
+                    {isBlockedReturnOrder(selectedOrder) && (
+                      <>
+                        <p className="text-xs text-red-800">
+                          <span className="font-semibold">NF de devolução:</span> {selectedOrder?.return_nfe_number || '-'}
+                        </p>
+                        <div className="pt-2 flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            onClick={reprintReturnDanfe}
+                            disabled={withdrawalActionLoading !== null}
+                            className="inline-flex items-center rounded-lg border border-red-200 bg-white px-3 py-2 text-xs font-semibold text-red-700 transition-colors hover:bg-red-100 disabled:opacity-60 disabled:cursor-not-allowed"
+                          >
+                            {withdrawalActionLoading === 'return_danfe' ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <FileSpreadsheet className="mr-2 h-3.5 w-3.5" />}
+                            Imprimir nota de devolução
+                          </button>
+                        </div>
+                      </>
+                    )}
                   </div>
                 ) : routeOrders.length === 0 ? (
                   <p className="text-sm text-gray-500">
