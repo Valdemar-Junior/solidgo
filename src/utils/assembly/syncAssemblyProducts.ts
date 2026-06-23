@@ -59,3 +59,25 @@ export async function syncAssemblyProductsForOrder(orderId: string): Promise<Ass
     inserted_products: Number(result.inserted_products || 0),
   };
 }
+
+export async function syncAssemblyProductsForPickup(orderId: string): Promise<AssemblySyncResult> {
+  const normalizedOrderId = String(orderId || '').trim();
+  if (!normalizedOrderId) {
+    throw new Error('orderId invalido para sincronizar montagem da retirada');
+  }
+
+  const { data, error } = await supabase.rpc('sync_missing_assembly_products_for_pickup', {
+    p_order_id: normalizedOrderId,
+  });
+
+  if (error) {
+    throw error;
+  }
+
+  const result = (data || {}) as Partial<AssemblySyncResult>;
+
+  return {
+    order_id: String(result.order_id || normalizedOrderId),
+    inserted_products: Number(result.inserted_products || 0),
+  };
+}

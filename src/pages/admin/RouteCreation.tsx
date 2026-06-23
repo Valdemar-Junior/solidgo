@@ -60,7 +60,7 @@ import MdfeIssueModal from '../../components/mdfe/MdfeIssueModal';
 import DatePicker, { registerLocale } from 'react-datepicker';
 import { ptBR } from 'date-fns/locale';
 import 'react-datepicker/dist/react-datepicker.css';
-import { syncAssemblyProductsForOrder } from '../../utils/assembly/syncAssemblyProducts';
+import { syncAssemblyProductsForPickup } from '../../utils/assembly/syncAssemblyProducts';
 
 registerLocale('pt-BR', ptBR);
 
@@ -3172,7 +3172,7 @@ function RouteCreationContent() {
       if (updateOrdersError) throw updateOrdersError;
 
       const assemblySyncResults = await Promise.allSettled(
-        pickupOrderIds.map((orderId) => syncAssemblyProductsForOrder(String(orderId)))
+        pickupOrderIds.map((orderId) => syncAssemblyProductsForPickup(String(orderId)))
       );
       const assemblySyncFailures = assemblySyncResults.filter((result) => result.status === 'rejected');
 
