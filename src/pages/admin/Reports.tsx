@@ -1,4 +1,4 @@
-import { ArrowRight, FileSpreadsheet, Goal, Hammer, Truck } from 'lucide-react';
+import { ArrowRight, FileSpreadsheet, Goal, Hammer, Package, Truck } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
 type ReportCard = {
@@ -38,6 +38,15 @@ const REPORT_CARDS: ReportCard[] = [
     icon: Goal,
     accent: 'from-emerald-600 to-teal-500',
     iconBg: 'bg-emerald-50 text-emerald-700',
+  },
+  {
+    id: 'withdrawals',
+    title: 'Relatorio de Retiradas',
+    description: 'Acompanhe retiradas por periodo com cliente, produtos, endereco, conferente e status da montagem.',
+    href: '/admin/reports/withdrawals',
+    icon: Package,
+    accent: 'from-fuchsia-600 to-violet-500',
+    iconBg: 'bg-fuchsia-50 text-fuchsia-700',
   },
 ];
 
