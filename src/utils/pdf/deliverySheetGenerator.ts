@@ -16,9 +16,17 @@ export interface DeliverySheetData {
   assemblyVehiclePlate?: string;
   teamName?: string;
   helperName?: string;
+  pickupResponsibleName?: string;
+  pickupRegisteredByName?: string;
+  pickupWithdrawnAt?: string;
+  pickupObservations?: string;
 }
 
 export class DeliverySheetGenerator {
+  private static isLegacyPickupRouteName(value: any): boolean {
+    return String(value || '').trim().toUpperCase().startsWith('RETIRADA');
+  }
+
   static async generateDeliverySheet(data: DeliverySheetData, title: string = 'Romaneio de Entrega'): Promise<Uint8Array> {
     const pdfDoc = await PDFDocument.create();
     let page = pdfDoc.addPage([595.28, 841.89]);
@@ -31,6 +39,7 @@ export class DeliverySheetGenerator {
     const helveticaFont = await pdfDoc.embedFont(StandardFonts.Helvetica);
     const helveticaBoldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
     const isAssemblySheet = String(title || '').toLowerCase().includes('montagem');
+    const isPickupSheet = String(title || '').toLowerCase().includes('retirada');
     const isAssemblyItem = (it: any): boolean => {
       const v1 = String(it?.has_assembly ?? '').toLowerCase();
       const v2 = String(it?.possui_montagem ?? '').toLowerCase();
@@ -87,6 +96,24 @@ export class DeliverySheetGenerator {
     // Romaneio overview grid - NEW LAYOUT with 3 rows
     const gridY = y;
 
+    let nextRowY = gridY - 32;
+
+    if (isPickupSheet) {
+      this.drawText(page, 'ResponsÃ¡vel pela Retirada', margin, gridY, { font: helveticaBoldFont, size: 10, color: { r: 0, g: 0, b: 0 } });
+      this.drawText(page, 'Data e Hora da Retirada', margin + 260, gridY, { font: helveticaBoldFont, size: 10, color: { r: 0, g: 0, b: 0 } });
+      this.drawText(page, String(data.pickupResponsibleName || data.helperName || '-').substring(0, 32), margin, gridY - 14, { font: helveticaFont, size: 11, color: { r: 0, g: 0, b: 0 } });
+      this.drawText(page, new Date(data.pickupWithdrawnAt || data.generatedAt).toLocaleString('pt-BR'), margin + 260, gridY - 14, { font: helveticaFont, size: 11, color: { r: 0, g: 0, b: 0 } });
+
+      this.drawText(page, 'Registrado por', margin, nextRowY, { font: helveticaBoldFont, size: 10, color: { r: 0, g: 0, b: 0 } });
+      this.drawText(page, 'ObservaÃ§Ãµes', margin + 260, nextRowY, { font: helveticaBoldFont, size: 10, color: { r: 0, g: 0, b: 0 } });
+      this.drawText(page, String(data.pickupRegisteredByName || (data.route as any)?.conferente || '-').substring(0, 32), margin, nextRowY - 14, { font: helveticaFont, size: 11, color: { r: 0, g: 0, b: 0 } });
+      const pickupObservationLines = this.wrapText(data.pickupObservations || '-', width - (margin + 260) - margin, helveticaFont, 11);
+      this.drawText(page, pickupObservationLines[0] || '-', margin + 260, nextRowY - 14, { font: helveticaFont, size: 11, color: { r: 0, g: 0, b: 0 } });
+      if (pickupObservationLines.length > 1) {
+        this.drawText(page, pickupObservationLines[1], margin + 260, nextRowY - 26, { font: helveticaFont, size: 11, color: { r: 0, g: 0, b: 0 } });
+      }
+      y = nextRowY - (pickupObservationLines.length > 1 ? 42 : 30);
+    } else {
     // Row 1: ID do Romaneio | Nome da Rota
     this.drawText(page, `ID do Romaneio`, margin, gridY, { font: helveticaBoldFont, size: 10, color: { r: 0, g: 0, b: 0 } });
     this.drawText(page, `Nome da Rota`, margin + 180, gridY, { font: helveticaBoldFont, size: 10, color: { r: 0, g: 0, b: 0 } });
@@ -97,9 +124,6 @@ export class DeliverySheetGenerator {
     // Ensure routeID is not overlapping
     this.drawText(page, String(routeCodeText).substring(0, 25), margin, gridY - 14, { font: helveticaFont, size: 11, color: { r: 0, g: 0, b: 0 } });
     this.drawText(page, String(routeNameText).substring(0, 35), margin + 180, gridY - 14, { font: helveticaFont, size: 11, color: { r: 0, g: 0, b: 0 } });
-
-    let nextRowY = gridY - 32;
-
     // Row 2: Equipe | Motorista | Ajudante (ONLY display for Delivery)
     if (!isAssemblySheet) {
       this.drawText(page, 'Equipe', margin, nextRowY, { font: helveticaBoldFont, size: 10, color: { r: 0, g: 0, b: 0 } });
@@ -144,6 +168,7 @@ export class DeliverySheetGenerator {
       y = nextRowY - 14 - (obsLines.length * 12) - 10;
     } else {
       y = nextRowY - 30;
+    }
     }
     page.drawLine({ start: { x: margin, y }, end: { x: width - margin, y }, thickness: 1, color: rgb(0, 0, 0) });
     y -= 10;
@@ -255,6 +280,20 @@ export class DeliverySheetGenerator {
         });
       }
 
+      const deliveryServiceType = this.getDeliveryServiceWatermark(order);
+      if (!isAssemblySheet && deliveryServiceType) {
+        const watermarkY = Math.max(margin + 48, y - (totalBlockHeight * 0.62));
+        page.drawText(deliveryServiceType, {
+          x: width - margin - (deliveryServiceType === 'ASSISTENCIA' ? 250 : 170),
+          y: watermarkY,
+          size: deliveryServiceType === 'ASSISTENCIA' ? 30 : 38,
+          font: helveticaBoldFont,
+          color: deliveryServiceType === 'TROCA' ? rgb(0.84, 0.42, 0.05) : rgb(0.1, 0.4, 0.78),
+          opacity: 0.18,
+          rotate: degrees(35),
+        });
+      }
+
       const assemblyPriority = data.assemblyPrioritiesByOrder?.[oid] || null;
       if (isAssemblySheet && assemblyPriority) {
         const watermarkY = Math.max(margin + 48, y - (totalBlockHeight * 0.58));
@@ -290,23 +329,23 @@ export class DeliverySheetGenerator {
       this.drawText(page, vendLabel, rightColX, y, { font: helveticaBoldFont, size: 10, color: { r: 0, g: 0, b: 0 } });
       this.drawText(page, vendedorNome, rightColX + vendLabelW, y, { font: helveticaFont, size: 10, color: { r: 0, g: 0, b: 0 } });
       y -= 16;
-      const romLabel = 'ID Romaneio: ';
+      const romLabel = isPickupSheet ? 'Cliente: ' : 'ID Romaneio: ';
       const romLabelW = helveticaBoldFont.widthOfTextAtSize(romLabel, 10);
       this.drawText(page, romLabel, margin, y, { font: helveticaBoldFont, size: 10, color: { r: 0, g: 0, b: 0 } });
-      this.drawText(page, String((data.route as any).route_code || data.route.id), margin + romLabelW, y, { font: helveticaFont, size: 10, color: { r: 0, g: 0, b: 0 } });
+      this.drawText(page, isPickupSheet ? String(order.customer_name || '') : String((data.route as any).route_code || data.route.id), margin + romLabelW, y, { font: helveticaFont, size: 10, color: { r: 0, g: 0, b: 0 } });
       const telLabel = 'Telefone: ';
       const telLabelW = helveticaBoldFont.widthOfTextAtSize(telLabel, 10);
       this.drawText(page, telLabel, rightColX, y, { font: helveticaBoldFont, size: 10, color: { r: 0, g: 0, b: 0 } });
       this.drawText(page, String(order.phone || ''), rightColX + telLabelW, y, { font: helveticaFont, size: 10, color: { r: 0, g: 0, b: 0 } });
       y -= 14;
-      const cliLabel = 'Cliente: ';
+      const cliLabel = isPickupSheet ? 'Nº Pedido: ' : 'Cliente: ';
       const cliLabelW = helveticaBoldFont.widthOfTextAtSize(cliLabel, 10);
       this.drawText(page, cliLabel, margin, y, { font: helveticaBoldFont, size: 10, color: { r: 0, g: 0, b: 0 } });
-      this.drawText(page, String(order.customer_name || ''), margin + cliLabelW, y, { font: helveticaFont, size: 10, color: { r: 0, g: 0, b: 0 } });
-      const pedLabel = 'Nº Pedido: ';
+      this.drawText(page, isPickupSheet ? String(order.order_id_erp || '') : String(order.customer_name || ''), margin + cliLabelW, y, { font: helveticaFont, size: 10, color: { r: 0, g: 0, b: 0 } });
+      const pedLabel = isPickupSheet ? 'Data Retirada: ' : 'Nº Pedido: ';
       const pedLabelW = helveticaBoldFont.widthOfTextAtSize(pedLabel, 10);
       this.drawText(page, pedLabel, rightColX, y, { font: helveticaBoldFont, size: 10, color: { r: 0, g: 0, b: 0 } });
-      this.drawText(page, String(order.order_id_erp || ''), rightColX + pedLabelW, y, { font: helveticaFont, size: 10, color: { r: 0, g: 0, b: 0 } });
+      this.drawText(page, isPickupSheet ? new Date(data.pickupWithdrawnAt || data.generatedAt).toLocaleString('pt-BR') : String(order.order_id_erp || ''), rightColX + pedLabelW, y, { font: helveticaFont, size: 10, color: { r: 0, g: 0, b: 0 } });
       y -= 14;
       // Data de Venda e Previsão na mesma linha
       if (isAssemblySheet) {
@@ -477,7 +516,9 @@ export class DeliverySheetGenerator {
       // Declaration and signatures
       const declarationText = isAssemblySheet
         ? 'Confirmo o recebimento da montagem do(s) produto(s), realizada com sucesso e sem pendências.'
-        : 'Declaro que recebi o produto em perfeitas condições na data: ____/____/______';
+        : isPickupSheet
+          ? 'Declaro que retirei o produto em perfeitas condições na data: ____/____/______'
+          : 'Declaro que recebi o produto em perfeitas condições na data: ____/____/______';
       const declLines = DeliverySheetGenerator.wrapText(declarationText, width - margin * 2, helveticaFont, 10);
       for (let i = 0; i < declLines.length; i++) {
         this.drawText(page, declLines[i], margin, y - i * 12, { font: helveticaFont, size: 10, color: { r: 0, g: 0, b: 0 } });
@@ -498,7 +539,7 @@ export class DeliverySheetGenerator {
       page.drawLine({ start: { x: margin, y }, end: { x: leftLineEnd, y }, thickness: 1, color: rgb(0, 0, 0) });
       this.drawText(page, 'Ass. do Recebedor', margin, y - 14, { font: helveticaFont, size: 8, color: { r: 0, g: 0, b: 0 } });
       page.drawLine({ start: { x: rightLineStart, y }, end: { x: rightLineEnd, y }, thickness: 1, color: rgb(0, 0, 0) });
-      this.drawText(page, isAssemblySheet ? 'Ass. Resp pela Montagem' : 'Ass. Resp. pela Entrega', rightLineStart, y - 14, { font: helveticaFont, size: 8, color: { r: 0, g: 0, b: 0 } });
+      this.drawText(page, isAssemblySheet ? 'Ass. Resp pela Montagem' : isPickupSheet ? 'Ass. Resp. pela Retirada' : 'Ass. Resp. pela Entrega', rightLineStart, y - 14, { font: helveticaFont, size: 8, color: { r: 0, g: 0, b: 0 } });
       y -= 40; // extra bottom breathing before next item or page footer
       page.drawLine({ start: { x: margin, y }, end: { x: width - margin, y }, thickness: 1, color: rgb(0, 0, 0) });
       y -= 20; // extra gap before next item on same page
@@ -510,7 +551,9 @@ export class DeliverySheetGenerator {
     const footerY = 40;
     const footerText = isAssemblySheet
       ? 'Este documento é válido como comprovante de montagem'
-      : 'Este documento é válido como comprovante de entrega';
+      : isPickupSheet
+        ? 'Este documento é válido como comprovante de retirada'
+        : 'Este documento é válido como comprovante de entrega';
 
     this.drawText(page, footerText, margin, footerY, {
       font: helveticaFont,
@@ -522,7 +565,7 @@ export class DeliverySheetGenerator {
     if (data.route.status === 'completed') {
       const pages = pdfDoc.getPages();
       // Determine watermark text based on route type
-      const isPickupRoute = String(data.route.name || '').startsWith('RETIRADA');
+      const isPickupRoute = this.isLegacyPickupRouteName(data.route.name);
       const watermarkText = isPickupRoute ? 'PEDIDO RETIRADO' : 'ROTA FINALIZADA';
 
       for (const p of pages) {
@@ -553,7 +596,7 @@ export class DeliverySheetGenerator {
       color: { r: number; g: number; b: number };
     }
   ): void {
-    page.drawText(text, {
+    page.drawText(sanitizePdfText(this.normalizeLegacyText(text)), {
       x,
       y,
       font: options.font,
@@ -568,12 +611,35 @@ export class DeliverySheetGenerator {
 
   // Use centralized sanitization from pdfTextSanitizer.ts
   private static fitText(text: string, maxWidth: number, font: any, size: number): string {
-    return fitTextSafe(text, maxWidth, font, size);
+    return fitTextSafe(this.normalizeLegacyText(text), maxWidth, font, size);
   }
 
   // Use centralized sanitization from pdfTextSanitizer.ts
   private static wrapText(text: string, maxWidth: number, font: any, size: number): string[] {
-    return wrapTextSafe(text, maxWidth, font, size);
+    return wrapTextSafe(this.normalizeLegacyText(text), maxWidth, font, size);
+  }
+
+  private static normalizeLegacyText(text: string | null | undefined): string {
+    const value = String(text ?? '');
+    if (!value || !/[ÃÂâ]/.test(value)) return value;
+
+    try {
+      const bytes = Uint8Array.from(Array.from(value).map((char) => char.charCodeAt(0) & 0xff));
+      const decoded = new TextDecoder('utf-8').decode(bytes);
+      return decoded || value;
+    } catch {
+      return value
+        .replace(/â€¢/g, '•')
+        .replace(/Ã§/g, 'ç')
+        .replace(/Ã£/g, 'ã')
+        .replace(/Ã¡/g, 'á')
+        .replace(/Ã©/g, 'é')
+        .replace(/Ãª/g, 'ê')
+        .replace(/Ã­/g, 'í')
+        .replace(/Ã³/g, 'ó')
+        .replace(/Ãµ/g, 'õ')
+        .replace(/Ãº/g, 'ú');
+    }
   }
 
   private static getAssemblyPriorityWatermarkText(priority: 'baixa' | 'media' | 'alta'): string {
@@ -607,6 +673,18 @@ export class DeliverySheetGenerator {
 
     const obsInternas = normalize((order as any)?.observacoes_internas || raw?.observacoes_internas);
     return obsInternas.includes('*frete full*');
+  }
+
+  private static getDeliveryServiceWatermark(order: any): 'TROCA' | 'ASSISTENCIA' | null {
+    const serviceType = String((order as any)?.service_type || '').trim().toLowerCase();
+    if (serviceType === 'troca') return 'TROCA';
+    if (serviceType === 'assistencia') return 'ASSISTENCIA';
+
+    const orderIdErp = String((order as any)?.order_id_erp || '').trim();
+    if (/\-t(?:-\d+)?$/i.test(orderIdErp)) return 'TROCA';
+    if (/\-a(?:-\d+)?$/i.test(orderIdErp)) return 'ASSISTENCIA';
+
+    return null;
   }
 
   private static formatDateBR(input: any): string {

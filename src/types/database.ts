@@ -182,6 +182,20 @@ export interface Order {
   is_carrier_delivery?: boolean;
 }
 
+export interface OrderWithdrawal {
+  id: string;
+  order_id: string;
+  responsible_name: string;
+  notes?: string | null;
+  withdrawn_at: string;
+  registered_by_user_id?: string | null;
+  registered_by_name?: string | null;
+  source?: 'manual' | 'legacy_route';
+  legacy_route_id?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface CarrierCity {
   id: string;
   city_name: string;

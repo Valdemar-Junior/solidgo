@@ -1,7 +1,7 @@
 ﻿import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { supabase } from '../../supabase/client';
-import type { CarrierCity, DeliveryRouteCatalog, Order, DriverWithUser, Vehicle, RouteWithDetails } from '../../types/database';
+import type { CarrierCity, DeliveryRouteCatalog, Order, DriverWithUser, Vehicle, RouteWithDetails, OrderWithdrawal } from '../../types/database';
 import {
   Truck,
   Package,
@@ -60,7 +60,7 @@ import MdfeIssueModal from '../../components/mdfe/MdfeIssueModal';
 import DatePicker, { registerLocale } from 'react-datepicker';
 import { ptBR } from 'date-fns/locale';
 import 'react-datepicker/dist/react-datepicker.css';
-import { syncAssemblyProductsForRoute } from '../../utils/assembly/syncAssemblyProducts';
+import { syncAssemblyProductsForOrder } from '../../utils/assembly/syncAssemblyProducts';
 
 registerLocale('pt-BR', ptBR);
 
@@ -107,6 +107,11 @@ type FullUrgentAlertSummary = {
   dueTodayCount: number;
   awaitingRouting: FullUrgentAlertItem[];
   inSeparation: FullUrgentAlertItem[];
+};
+
+type PickupPrintBundle = {
+  withdrawals: OrderWithdrawal[];
+  orders: Order[];
 };
 
 type RouteMdfeManifest = {
@@ -304,7 +309,7 @@ function RouteCreationContent() {
   const loadDataRef = useRef<any>(null);
 
   // Tabs State - expandido para incluir bloqueados e coletas
-  const [activeRoutesTab, setActiveRoutesTab] = useState<'deliveries' | 'pickups' | 'blocked' | 'pickupOrders' | 'pickupRoutes'>('deliveries');
+  const [activeRoutesTab, setActiveRoutesTab] = useState<'deliveries' | 'blocked' | 'pickupOrders' | 'pickupRoutes'>('deliveries');
 
   // Sorting State
   const [sortColumn, setSortColumn] = useState<string>('');
@@ -624,9 +629,12 @@ function RouteCreationContent() {
 
   // Pickup Modal State
   const [showPickupModal, setShowPickupModal] = useState(false);
-  const [pickupConferente, setPickupConferente] = useState(''); // Conferente ID for pickup
+  const [pickupOrderIds, setPickupOrderIds] = useState<string[]>([]);
+  const [pickupResponsibleName, setPickupResponsibleName] = useState('');
   const [pickupObservations, setPickupObservations] = useState('');
   const [pickupSaving, setPickupSaving] = useState(false);
+  const [pickupDocumentsPrinted, setPickupDocumentsPrinted] = useState(false);
+  const [openOrderActionsId, setOpenOrderActionsId] = useState<string | null>(null);
 
   // Estados para pedidos bloqueados e coletas pendentes
   const [blockedOrders, setBlockedOrders] = useState<Order[]>([]);
@@ -640,10 +648,14 @@ function RouteCreationContent() {
 
   const [pickupOrderObservations, setPickupOrderObservations] = useState('');
 
+  // Legacy only: old customer pickups were persisted as routes named "RETIRADA...".
+  // The current operational pickup flow uses order_withdrawals instead.
+  const isLegacyPickupRouteName = (value: any) => String(value || '').trim().toUpperCase().startsWith('RETIRADA');
+
   const isStandardDeliveryRoute = (route: Pick<RouteWithDetails, 'name'> | { name?: string | null } | null) => {
     if (!route) return false;
     const routeName = String(route.name || '').trim().toUpperCase();
-    return !routeName.startsWith('RETIRADA') && !routeName.startsWith('COLETA-');
+    return !isLegacyPickupRouteName(routeName) && !routeName.startsWith('COLETA-');
   };
 
   // --- EDIT ROUTE LOGIC ---
@@ -850,20 +862,15 @@ function RouteCreationContent() {
     return routesList.filter(r => {
       // Logic for tab filtering
       const name = String(r.name || '');
-      const isRetirada = name.startsWith('RETIRADA');
+      const isRetirada = isLegacyPickupRouteName(name);
       const isColeta = name.startsWith('COLETA-'); // Rotas de coleta iniciam com COLETA-
 
-      if (activeRoutesTab === 'pickups') return isRetirada;
       if (activeRoutesTab === 'pickupRoutes') return isColeta;
       // Deliveries = Not Retirada AND Not Coleta
       if (activeRoutesTab === 'deliveries') return !isRetirada && !isColeta;
 
       return false;
     }).filter(r => {
-      const isPkp = String(r.name || '').startsWith('RETIRADA');
-      const tabMatch = activeRoutesTab === 'pickups' ? isPkp : !isPkp;
-      if (!tabMatch) return false;
-
       // Busca rÃ¡pida por nome, motorista ou cÃ³digo
       if (routeSearchQuery) {
         const q = routeSearchQuery.toLowerCase().trim();
@@ -1740,7 +1747,7 @@ function RouteCreationContent() {
   const isAlertDeliveryRouteName = (value: any) => {
     const routeName = String(value || '').trim().toUpperCase();
     if (!routeName) return true;
-    return !routeName.startsWith('RETIRADA') && !routeName.startsWith('COLETA-');
+    return !isLegacyPickupRouteName(routeName) && !routeName.startsWith('COLETA-');
   };
 
   const isCollectionRouteName = (value: any) => {
@@ -2559,6 +2566,7 @@ function RouteCreationContent() {
       if (ordersRes.data) {
         const rawOrders = ordersRes.data as Order[];
         let carrierDeliveryMap = new Map<string, boolean>();
+        let withdrawnOrderIds = new Set<string>();
         if (rawOrders.length > 0) {
           try {
             const { data: carrierFlagsData, error: carrierFlagsError } = await supabase
@@ -2571,14 +2579,24 @@ function RouteCreationContent() {
                 (carrierFlagsData || []).map((row: any) => [String(row.id), Boolean(row.is_carrier_delivery)])
               );
             }
+
+            const { data: withdrawalsData, error: withdrawalsError } = await supabase
+              .from('order_withdrawals')
+              .select('order_id')
+              .in('order_id', rawOrders.map((order) => String(order.id)));
+
+            if (!withdrawalsError) {
+              withdrawnOrderIds = new Set((withdrawalsData || []).map((row: any) => String(row.order_id)));
+            }
           } catch (error) {
-            console.warn('Carrier delivery flag not available yet:', error);
+            console.warn('Carrier delivery flag or withdrawals not available yet:', error);
           }
         }
         setFullUrgentAlert(buildFullUrgentAlertSummary(rawOrders, activeRouteOrdersRes.data || []));
         processedOrders = rawOrders
           .filter(o => !lockedOrderIds.has(o.id)) // SAFETY FILTER
           .filter(o => String(o.status) !== 'assigned') // BLOCK VISIBILITY OF INCONSISTENT/STUCK ORDERS
+          .filter(o => !withdrawnOrderIds.has(String(o.id))) // Pedidos retirados nao devem voltar para a fila
           .map((o: any) => {
             let updated = { ...o };
             updated.is_carrier_delivery = carrierDeliveryMap.get(String(o.id)) || false;
@@ -2888,81 +2906,260 @@ function RouteCreationContent() {
     }
   };
 
-
-
-  const createPickup = async () => {
-    if (selectedOrders.size === 0) {
+  const openPickupModalForOrders = (orderIds: string[]) => {
+    const uniqueOrderIds = Array.from(new Set(orderIds.map((id) => String(id)).filter(Boolean)));
+    if (uniqueOrderIds.length === 0) {
       toast.error('Selecione pelo menos um pedido para retirada.');
       return;
     }
-    if (!pickupConferente) {
-      toast.error('Selecione o conferente responsável pela entrega.');
+
+    setPickupOrderIds(uniqueOrderIds);
+    setPickupResponsibleName('');
+    setPickupObservations('');
+    setPickupDocumentsPrinted(false);
+    setShowPickupModal(true);
+  };
+
+  const closePickupModal = () => {
+    setShowPickupModal(false);
+    setPickupOrderIds([]);
+    setPickupResponsibleName('');
+    setPickupObservations('');
+    setPickupDocumentsPrinted(false);
+    setPickupSaving(false);
+  };
+
+  useEffect(() => {
+    if (!showPickupModal) return;
+    setPickupDocumentsPrinted(false);
+  }, [pickupResponsibleName, pickupObservations, pickupOrderIds, showPickupModal]);
+
+  useEffect(() => {
+    if (!openOrderActionsId) return;
+
+    const handleClickOutside = () => setOpenOrderActionsId(null);
+    document.addEventListener('click', handleClickOutside);
+    return () => document.removeEventListener('click', handleClickOutside);
+  }, [openOrderActionsId]);
+
+  const fetchOrdersForPickupPrint = async (orderIds: string[]) => {
+    const uniqueOrderIds = Array.from(new Set(orderIds.map((id) => String(id)).filter(Boolean)));
+    if (uniqueOrderIds.length === 0) return [] as Order[];
+
+    const { data, error } = await supabase
+      .from('orders')
+      .select('id, order_id_erp, customer_name, phone, address_json, items_json, status, created_at, updated_at, filial_venda, data_venda, previsao_entrega, tem_frete_full, observacoes_publicas, observacoes_internas, customer_cpf, vendedor_nome, return_flag, last_return_reason, last_return_notes, brand, department, service_type, erp_status, blocked_at, blocked_reason, requires_pickup, pickup_created_at, return_nfe_number, return_nfe_key, return_date, return_type, import_source, previsao_montagem, product_group, product_subgroup, danfe_gerada_em, danfe_base64, return_danfe_base64, raw_json')
+      .in('id', uniqueOrderIds);
+
+    if (error) throw error;
+
+    const orderMap = new Map((data || []).map((order: any) => [String(order.id), order]));
+    return uniqueOrderIds
+      .map((orderId) => orderMap.get(String(orderId)))
+      .filter(Boolean) as Order[];
+  };
+
+  const buildPickupPrintBundle = async (withdrawals: OrderWithdrawal[]) => {
+    const ordersForPrint = await fetchOrdersForPickupPrint(withdrawals.map((entry) => String(entry.order_id)));
+    return {
+      withdrawals,
+      orders: ordersForPrint,
+    } satisfies PickupPrintBundle;
+  };
+
+  const buildPickupPreviewBundle = async () => {
+    if (pickupOrderIds.length === 0) {
+      throw new Error('Nenhum pedido selecionado para retirada.');
+    }
+    if (!pickupResponsibleName.trim()) {
+      throw new Error('Selecione o responsável pela retirada.');
+    }
+
+    const now = new Date().toISOString();
+    const previewWithdrawals = pickupOrderIds.map((orderId, index) => ({
+      id: `preview-withdrawal-${orderId}-${index + 1}`,
+      order_id: orderId,
+      responsible_name: pickupResponsibleName.trim(),
+      notes: pickupObservations.trim() || null,
+      withdrawn_at: now,
+      registered_by_user_id: authUser?.id || null,
+      registered_by_name: authUser?.name || authUser?.email || null,
+      source: 'manual',
+      legacy_route_id: null,
+      created_at: now,
+      updated_at: now,
+    })) as OrderWithdrawal[];
+
+    return buildPickupPrintBundle(previewWithdrawals);
+  };
+
+  const generatePickupReceiptPdf = async (bundle: PickupPrintBundle) => {
+    if (!bundle.orders.length || !bundle.withdrawals.length) {
+      throw new Error('Nenhum pedido disponível para imprimir o comprovante de retirada.');
+    }
+
+    const routeId = `withdrawal-${bundle.withdrawals[0]?.id || Date.now()}`;
+    const routeName = `RETIRADA - ${new Date(bundle.withdrawals[0].withdrawn_at || new Date().toISOString()).toLocaleDateString('pt-BR')}`;
+    const routeOrders = bundle.orders.map((order, index) => {
+      const withdrawal = bundle.withdrawals.find((entry) => String(entry.order_id) === String(order.id));
+      return {
+        id: withdrawal?.id || `${routeId}-${index + 1}`,
+        route_id: routeId,
+        order_id: String(order.id),
+        sequence: index + 1,
+        status: 'delivered',
+        delivered_at: withdrawal?.withdrawn_at || new Date().toISOString(),
+        delivery_observations: withdrawal?.notes || `Responsável: ${withdrawal?.responsible_name || '-'}`,
+      } as any;
+    });
+
+    const mappedOrders = bundle.orders.map((order, index) =>
+      mapOrderToDeliverySheetOrder(order, routeOrders[index], routeName)
+    );
+
+    return DeliverySheetGenerator.generateDeliverySheet({
+      route: {
+        id: routeId,
+        name: routeName,
+        route_code: `RET-${String(bundle.withdrawals[0].id).slice(0, 8).toUpperCase()}`,
+        driver_id: '',
+        vehicle_id: '',
+        conferente: authUser?.name || 'Não informado',
+        observations: `Responsável: ${bundle.withdrawals[0].responsible_name}${bundle.withdrawals[0].notes ? `\nObs: ${bundle.withdrawals[0].notes}` : ''}`,
+        status: 'completed',
+        created_at: bundle.withdrawals[0].created_at,
+        updated_at: bundle.withdrawals[0].updated_at,
+        completed_at: bundle.withdrawals[0].withdrawn_at,
+      } as any,
+      routeOrders,
+      driver: {
+        id: 'withdrawal',
+        user_id: '',
+        cpf: '',
+        active: true,
+        user: {
+          id: '',
+          email: '',
+          name: 'Retirada pelo cliente',
+          role: 'driver',
+          active: true,
+          created_at: bundle.withdrawals[0].created_at,
+        },
+      },
+      orders: mappedOrders,
+      generatedAt: new Date().toISOString(),
+      teamName: 'Retirada pelo cliente',
+      helperName: bundle.withdrawals[0].responsible_name,
+      pickupResponsibleName: bundle.withdrawals[0].responsible_name,
+      pickupRegisteredByName: bundle.withdrawals[0].registered_by_name || authUser?.name || authUser?.email || '-',
+      pickupWithdrawnAt: bundle.withdrawals[0].withdrawn_at,
+      pickupObservations: bundle.withdrawals[0].notes || '',
+    }, 'Comprovante de Retirada');
+  };
+
+  const generatePickupDanfePdf = async (bundle: PickupPrintBundle) => {
+    const danfes = bundle.orders
+      .map((order: any) => String(order?.danfe_base64 || ''))
+      .filter((base64) => base64.startsWith('JVBER'));
+
+    if (danfes.length === 0) {
+      throw new Error('Nenhuma nota fiscal encontrada para os pedidos selecionados.');
+    }
+
+    const merged = await PDFDocument.create();
+    for (const base64 of danfes) {
+      const bytes = Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
+      const source = await PDFDocument.load(bytes);
+      const pages = await merged.copyPages(source, source.getPageIndices());
+      pages.forEach((page) => merged.addPage(page));
+    }
+
+    return merged.save();
+  };
+
+  const printPickupDocuments = async () => {
+    const bundle = await buildPickupPreviewBundle();
+    const receiptPdf = await generatePickupReceiptPdf(bundle);
+    const danfePdf = await generatePickupDanfePdf(bundle);
+
+    const merged = await PDFDocument.create();
+    for (const pdfBytes of [receiptPdf, danfePdf]) {
+      const source = await PDFDocument.load(pdfBytes);
+      const pages = await merged.copyPages(source, source.getPageIndices());
+      pages.forEach((page) => merged.addPage(page));
+    }
+
+    const out = await merged.save();
+    DeliverySheetGenerator.openPDFInNewTab(out);
+    setPickupDocumentsPrinted(true);
+  };
+
+  const createPickup = async () => {
+    if (pickupOrderIds.length === 0) {
+      toast.error('Selecione pelo menos um pedido para retirada.');
+      return;
+    }
+    if (!pickupResponsibleName.trim()) {
+      toast.error('Selecione o responsável pela retirada.');
+      return;
+    }
+    const confirmMessage = pickupDocumentsPrinted
+      ? 'Confirme que os documentos já foram impressos. Clique em OK para prosseguir com a retirada ou em Cancelar para voltar.'
+      : 'Os documentos ainda não foram impressos. Clique em Cancelar para imprimir agora ou em OK para prosseguir mesmo assim com a retirada.';
+    if (!window.confirm(confirmMessage)) {
       return;
     }
 
-    // Buscar o nome do conferente selecionado
-    const conferenteInfo = conferentes.find(c => c.id === pickupConferente);
-    const conferenteName = conferenteInfo?.name || 'Não informado';
-
     setPickupSaving(true);
     try {
-      const name = `RETIRADA - ${new Date().toLocaleString('pt-BR')}`;
-      const { data: routeData, error: routeError } = await supabase
-        .from('routes')
-        .insert({
-          name,
-          driver_id: PICKUP_PLACEHOLDER_DRIVER_ID, // Motorista placeholder
-          conferente: conferenteName, // ResponsÃ¡vel pela entrega
-          status: 'pending',
-          observations: `Retirada em Loja.\nResponsável: ${conferenteName}\nObs: ${pickupObservations}`.trim()
-        })
-        .select()
-        .single();
-
-      if (routeError) throw routeError;
-
-      const orderIds = Array.from(selectedOrders);
-      // Create route_orders with 'pending' status
-      const routeOrdersPayload = orderIds.map((oid, idx) => ({
-        route_id: routeData.id,
-        order_id: oid,
-        sequence: idx + 1,
-        status: 'pending',
-        delivery_observations: `Retirada em Loja. Resp: ${conferenteName}. ${pickupObservations}`.trim().slice(0, 500)
+      const now = new Date().toISOString();
+      const withdrawalsPayload = pickupOrderIds.map((orderId) => ({
+        order_id: orderId,
+        responsible_name: pickupResponsibleName.trim(),
+        notes: pickupObservations.trim() || null,
+        withdrawn_at: now,
+        registered_by_user_id: authUser?.id || null,
+        registered_by_name: authUser?.name || authUser?.email || null,
+        source: 'manual',
       }));
 
-      const { error: roError } = await supabase.from('route_orders').insert(routeOrdersPayload);
-      if (roError) throw roError;
+      const { data: withdrawalRows, error: withdrawalError } = await supabase
+        .from('order_withdrawals')
+        .upsert(withdrawalsPayload, { onConflict: 'order_id' })
+        .select('*');
 
-      // Update orders to 'assigned'
-      const { error: ordError } = await supabase.from('orders').update({ status: 'assigned' }).in('id', orderIds);
-      if (ordError) throw ordError;
+      if (withdrawalError) throw withdrawalError;
 
-      toast.success('Retirada registrada!');
-      setSelectedOrders(new Set());
-      setPickupConferente('');
-      setPickupObservations('');
-      setShowPickupModal(false);
+      const { error: updateOrdersError } = await supabase
+        .from('orders')
+        .update({
+          status: 'delivered',
+          updated_at: now,
+        })
+        .in('id', pickupOrderIds);
 
-      await loadData(false);
+      if (updateOrdersError) throw updateOrdersError;
 
-      setActiveRoutesTab('pickups');
+      const assemblySyncResults = await Promise.allSettled(
+        pickupOrderIds.map((orderId) => syncAssemblyProductsForOrder(String(orderId)))
+      );
+      const assemblySyncFailures = assemblySyncResults.filter((result) => result.status === 'rejected');
 
-      // Attempt to set route for modal
-      const { data: fullRoute } = await supabase
-        .from('routes')
-        .select('*, route_orders(*, order:orders(*)), driver:drivers(*, user:users(*)), vehicle:vehicles(*)')
-        .eq('id', routeData.id)
-        .single();
+      setSelectedOrders((prev) => {
+        const next = new Set(prev);
+        pickupOrderIds.forEach((orderId) => next.delete(String(orderId)));
+        return next;
+      });
 
-      if (fullRoute) {
-        setSelectedRoute(fullRoute as any);
-        setShowRouteModal(true);
+      toast.success(pickupOrderIds.length === 1 ? 'Retirada registrada com sucesso!' : 'Retiradas registradas com sucesso!');
+      if (assemblySyncFailures.length > 0) {
+        console.error('Falha ao sincronizar montagem para retiradas:', assemblySyncFailures);
+        toast.warning('Retirada registrada, mas houve falha ao gerar parte das tarefas de montagem.');
       }
-
+      await loadData(false);
     } catch (error: any) {
       console.error('Error creating pickup:', error);
-      toast.error('Erro: ' + error.message);
+      toast.error('Erro ao registrar retirada: ' + (error?.message || 'Erro desconhecido'));
     } finally {
       setPickupSaving(false);
     }
@@ -3184,8 +3381,8 @@ function RouteCreationContent() {
       // Recarregar dados
       await loadData(false);
 
-      // Mudar para aba de retiradas (onde a rota vai aparecer)
-      setActiveRoutesTab('pickups');
+      // Mudar para aba das rotas de coleta
+      setActiveRoutesTab('pickupRoutes');
 
     } catch (error: any) {
       console.error('Error creating pickup order:', error);
@@ -3605,13 +3802,13 @@ function RouteCreationContent() {
           </button>
 
           <button
-            onClick={() => setShowPickupModal(true)}
+            onClick={() => openPickupModalForOrders(Array.from(selectedOrders))}
             disabled={selectedOrders.size === 0}
             className="flex items-center justify-center px-4 py-3 rounded-xl border border-purple-200 text-purple-700 bg-purple-50 hover:bg-purple-100 font-bold transition-all shadow-sm hover:shadow disabled:opacity-60 disabled:cursor-not-allowed disabled:shadow-none"
-            title="Registrar Retirada em Loja"
+            title="Registrar retirada pelo cliente"
           >
             <Store className="h-5 w-5 mr-2" />
-            Registrar Retirada
+            Retirada cliente
           </button>
 
           <button
@@ -3721,6 +3918,9 @@ function RouteCreationContent() {
                 <thead className="bg-gray-50 sticky top-0 z-10 shadow-sm">
                   <tr>
                     <th className="px-4 py-3 w-10 text-left"></th>
+                    <th className="px-4 py-3 text-left font-semibold text-gray-600 uppercase text-xs tracking-wider whitespace-nowrap">
+                      Ações
+                    </th>
                     {columnsConf.filter(c => c.visible).map(c => (
                       <th
                         key={c.id}
@@ -3793,6 +3993,41 @@ function RouteCreationContent() {
                             {isSelected && <CheckCircle2 className="h-3.5 w-3.5 text-white" />}
                           </div>
                         </td>
+                        <td className="px-4 py-3 whitespace-nowrap">
+                          <div className="relative inline-block text-left">
+                            <button
+                              type="button"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                setOpenOrderActionsId((current) => current === String(o.id) ? null : String(o.id));
+                              }}
+                              className="inline-flex items-center rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-semibold text-gray-700 transition-colors hover:bg-gray-50"
+                              title="Ações do pedido"
+                            >
+                              Ações
+                              <ChevronDown className="ml-1.5 h-3.5 w-3.5" />
+                            </button>
+
+                            {openOrderActionsId === String(o.id) && (
+                              <div
+                                className="absolute left-0 z-30 mt-2 min-w-[180px] overflow-hidden rounded-xl border border-gray-200 bg-white shadow-lg"
+                                onClick={(event) => event.stopPropagation()}
+                              >
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setOpenOrderActionsId(null);
+                                    openPickupModalForOrders([String(o.id)]);
+                                  }}
+                                  className="flex w-full items-center px-3 py-2 text-left text-sm font-medium text-purple-700 transition-colors hover:bg-purple-50"
+                                >
+                                  <Store className="mr-2 h-4 w-4" />
+                                  Cliente retira
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        </td>
                         {columnsConf.filter(c => c.visible).map(c => (
                           <td
                             key={c.id}
@@ -3844,7 +4079,7 @@ function RouteCreationContent() {
                                   </span>
                                 )}
                                 {obsIntLower.includes('*retirada*') && (
-                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-purple-100 text-purple-800 border border-purple-200" title="Retirada em Loja/Fábrica">
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-purple-100 text-purple-800 border border-purple-200" title="Retirada pelo cliente">
                                     <Store className="h-3.5 w-3.5" />
                                     Retirada
                                   </span>
@@ -3984,13 +4219,6 @@ function RouteCreationContent() {
                 Rotas de Entrega
               </button>
               <button
-                onClick={() => setActiveRoutesTab('pickups')}
-                className={`px-4 py-2 rounded-lg text-sm font-bold transition-all flex items-center gap-2 ${activeRoutesTab === 'pickups' ? 'bg-white shadow-sm text-purple-700' : 'text-gray-500 hover:text-gray-700'}`}
-              >
-                <Store className="h-4 w-4" />
-                Retiradas em Loja
-              </button>
-              <button
                 onClick={() => setActiveRoutesTab('blocked')}
                 className={`px-4 py-2 rounded-lg text-sm font-bold transition-all flex items-center gap-2 ${activeRoutesTab === 'blocked' ? 'bg-white shadow-sm text-red-700' : 'text-gray-500 hover:text-gray-700'}`}
               >
@@ -4021,13 +4249,12 @@ function RouteCreationContent() {
 
             {(() => {
               let count = 0;
-              if (activeRoutesTab === 'deliveries' || activeRoutesTab === 'pickups' || activeRoutesTab === 'pickupRoutes') {
+              if (activeRoutesTab === 'deliveries' || activeRoutesTab === 'pickupRoutes') {
                 const filtered = routesList.filter(r => {
                   const name = String(r.name || '');
-                  const isRetirada = name.startsWith('RETIRADA');
+                  const isRetirada = isLegacyPickupRouteName(name);
                   const isColeta = name.startsWith('COLETA-');
 
-                  if (activeRoutesTab === 'pickups') return isRetirada;
                   if (activeRoutesTab === 'pickupRoutes') return isColeta;
                   return !isRetirada && !isColeta;
                 });
@@ -4046,18 +4273,16 @@ function RouteCreationContent() {
           </div>
 
           {/* ConteÃºdo condicional baseado na aba ativa */}
-          {(activeRoutesTab === 'deliveries' || activeRoutesTab === 'pickups' || activeRoutesTab === 'pickupRoutes') && (
+          {(activeRoutesTab === 'deliveries' || activeRoutesTab === 'pickupRoutes') && (
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
               {filteredRoutesList.length === 0 ? (
                 <div className="col-span-full bg-white rounded-xl border border-dashed border-gray-300 p-12 text-center">
                   <div className="mx-auto w-16 h-16 bg-gray-50 rounded-full flex items-center justify-center mb-4">
-                    {activeRoutesTab === 'pickups' ? <Store className="h-8 w-8 text-gray-400" /> :
-                      activeRoutesTab === 'pickupRoutes' ? <Replace className="h-8 w-8 text-gray-400" /> : <Truck className="h-8 w-8 text-gray-400" />}
+                    {activeRoutesTab === 'pickupRoutes' ? <Replace className="h-8 w-8 text-gray-400" /> : <Truck className="h-8 w-8 text-gray-400" />}
                   </div>
                   <h3 className="text-lg font-medium text-gray-900">Nenhum registro encontrado</h3>
                   <p className="text-gray-500">
-                    {activeRoutesTab === 'pickups' ? 'Nenhuma retirada registrada recentemente.' :
-                      activeRoutesTab === 'pickupRoutes' ? 'Nenhuma rota de coleta registrada recentemente.' : 'Crie sua primeira rota selecionando pedidos acima.'}
+                    {activeRoutesTab === 'pickupRoutes' ? 'Nenhuma rota de coleta registrada recentemente.' : 'Crie sua primeira rota selecionando pedidos acima.'}
                   </p>
                 </div>
               ) : (
@@ -4120,7 +4345,7 @@ function RouteCreationContent() {
                         <div className="space-y-3 mb-6">
                           {/* Para retiradas: mostrar conferente como ResponsÃ¡vel, esconder motorista e veÃ­culo */}
                           {(() => {
-                            const isPickupRoute = String(route.name || '').startsWith('RETIRADA');
+                            const isPickupRoute = isLegacyPickupRouteName(route.name);
 
                             if (isPickupRoute) {
                               return (
@@ -4239,7 +4464,7 @@ function RouteCreationContent() {
 
 
               {/* Load More Button */}
-              {(activeRoutesTab === 'deliveries' || activeRoutesTab === 'pickups' || activeRoutesTab === 'pickupRoutes') && hasMoreRoutes && filteredRoutesList.length > 0 && (
+              {(activeRoutesTab === 'deliveries' || activeRoutesTab === 'pickupRoutes') && hasMoreRoutes && filteredRoutesList.length > 0 && (
                 <div className="col-span-full flex justify-center mt-4">
                   <button
                     onClick={() => fetchRoutes(false)}
@@ -4804,30 +5029,32 @@ function RouteCreationContent() {
               <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
                 <h3 className="text-lg font-bold text-gray-900 flex items-center gap-2">
                   <Store className="h-5 w-5 text-purple-600" />
-                  Registrar Retirada
+                  Retirada pelo cliente
                 </h3>
-                <button onClick={() => setShowPickupModal(false)} className="text-gray-400 hover:text-gray-600"><X className="h-5 w-5" /></button>
+                <button onClick={closePickupModal} className="text-gray-400 hover:text-gray-600"><X className="h-5 w-5" /></button>
               </div>
               <div className="p-6 space-y-4">
                 <p className="text-sm text-gray-600 bg-purple-50 p-3 rounded-lg border border-purple-100">
-                  Você está prestes a marcar <strong>{selectedOrders.size}</strong> pedido(s) como <strong>RETIRADO</strong>.
-                  Isso baixará os pedidos do sistema imediatamente e gerará um comprovante.
+                  Você está prestes a marcar <strong>{pickupOrderIds.length}</strong> pedido(s) como <strong>RETIRADO</strong>.
+                  Isso encerrará o fluxo de entrega desses pedidos e deixará a retirada visível na consulta de pedidos.
                 </p>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Responsável pela Entrega *</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Responsável pela retirada *</label>
                   <select
-                    value={pickupConferente}
-                    onChange={e => setPickupConferente(e.target.value)}
+                    value={pickupResponsibleName}
+                    onChange={(event) => setPickupResponsibleName(event.target.value)}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 outline-none bg-white"
                     autoFocus
                   >
                     <option value="">Selecione o conferente...</option>
-                    {conferentes.map(c => (
-                      <option key={c.id} value={c.id}>{c.name}</option>
+                    {conferentes.map((conferenteItem) => (
+                      <option key={conferenteItem.id} value={conferenteItem.name}>
+                        {conferenteItem.name}
+                      </option>
                     ))}
                   </select>
-                  <p className="text-xs text-gray-500 mt-1">Quem entregou a mercadoria ao cliente na loja</p>
+                  <p className="text-xs text-gray-500 mt-1">Mantém o mesmo modelo do fluxo antigo para facilitar a migração do histórico.</p>
                 </div>
 
                 <div>
@@ -4839,16 +5066,49 @@ function RouteCreationContent() {
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 outline-none h-24 resize-none"
                   />
                 </div>
+
+                <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600">
+                  Registrado por: <strong>{authUser?.name || authUser?.email || 'Usuário atual'}</strong>
+                </div>
+
+                {pickupDocumentsPrinted && (
+                  <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4">
+                    <p className="text-sm font-semibold text-emerald-800">Documentos enviados para impressão.</p>
+                    <p className="text-xs text-emerald-700 mt-1">
+                      Se necessário, você pode imprimir novamente antes de confirmar a retirada.
+                    </p>
+                  </div>
+                )}
               </div>
               <div className="px-6 py-4 border-t border-gray-100 bg-gray-50 flex justify-end gap-3">
-                <button onClick={() => setShowPickupModal(false)} className="px-4 py-2 rounded-lg border border-gray-300 text-gray-700 font-medium hover:bg-white transition-colors">Cancelar</button>
+                <button onClick={closePickupModal} className="px-4 py-2 rounded-lg border border-gray-300 text-gray-700 font-medium hover:bg-white transition-colors">
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      const toastId = toast.loading('Gerando comprovante e nota fiscal...');
+                      await printPickupDocuments();
+                      toast.success('Documentos gerados com sucesso!', { id: toastId });
+                    } catch (error: any) {
+                      console.error(error);
+                      toast.error(error?.message || 'Erro ao gerar documentos da retirada');
+                    }
+                  }}
+                  disabled={pickupSaving}
+                  className="px-4 py-2 rounded-lg border border-purple-200 bg-white text-purple-700 font-semibold hover:bg-purple-50 transition-colors flex items-center gap-2"
+                >
+                  <FileText className="h-4 w-4" />
+                  {pickupDocumentsPrinted ? 'Imprimir novamente' : 'Imprimir documentos'}
+                </button>
                 <button
                   onClick={createPickup}
                   disabled={pickupSaving}
-                  className="px-6 py-2 rounded-lg bg-purple-600 text-white font-bold hover:bg-purple-700 shadow-md transition-all flex items-center gap-2"
+                  className="px-6 py-2 rounded-lg bg-purple-600 text-white font-bold hover:bg-purple-700 shadow-md transition-all flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
                 >
                   {pickupSaving && <RefreshCw className="animate-spin h-4 w-4" />}
-                  Confirmar Retirada
+                  Confirmar retirada
                 </button>
               </div>
             </div>
@@ -5277,7 +5537,7 @@ function RouteCreationContent() {
                       </h2>
                     )}
                   </div>
-                  {!isEditingRoute && String(selectedRoute.name || '').startsWith('RETIRADA') && (
+                  {!isEditingRoute && isLegacyPickupRouteName(selectedRoute.name) && (
                     <p className="text-sm text-gray-500 mt-1">
                       {`Responsável: ${selectedRoute.conferente || 'Não informado'}`}
                     </p>
@@ -5351,86 +5611,15 @@ function RouteCreationContent() {
                       </button>
                     )}
 
-                    {/* Custom Buttons for Pickup Routes vs Standard Routes */}
+                    {/* Custom Buttons for Collection Routes vs Standard Routes */}
                     {(() => {
-                      const isPickup = String(selectedRoute.name || '').startsWith('RETIRADA');
+                      const isPickup = isLegacyPickupRouteName(selectedRoute.name);
 
                       if (isPickup) {
-                        // --- PICKUP BUTTONS ---
                         return (
-                          <>
-                            {/* Confirmar Retirada Button */}
-                            <button
-                              onClick={async (e) => {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                if (!selectedRoute) return;
-                                if (selectedRoute.status === 'completed') return; // Already completed
-                                try {
-                                  if (confirm('Confirma a retirada destes pedidos? Isso marcará a rota como concluída e os pedidos como entregues.')) {
-                                    setSaving(true);
-
-                                    // 1. Update Route Status
-                                    const now = new Date().toISOString();
-                                    const { error: rErr } = await supabase
-                                      .from('routes')
-                                      .update({ status: 'completed', completed_at: now, updated_at: now })
-                                      .eq('id', selectedRoute.id);
-                                    if (rErr) throw rErr;
-
-                                    // Update route_orders one by one
-                                    const routeOrdersToUpdate = selectedRoute.route_orders || [];
-
-                                    for (const ro of routeOrdersToUpdate) {
-                                      await supabase
-                                        .from('route_orders')
-                                        .update({ status: 'delivered', delivered_at: now })
-                                        .eq('id', ro.id);
-                                    }
-
-                                    // Update orders
-                                    const oIds = routeOrdersToUpdate.map((ro: any) => ro.order_id);
-                                    if (oIds.length > 0) {
-                                      await supabase.from('orders').update({ status: 'delivered' }).in('id', oIds);
-                                    }
-
-                                    // 3. Sync de montagem pela RPC única do banco
-                                    try {
-                                      const assemblySyncResult = await syncAssemblyProductsForRoute(selectedRoute.id);
-                                      console.log('[Pickup] Assembly sync result:', assemblySyncResult);
-                                    } catch (assemblyError) {
-                                      console.error('[Pickup] Error syncing assembly products:', assemblyError);
-                                      toast.error('Retirada confirmada, mas houve falha ao gerar as tarefas de montagem.');
-                                    }
-
-                                    // 4. Local State Update (Optimistic)
-                                    const updated = { ...selectedRoute, status: 'completed', completed_at: now, updated_at: now };
-                                    updated.route_orders = (updated.route_orders || []).map((ro: any) => ({
-                                      ...ro,
-                                      status: 'delivered',
-                                      delivered_at: now
-                                    }));
-                                    setSelectedRoute(updated as any);
-
-                                    toast.success('Retirada confirmada com sucesso!');
-                                    await loadData(false);
-                                    setShowRouteModal(false);
-                                    if (showRouteModalRef && showRouteModalRef.current) showRouteModalRef.current = false;
-                                  }
-                                } catch (e) {
-                                  console.error(e);
-                                  toast.error('Erro ao confirmar retirada');
-                                } finally {
-                                  setSaving(false);
-                                }
-                              }}
-                              disabled={selectedRoute.status === 'completed'}
-                              className="flex items-center justify-center px-4 py-2 bg-purple-50 text-purple-700 hover:bg-purple-100 rounded-lg font-medium text-sm transition-colors border border-purple-200 disabled:opacity-50 disabled:cursor-not-allowed"
-                            >
-                              <CheckCircle2 className="h-4 w-4 mr-2" />
-                              {selectedRoute.status === 'completed' ? 'Retirada Concluída' : 'Confirmar Retirada'}
-                            </button>
-                          </>
+                          <div className="px-4 py-2 bg-purple-50 text-purple-700 rounded-lg font-medium text-sm border border-purple-200">
+                            Retirada legada em modo somente leitura. Novas retiradas são registradas pela lista de pedidos.
+                          </div>
                         );
                       }
 
@@ -6081,7 +6270,7 @@ function RouteCreationContent() {
                                   }`}>
                                   {(() => {
                                     if (ro.status === 'delivered') {
-                                      const isPkp = String(selectedRoute.name || '').startsWith('RETIRADA');
+                                      const isPkp = isLegacyPickupRouteName(selectedRoute.name);
                                       const dt = ro.delivered_at
                                         ? new Date(ro.delivered_at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
                                         : '';

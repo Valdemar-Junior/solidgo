@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ArrowLeft, Loader2, MapPin, Phone, Search, Truck, Hammer, FileText, AlertTriangle, LogOut, Eye, ChevronDown, ChevronUp, Copy, Check, Briefcase } from 'lucide-react';
+import { ArrowLeft, Loader2, MapPin, Phone, Search, Truck, Hammer, FileText, FileSpreadsheet, AlertTriangle, LogOut, Eye, ChevronDown, ChevronUp, Copy, Check, Briefcase } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../../supabase/client';
 import { useAuthStore } from '../../stores/authStore';
-import type { Order } from '../../types/database';
+import type { Order, OrderWithdrawal } from '../../types/database';
 import { toast } from 'sonner';
 import { AssemblyPhotosViewer, DeliveryPhotosViewer } from '../../components/photos';
 import { DeliveryProofPdfGenerator } from '../../utils/pdf/deliveryProofPdfGenerator';
+import { DeliverySheetGenerator } from '../../utils/pdf/deliverySheetGenerator';
+import { PDFDocument } from 'pdf-lib';
 
 interface RouteOrderInfo {
   id: string;
@@ -65,6 +67,67 @@ interface DeliveryPhotoRow {
   created_at?: string | null;
 }
 
+interface WithdrawalInfo extends OrderWithdrawal {}
+
+// Legacy only: older customer pickups were represented by routes named "RETIRADA...".
+// The current pickup workflow reads from order_withdrawals.
+const isLegacyPickupRouteName = (value: any) => String(value || '').trim().toUpperCase().startsWith('RETIRADA');
+
+function mapOrderToPickupSheetOrder(order: any, routeOrder: any) {
+  const address = order?.address_json || {};
+  const prodLoc = order?.raw_json?.produtos_locais || [];
+  const items = (Array.isArray(order?.items_json) ? order.items_json : []).map((item: any, idx: number) => {
+    if (!item || item.location) return item;
+
+    let location = '';
+    if (Array.isArray(prodLoc) && prodLoc.length > 0) {
+      const sku = String(item?.sku || '').trim().toLowerCase();
+      const name = String(item?.name || '').trim().toLowerCase();
+      const byCode = prodLoc.find((product: any) => String(product?.codigo_produto || '').trim().toLowerCase() === sku);
+      const byName = prodLoc.find((product: any) => String(product?.nome_produto || '').trim().toLowerCase() === name);
+      if (byCode?.local_estocagem) location = String(byCode.local_estocagem);
+      else if (byName?.local_estocagem) location = String(byName.local_estocagem);
+      else if (prodLoc[idx]?.local_estocagem) location = String(prodLoc[idx].local_estocagem);
+      else if (prodLoc[0]?.local_estocagem) location = String(prodLoc[0].local_estocagem);
+    }
+
+    return { ...item, location };
+  });
+
+  const saleDate = order?.data_venda
+    || order?.raw_json?.data_venda
+    || order?.raw_json?.data_emissao
+    || order?.sale_date
+    || '';
+
+  return {
+    id: order?.id || routeOrder?.order_id,
+    order_id_erp: String(order?.order_id_erp || routeOrder?.order_id || ''),
+    customer_name: String(order?.customer_name || (order?.raw_json?.nome_cliente ?? '')),
+    phone: String(order?.phone || (order?.raw_json?.cliente_celular ?? '')),
+    address_json: {
+      street: String(address.street || order?.raw_json?.destinatario_endereco || ''),
+      neighborhood: String(address.neighborhood || order?.raw_json?.destinatario_bairro || ''),
+      city: String(address.city || order?.raw_json?.destinatario_cidade || ''),
+      state: String(address.state || ''),
+      zip: String(address.zip || order?.raw_json?.destinatario_cep || ''),
+      complement: address.complement || order?.raw_json?.destinatario_complemento || '',
+    },
+    items_json: items,
+    raw_json: order?.raw_json || null,
+    data_venda: saleDate,
+    sale_date: order?.sale_date || saleDate,
+    previsao_entrega: order?.previsao_entrega || order?.raw_json?.previsao_entrega || order?.raw_json?.data_prevista_entrega,
+    observacoes_publicas: order?.observacoes_publicas ?? order?.raw_json?.observacoes_publicas ?? order?.raw_json?.Observacoes_publicas ?? order?.raw_json?.observacoes ?? '',
+    observacoes_internas: order?.observacoes_internas ?? order?.raw_json?.observacoes_internas ?? order?.raw_json?.Observacoes_internas ?? '',
+    total: Number(order?.total || 0),
+    status: order?.status || 'delivered',
+    observations: order?.observations || '',
+    created_at: order?.created_at || new Date().toISOString(),
+    updated_at: order?.updated_at || new Date().toISOString(),
+  } as any;
+}
+
 // Pequeno componente auxiliar para botão de copiar
 function CopyButton({ text, label = "Copiado!" }: { text: string, label?: string }) {
   const [copied, setCopied] = useState(false);
@@ -99,11 +162,13 @@ export default function OrderLookup() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
   const [routeOrders, setRouteOrders] = useState<RouteOrderInfo[]>([]);
+  const [withdrawal, setWithdrawal] = useState<WithdrawalInfo | null>(null);
   const [assemblies, setAssemblies] = useState<AssemblyInfo[]>([]);
   const [deliveryReceiptsByRouteOrder, setDeliveryReceiptsByRouteOrder] = useState<Record<string, DeliveryReceiptInfo>>({});
   const [deliveryReceiptUserNames, setDeliveryReceiptUserNames] = useState<Record<string, string>>({});
   const [proofPdfLoadingByRouteOrder, setProofPdfLoadingByRouteOrder] = useState<Record<string, boolean>>({});
   const [showObservations, setShowObservations] = useState(false);
+  const [withdrawalActionLoading, setWithdrawalActionLoading] = useState<'receipt' | 'danfe' | null>(null);
 
   // Check if user is consultor to hide certain elements
   const { user, logout } = useAuthStore();
@@ -190,6 +255,7 @@ export default function OrderLookup() {
       setLoading(true);
       setSelectedOrder(null);
       setRouteOrders([]);
+      setWithdrawal(null);
       setAssemblies([]);
       setDeliveryReceiptsByRouteOrder({});
       setDeliveryReceiptUserNames({});
@@ -284,11 +350,114 @@ export default function OrderLookup() {
     return '';
   };
 
+  const reprintWithdrawalReceipt = async () => {
+    if (!selectedOrder || !withdrawal) return;
+
+    try {
+      setWithdrawalActionLoading('receipt');
+      const routeId = `withdrawal-${withdrawal.id}`;
+      const routeName = `RETIRADA - ${new Date(withdrawal.withdrawn_at || new Date().toISOString()).toLocaleDateString('pt-BR')}`;
+      const routeOrder = {
+        id: withdrawal.id,
+        route_id: routeId,
+        order_id: String(selectedOrder.id),
+        sequence: 1,
+        status: 'delivered',
+        delivered_at: withdrawal.withdrawn_at || new Date().toISOString(),
+        delivery_observations: withdrawal.notes || `Responsável: ${withdrawal.responsible_name || '-'}`,
+      } as any;
+
+      const mappedOrder = mapOrderToPickupSheetOrder(selectedOrder, routeOrder);
+      const pdfBytes = await DeliverySheetGenerator.generateDeliverySheet({
+        route: {
+          id: routeId,
+          name: routeName,
+          route_code: `RET-${String(withdrawal.id).slice(0, 8).toUpperCase()}`,
+          driver_id: '',
+          vehicle_id: '',
+          conferente: withdrawal.registered_by_name || user?.name || user?.email || 'Não informado',
+          observations: `Responsável: ${withdrawal.responsible_name}${withdrawal.notes ? `\nObs: ${withdrawal.notes}` : ''}`,
+          status: 'completed',
+          created_at: withdrawal.created_at,
+          updated_at: withdrawal.updated_at,
+          completed_at: withdrawal.withdrawn_at,
+        } as any,
+        routeOrders: [routeOrder],
+        driver: {
+          id: 'withdrawal',
+          user_id: '',
+          cpf: '',
+          active: true,
+          user: {
+            id: '',
+            email: '',
+            name: 'Retirada pelo cliente',
+            role: 'driver',
+            active: true,
+            created_at: withdrawal.created_at,
+          },
+        } as any,
+        orders: [mappedOrder],
+        generatedAt: new Date().toISOString(),
+        teamName: 'Retirada pelo cliente',
+        helperName: withdrawal.responsible_name,
+        pickupResponsibleName: withdrawal.responsible_name,
+        pickupRegisteredByName: withdrawal.registered_by_name || user?.name || user?.email || '-',
+        pickupWithdrawnAt: withdrawal.withdrawn_at,
+        pickupObservations: withdrawal.notes || '',
+      }, 'Comprovante de Retirada');
+
+      DeliverySheetGenerator.openPDFInNewTab(pdfBytes);
+      toast.success('Comprovante de retirada reimpresso com sucesso!');
+    } catch (error) {
+      console.error(error);
+      toast.error('Erro ao reimprimir comprovante de retirada');
+    } finally {
+      setWithdrawalActionLoading(null);
+    }
+  };
+
+  const reprintWithdrawalDanfe = async () => {
+    if (!selectedOrder || !withdrawal) return;
+
+    try {
+      setWithdrawalActionLoading('danfe');
+      const { data: orderData, error } = await supabase
+        .from('orders')
+        .select('danfe_base64')
+        .eq('id', selectedOrder.id)
+        .single();
+
+      if (error) throw error;
+
+      const base64 = String(orderData?.danfe_base64 || '');
+      if (!base64.startsWith('JVBER')) {
+        toast.error('Nenhuma nota fiscal encontrada para este pedido.');
+        return;
+      }
+
+      const merged = await PDFDocument.create();
+      const bytes = Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
+      const source = await PDFDocument.load(bytes);
+      const pages = await merged.copyPages(source, source.getPageIndices());
+      pages.forEach((page) => merged.addPage(page));
+      const out = await merged.save();
+      DeliverySheetGenerator.openPDFInNewTab(out);
+      toast.success('Nota fiscal reimpressa com sucesso!');
+    } catch (error) {
+      console.error(error);
+      toast.error('Erro ao reimprimir nota fiscal');
+    } finally {
+      setWithdrawalActionLoading(null);
+    }
+  };
+
   useEffect(() => {
     const fetchDetails = async () => {
       if (!selectedOrder) return;
       try {
         setLoading(true);
+        setWithdrawal(null);
         // Query com vehicle via join (igual RouteCreation)
         const selectRouteOrder = '*, route:routes(*, route_code, vehicle:vehicles!vehicle_id(id, model, plate)), order:orders(id, order_id_erp)';
 
@@ -321,6 +490,14 @@ export default function OrderLookup() {
         }
 
         // Enriquecer com driver (mesma lógica do RouteCreation.tsx)
+        const { data: withdrawalData, error: withdrawalError } = await supabase
+          .from('order_withdrawals')
+          .select('*')
+          .eq('order_id', selectedOrder.id)
+          .maybeSingle();
+        if (withdrawalError) throw withdrawalError;
+        setWithdrawal((withdrawalData || null) as WithdrawalInfo | null);
+
         if (roData && roData.length > 0) {
           const driverIds = Array.from(new Set((roData as any[]).map((ro: any) => ro.route?.driver_id).filter(Boolean)));
 
@@ -345,7 +522,7 @@ export default function OrderLookup() {
             }
 
             if (drvBulk && drvBulk.length > 0) {
-              const userIds = Array.from(new Set(drvBulk.map((d: any) => String(d.user_id)).filter(Boolean)));
+              const userIds = Array.from(new Set(drvBulk.map((d: any) => String(d.user_id)).filter(Boolean))) as string[];
               const userNamesMap = await fetchUserNamesByIds(userIds);
               const enrichedDrivers = drvBulk.map((d: any) => {
                 const resolvedName =
@@ -517,6 +694,7 @@ export default function OrderLookup() {
 
   // Etapa do processo (exibida no cabeçalho do card)
   const processStage = useMemo(() => {
+    if (withdrawal) return 'withdrawn';
     const latestRO = routeOrders[0];
     const routeStatus = latestRO?.route?.status;
 
@@ -525,10 +703,11 @@ export default function OrderLookup() {
     if (routeStatus === 'pending' || routeStatus === 'assigned') return 'separating'; // Em separação
     if (routeStatus === 'completed') return 'completed'; // Rota finalizada
     return 'imported';
-  }, [routeOrders]);
+  }, [routeOrders, withdrawal]);
 
   // Status específico do pedido (exibido dentro do card da rota)
   const derivedStatus = useMemo(() => {
+    if (withdrawal) return 'pickup';
     const base = selectedOrder?.status || '';
     const latestRO = routeOrders[0];
     const routeStatus = latestRO?.route?.status;
@@ -536,7 +715,7 @@ export default function OrderLookup() {
     const routeName = String(latestRO?.route?.name || '');
 
     let entrega = base;
-    if (routeName.startsWith('RETIRADA')) {
+    if (isLegacyPickupRouteName(routeName)) {
       entrega = 'pickup';
     }
     else if (roStatus === 'returned' || selectedOrder?.return_flag) entrega = 'returned';
@@ -544,7 +723,7 @@ export default function OrderLookup() {
     else if (roStatus === 'delivered') entrega = 'delivered';
     else if (routeStatus === 'pending') entrega = 'pending';
     return entrega;
-  }, [selectedOrder, routeOrders]);
+  }, [selectedOrder, routeOrders, withdrawal]);
 
   const assemblyStatus = useMemo(() => {
     if (!assemblies.length) return 'none';
@@ -616,6 +795,10 @@ export default function OrderLookup() {
     };
   };
 
+  const normalizeWithdrawalNotes = (notesInput: unknown) => {
+    const notes = normalizeText(notesInput);
+    return notes ? notes.replace(/\s+/g, ' ').trim() : '';
+  };
   const parseAssemblyReturnDetails = (assembly: AssemblyInfo) => {
     const directReason = normalizeReturnReason(assembly.return_reason);
     const observations = normalizeText(assembly.observations);
@@ -830,7 +1013,7 @@ export default function OrderLookup() {
     in_progress: 'Em rota',
     delivered: 'Entregue',
     returned: 'Retornado',
-    pickup: 'Retirado em Loja',
+    pickup: 'Retirado pelo cliente',
   };
 
   const statusLabelMontagem: Record<string, string> = {
@@ -849,6 +1032,7 @@ export default function OrderLookup() {
     separating: 'Em Separação',
     in_route: 'Em Rota',
     completed: 'Rota Finalizada',
+    withdrawn: 'Retirado pelo cliente',
   };
 
   // Cores/estilos para cada etapa do processo
@@ -857,6 +1041,7 @@ export default function OrderLookup() {
     separating: 'text-orange-600',
     in_route: 'text-blue-600',
     completed: 'text-green-600',
+    withdrawn: 'text-purple-600',
   };
 
   // Labels para status específico do pedido (dentro do card)
@@ -865,7 +1050,7 @@ export default function OrderLookup() {
     in_progress: 'Pendente',
     delivered: 'Entregue',
     returned: 'Retornado',
-    pickup: 'Retirado em Loja',
+    pickup: 'Retirado pelo cliente',
   };
 
   return (
@@ -899,6 +1084,7 @@ export default function OrderLookup() {
                     setOrders([]);
                     setSelectedOrder(null);
                     setRouteOrders([]);
+                    setWithdrawal(null);
                     setAssemblies([]);
                     setDeliveryReceiptsByRouteOrder({});
                     setDeliveryReceiptUserNames({});
@@ -1096,7 +1282,53 @@ export default function OrderLookup() {
                   </div>
                 </div>
                 {/* ... Delivery Card Logic ... */}
-                {routeOrders.length === 0 ? (
+                {withdrawal ? (
+                  <div className="rounded-lg border border-purple-200 bg-purple-50 p-4 space-y-2">
+                    <p className="text-xs text-purple-800">
+                      <span className="font-semibold">Responsável:</span> {withdrawal.responsible_name || '-'}
+                    </p>
+                    <p className="text-xs text-purple-800">
+                      <span className="font-semibold">Data:</span> {formatDateTime(withdrawal.withdrawn_at)}
+                    </p>
+                    <p className="text-xs text-purple-800">
+                      <span className="font-semibold">Registrado por:</span> {withdrawal.registered_by_name || withdrawal.registered_by_user_id || '-'}
+                    </p>
+                    {withdrawal.source !== 'legacy_route' && (() => {
+                      const normalizedNotes = normalizeWithdrawalNotes(withdrawal.notes);
+                      if (!normalizedNotes) return null;
+                      return (
+                        <p className="text-xs text-purple-800">
+                          <span className="font-semibold">Obs.:</span> {normalizedNotes}
+                        </p>
+                      );
+                    })()}
+                    {withdrawal.source === 'legacy_route' && (
+                      <p className="text-[11px] text-purple-700">
+                        Origem: fluxo legado de retirada.
+                      </p>
+                    )}
+                    <div className="pt-2 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={reprintWithdrawalReceipt}
+                        disabled={withdrawalActionLoading !== null}
+                        className="inline-flex items-center rounded-lg border border-purple-200 bg-white px-3 py-2 text-xs font-semibold text-purple-700 transition-colors hover:bg-purple-100 disabled:opacity-60 disabled:cursor-not-allowed"
+                      >
+                        {withdrawalActionLoading === 'receipt' ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <FileText className="mr-2 h-3.5 w-3.5" />}
+                        Reimprimir comprovante
+                      </button>
+                      <button
+                        type="button"
+                        onClick={reprintWithdrawalDanfe}
+                        disabled={withdrawalActionLoading !== null}
+                        className="inline-flex items-center rounded-lg border border-purple-200 bg-white px-3 py-2 text-xs font-semibold text-purple-700 transition-colors hover:bg-purple-100 disabled:opacity-60 disabled:cursor-not-allowed"
+                      >
+                        {withdrawalActionLoading === 'danfe' ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <FileSpreadsheet className="mr-2 h-3.5 w-3.5" />}
+                        Reimprimir nota fiscal
+                      </button>
+                    </div>
+                  </div>
+                ) : routeOrders.length === 0 ? (
                   <p className="text-sm text-gray-500">
                     {derivedStatus === 'delivered'
                       ? 'Entregue, mas rota não foi encontrada no histórico.'
