@@ -364,7 +364,7 @@ export default function OrderLookup() {
         sequence: 1,
         status: 'delivered',
         delivered_at: withdrawal.withdrawn_at || new Date().toISOString(),
-        delivery_observations: withdrawal.notes || `Responsável: ${withdrawal.responsible_name || '-'}`,
+        delivery_observations: withdrawal.notes || `Conferente: ${withdrawal.responsible_name || '-'}`,
       } as any;
 
       const mappedOrder = mapOrderToPickupSheetOrder(selectedOrder, routeOrder);
@@ -376,7 +376,7 @@ export default function OrderLookup() {
           driver_id: '',
           vehicle_id: '',
           conferente: withdrawal.registered_by_name || user?.name || user?.email || 'Não informado',
-          observations: `Responsável: ${withdrawal.responsible_name}${withdrawal.notes ? `\nObs: ${withdrawal.notes}` : ''}`,
+          observations: `Conferente: ${withdrawal.responsible_name}${withdrawal.notes ? `\nObs: ${withdrawal.notes}` : ''}`,
           status: 'completed',
           created_at: withdrawal.created_at,
           updated_at: withdrawal.updated_at,
@@ -1285,7 +1285,7 @@ export default function OrderLookup() {
                 {withdrawal ? (
                   <div className="rounded-lg border border-purple-200 bg-purple-50 p-4 space-y-2">
                     <p className="text-xs text-purple-800">
-                      <span className="font-semibold">Responsável:</span> {withdrawal.responsible_name || '-'}
+                      <span className="font-semibold">Conferente:</span> {withdrawal.responsible_name || '-'}
                     </p>
                     <p className="text-xs text-purple-800">
                       <span className="font-semibold">Data:</span> {formatDateTime(withdrawal.withdrawn_at)}

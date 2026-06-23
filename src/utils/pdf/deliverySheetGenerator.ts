@@ -99,7 +99,7 @@ export class DeliverySheetGenerator {
     let nextRowY = gridY - 32;
 
     if (isPickupSheet) {
-      this.drawText(page, 'ResponsÃ¡vel pela Retirada', margin, gridY, { font: helveticaBoldFont, size: 10, color: { r: 0, g: 0, b: 0 } });
+      this.drawText(page, 'Conferente', margin, gridY, { font: helveticaBoldFont, size: 10, color: { r: 0, g: 0, b: 0 } });
       this.drawText(page, 'Data e Hora da Retirada', margin + 260, gridY, { font: helveticaBoldFont, size: 10, color: { r: 0, g: 0, b: 0 } });
       this.drawText(page, String(data.pickupResponsibleName || data.helperName || '-').substring(0, 32), margin, gridY - 14, { font: helveticaFont, size: 11, color: { r: 0, g: 0, b: 0 } });
       this.drawText(page, new Date(data.pickupWithdrawnAt || data.generatedAt).toLocaleString('pt-BR'), margin + 260, gridY - 14, { font: helveticaFont, size: 11, color: { r: 0, g: 0, b: 0 } });
@@ -539,7 +539,7 @@ export class DeliverySheetGenerator {
       page.drawLine({ start: { x: margin, y }, end: { x: leftLineEnd, y }, thickness: 1, color: rgb(0, 0, 0) });
       this.drawText(page, 'Ass. do Recebedor', margin, y - 14, { font: helveticaFont, size: 8, color: { r: 0, g: 0, b: 0 } });
       page.drawLine({ start: { x: rightLineStart, y }, end: { x: rightLineEnd, y }, thickness: 1, color: rgb(0, 0, 0) });
-      this.drawText(page, isAssemblySheet ? 'Ass. Resp pela Montagem' : isPickupSheet ? 'Ass. Resp. pela Retirada' : 'Ass. Resp. pela Entrega', rightLineStart, y - 14, { font: helveticaFont, size: 8, color: { r: 0, g: 0, b: 0 } });
+      this.drawText(page, isAssemblySheet ? 'Ass. Resp pela Montagem' : isPickupSheet ? 'Ass. Conferente' : 'Ass. Resp. pela Entrega', rightLineStart, y - 14, { font: helveticaFont, size: 8, color: { r: 0, g: 0, b: 0 } });
       y -= 40; // extra bottom breathing before next item or page footer
       page.drawLine({ start: { x: margin, y }, end: { x: width - margin, y }, thickness: 1, color: rgb(0, 0, 0) });
       y -= 20; // extra gap before next item on same page
@@ -752,3 +752,4 @@ export class DeliverySheetGenerator {
     setTimeout(() => URL.revokeObjectURL(url), 600000);
   }
 }
+

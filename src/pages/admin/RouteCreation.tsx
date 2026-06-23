@@ -3009,7 +3009,7 @@ function RouteCreationContent() {
         sequence: index + 1,
         status: 'delivered',
         delivered_at: withdrawal?.withdrawn_at || new Date().toISOString(),
-        delivery_observations: withdrawal?.notes || `Responsável: ${withdrawal?.responsible_name || '-'}`,
+        delivery_observations: withdrawal?.notes || `Conferente: ${withdrawal?.responsible_name || '-'}`,
       } as any;
     });
 
@@ -3025,7 +3025,7 @@ function RouteCreationContent() {
         driver_id: '',
         vehicle_id: '',
         conferente: authUser?.name || 'Não informado',
-        observations: `Responsável: ${bundle.withdrawals[0].responsible_name}${bundle.withdrawals[0].notes ? `\nObs: ${bundle.withdrawals[0].notes}` : ''}`,
+        observations: `Conferente: ${bundle.withdrawals[0].responsible_name}${bundle.withdrawals[0].notes ? `\nObs: ${bundle.withdrawals[0].notes}` : ''}`,
         status: 'completed',
         created_at: bundle.withdrawals[0].created_at,
         updated_at: bundle.withdrawals[0].updated_at,
@@ -4343,7 +4343,7 @@ function RouteCreationContent() {
                         </div>
 
                         <div className="space-y-3 mb-6">
-                          {/* Para retiradas: mostrar conferente como ResponsÃ¡vel, esconder motorista e veÃ­culo */}
+                          {/* Para retiradas: mostrar conferente, esconder motorista e veículo */}
                           {(() => {
                             const isPickupRoute = isLegacyPickupRouteName(route.name);
 
@@ -4351,7 +4351,7 @@ function RouteCreationContent() {
                               return (
                                 <div className="flex items-center text-sm text-gray-600">
                                   <ClipboardList className="h-4 w-4 mr-2 text-gray-400" />
-                                  <span className="font-medium text-purple-700">Responsável:</span>&nbsp;
+                                  <span className="font-medium text-purple-700">Conferente:</span>&nbsp;
                                   {String((route as any)?.conferente || '').trim() || 'Não informado'}
                                 </div>
                               );
@@ -5040,7 +5040,7 @@ function RouteCreationContent() {
                 </p>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Responsável pela retirada *</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Conferente *</label>
                   <select
                     value={pickupResponsibleName}
                     onChange={(event) => setPickupResponsibleName(event.target.value)}
@@ -5539,7 +5539,7 @@ function RouteCreationContent() {
                   </div>
                   {!isEditingRoute && isLegacyPickupRouteName(selectedRoute.name) && (
                     <p className="text-sm text-gray-500 mt-1">
-                      {`Responsável: ${selectedRoute.conferente || 'Não informado'}`}
+                      {`Conferente: ${selectedRoute.conferente || 'Não informado'}`}
                     </p>
                   )}
                 </div>
