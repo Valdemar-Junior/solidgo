@@ -29,11 +29,23 @@ export const useAuthStore = create<AuthState>()(
 
         try {
           console.log('Attempting Supabase auth signInWithPassword...');
-          // Resolve email: se existir perfil com nome igual ao identificador, usar o email do perfil
+          // Resolve email via RPC publica para suportar login por nome antes da autenticacao.
           let loginEmail = identifier.includes('@') ? identifier : toLoginEmailFromName(identifier);
           if (!identifier.includes('@')) {
-            const { data: byName } = await supabase.from('users').select('email').eq('name', identifier).maybeSingle();
-            if (byName?.email) loginEmail = byName.email;
+            const { data: resolvedLogin, error: resolvedLoginError } = await supabase
+              .rpc('resolve_login_email', { identifier: identifier.trim() });
+
+            if (resolvedLoginError) {
+              console.warn('resolve_login_email falhou, usando fallback local:', resolvedLoginError.message);
+            }
+
+            const resolvedEmail = Array.isArray(resolvedLogin)
+              ? resolvedLogin[0]?.email
+              : (resolvedLogin as { email?: string } | null)?.email;
+
+            if (resolvedEmail) {
+              loginEmail = resolvedEmail;
+            }
           }
           const { data, error } = await supabase.auth.signInWithPassword({ email: loginEmail, password });
 
