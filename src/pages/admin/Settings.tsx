@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+﻿import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../../supabase/client';
 import {
@@ -50,6 +50,8 @@ export default function Settings() {
   const [deliveryProofEnabled, setDeliveryProofEnabled] = useState(false);
   const [deliveryProofRequireRecipient, setDeliveryProofRequireRecipient] = useState(false);
   const [deliveryProofRequireGps, setDeliveryProofRequireGps] = useState(false);
+  const [storeReleaseControlEnabled, setStoreReleaseControlEnabled] = useState(false);
+  const [storeReleaseOnlyDisassemblable, setStoreReleaseOnlyDisassemblable] = useState(true);
 
   // State for Logistics
   const [ruralKeywords, setRuralKeywords] = useState<string[]>([]);
@@ -74,7 +76,7 @@ export default function Settings() {
   const load = async () => {
     try {
       setLoading(true);
-      const [p, n, nd, m, g, l, confFlag, updateFlag, photoFlag, deliveryPhotoFlag, deliveryProofFlag, ruralKeys, generalDeadlines] = await Promise.all([
+      const [p, n, nd, m, g, l, confFlag, updateFlag, photoFlag, deliveryPhotoFlag, deliveryProofFlag, ruralKeys, generalDeadlines, storeReleaseFlag] = await Promise.all([
         getUrl('envia_pedidos'),
         getUrl('gera_nf'),
         getUrl('gera_nf_devolucao'),
@@ -88,6 +90,7 @@ export default function Settings() {
         supabase.from('app_settings').select('value').eq('key', 'delivery_proof_settings').maybeSingle(),
         supabase.from('app_settings').select('value').eq('key', 'rural_keywords').maybeSingle(),
         supabase.from('app_settings').select('value').eq('key', 'general_deadlines').maybeSingle(),
+        supabase.from('app_settings').select('value').eq('key', 'store_release_control').maybeSingle(),
       ]);
       setEnviaPedidos(p || '');
       setGeraNf(n || '');
@@ -121,8 +124,12 @@ export default function Settings() {
       setDefaultDeliveryDays(general?.delivery_days || 15);
       setDefaultAssemblyDays(general?.assembly_days || 15);
 
+      const storeRelease = (storeReleaseFlag.data as any)?.value || {};
+      setStoreReleaseControlEnabled(storeRelease?.enabled === true);
+      setStoreReleaseOnlyDisassemblable(storeRelease?.only_block_disassemblable_items !== false);
+
     } catch {
-      toast.error('Erro ao carregar configurações');
+      toast.error('Erro ao carregar configuracoes');
     } finally {
       setLoading(false);
     }
@@ -202,6 +209,13 @@ export default function Settings() {
           requireGps: deliveryProofEnabled && deliveryProofRequireGps
         },
         updated_at: new Date().toISOString()
+      }, {
+        key: 'store_release_control',
+        value: {
+          enabled: storeReleaseControlEnabled,
+          only_block_disassemblable_items: storeReleaseOnlyDisassemblable
+        },
+        updated_at: new Date().toISOString()
       }], { onConflict: 'key' });
       if (flagErr) throw flagErr;
 
@@ -219,11 +233,17 @@ export default function Settings() {
       }], { onConflict: 'key' });
       if (generalErr) throw generalErr;
 
+      const { error: syncStoreReleaseErr } = await supabase.rpc('sync_store_release_for_open_orders');
+      if (syncStoreReleaseErr) {
+        console.warn('Falha ao reclassificar liberacao de saida de loja:', syncStoreReleaseErr);
+        toast.warning('Configuracoes salvas, mas a reclassificacao dos pedidos pendentes falhou.');
+      }
 
-      toast.success('Configurações salvas com sucesso!');
+
+      toast.success('Configuracoes salvas com sucesso!');
     } catch (e: any) {
       console.error(e);
-      toast.error(`Erro ao salvar configurações: ${e?.message || 'sem detalhes'}`);
+      toast.error(`Erro ao salvar configuracoes: ${e?.message || 'sem detalhes'}`);
     } finally {
       setSaving(false);
     }
@@ -231,8 +251,8 @@ export default function Settings() {
 
   const tabs = [
     { id: 'general', label: 'Geral', icon: LayoutDashboard },
-    { id: 'logistics', label: 'Logística', icon: Truck },
-    { id: 'integrations', label: 'Integrações', icon: Webhook },
+    { id: 'logistics', label: 'Logistica', icon: Truck },
+    { id: 'integrations', label: 'Integracoes', icon: Webhook },
   ];
 
   return (
@@ -272,17 +292,53 @@ export default function Settings() {
             <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden animate-in fade-in duration-300">
               <div className="border-b border-gray-100 bg-gray-50 px-6 py-4 flex items-center gap-2">
                 <CheckCircle2 className="h-5 w-5 text-blue-600" />
-                <h2 className="font-bold text-gray-900">Rotas — Exigir Conferência</h2>
+                <h2 className="font-bold text-gray-900">Rotas - Exigir Conferencia</h2>
               </div>
               <div className="p-6 space-y-3">
                 <p className="text-sm text-gray-600">
-                  Defina se o botão “Iniciar rota” só fica liberado após a conferência estar finalizada.
-                  Desative temporariamente para operar sem conferência (útil enquanto as etiquetas não estão prontas).
+                  Defina se o botao "Iniciar rota" so fica liberado apos a conferencia estar finalizada.
+                  Desative temporariamente para operar sem conferencia enquanto as etiquetas nao estao prontas.
+                </p>
+                <p className="text-sm text-gray-600">
+                  Controle de saida de loja
                 </p>
                 <label className="flex items-center justify-between bg-gray-50 border border-gray-100 rounded-lg px-4 py-3">
                   <div>
-                    <p className="text-sm font-semibold text-gray-900">Exigir conferência antes de iniciar</p>
-                    <p className="text-xs text-gray-500">Quando ligado, mantém o bloqueio atual; desligado, permite iniciar rota sem conferência.</p>
+                    <p className="text-sm font-semibold text-gray-900">Habilitar liberacao de saida de loja</p>
+                    <p className="text-xs text-gray-500">
+                      Quando ligado, pedidos com itens em saida de loja continuam na fila de entregas, mas ficam sem selecao ate a liberacao do gerente.
+                    </p>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={storeReleaseControlEnabled}
+                    onChange={(e) => setStoreReleaseControlEnabled(e.target.checked)}
+                    className="h-5 w-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                  />
+                </label>
+                <label className={`flex items-center justify-between border rounded-lg px-4 py-3 ${storeReleaseControlEnabled ? 'bg-gray-50 border-gray-100' : 'bg-gray-100 border-gray-200'}`}>
+                  <div>
+                    <p className="text-sm font-semibold text-gray-900">Bloquear apenas itens com possui montagem</p>
+                    <p className="text-xs text-gray-500">
+                      Ligado: bloqueia apenas produtos desmontaveis da saida de loja.
+                      Desligado: bloqueia qualquer pedido com local de estocagem de saida de loja.
+                    </p>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={storeReleaseOnlyDisassemblable}
+                    disabled={!storeReleaseControlEnabled}
+                    onChange={(e) => setStoreReleaseOnlyDisassemblable(e.target.checked)}
+                    className="h-5 w-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500 disabled:opacity-50"
+                  />
+                </label>
+
+                <hr className="border-gray-100 my-4" />
+
+                <label className="flex items-center justify-between bg-gray-50 border border-gray-100 rounded-lg px-4 py-3">
+                  <div>
+                    <p className="text-sm font-semibold text-gray-900">Exigir conferencia antes de iniciar</p>
+                    <p className="text-xs text-gray-500">Quando ligado, mantem o bloqueio atual; desligado, permite iniciar rota sem conferencia.</p>
                   </div>
                   <input
                     type="checkbox"
@@ -295,15 +351,15 @@ export default function Settings() {
                 <hr className="border-gray-100 my-4" />
 
                 <p className="text-sm text-gray-600">
-                  Configurações de Importação de Pedidos
+                  Configuracoes de Importacao de Pedidos
                 </p>
                 <label className="flex items-center justify-between bg-gray-50 border border-gray-100 rounded-lg px-4 py-3">
                   <div>
-                    <p className="text-sm font-semibold text-gray-900">Permitir atualização de pedidos na importação</p>
+                    <p className="text-sm font-semibold text-gray-900">Permitir atualizacao de pedidos na importacao</p>
                     <p className="text-xs text-gray-500">
-                      Quando ligado, exibe uma opção na tela de importação para atualizar dados (descrição, grupos) de pedidos já existentes.
+                      Quando ligado, exibe uma opcao na tela de importacao para atualizar dados (descricao, grupos) de pedidos ja existentes.
                       <br />
-                      <span className="text-orange-600 font-medium">Atenção:</span> Não altera status, entregas ou devoluções. Apenas dados cadastrais do produto.
+                      <span className="text-orange-600 font-medium">Atencao:</span> Nao altera status, entregas ou devolucoes. Apenas dados cadastrais do produto.
                     </p>
                   </div>
                   <input
@@ -317,15 +373,15 @@ export default function Settings() {
                 <hr className="border-gray-100 my-4" />
 
                 <p className="text-sm text-gray-600">
-                  Configurações de Montagem
+                  Configuracoes de Montagem
                 </p>
                 <label className="flex items-center justify-between bg-gray-50 border border-gray-100 rounded-lg px-4 py-3">
                   <div>
-                    <p className="text-sm font-semibold text-gray-900">📸 Exigir fotos ao marcar como Montado</p>
+                    <p className="text-sm font-semibold text-gray-900">Exigir fotos ao marcar como Montado</p>
                     <p className="text-xs text-gray-500">
-                      Quando ligado, o montador deve tirar pelo menos 1 foto (máx. 3) do produto montado antes de confirmar.
+                      Quando ligado, o montador deve tirar pelo menos 1 foto (max. 3) do produto montado antes de confirmar.
                       <br />
-                      <span className="text-blue-600 font-medium">Fotos ficam disponíveis na consulta de pedidos.</span>
+                      <span className="text-blue-600 font-medium">Fotos ficam disponiveis na consulta de pedidos.</span>
                     </p>
                   </div>
                   <input
@@ -339,11 +395,11 @@ export default function Settings() {
                 <hr className="border-gray-100 my-4" />
 
                 <p className="text-sm text-gray-600">
-                  Configurações de Entrega
+                  Configuracoes de Entrega
                 </p>
                 <label className="flex items-center justify-between bg-gray-50 border border-gray-100 rounded-lg px-4 py-3">
                   <div>
-                    <p className="text-sm font-semibold text-gray-900">🚚 Exigir fotos na Entrega/Retorno</p>
+                    <p className="text-sm font-semibold text-gray-900">Exigir fotos na Entrega/Retorno</p>
                     <p className="text-xs text-gray-500">
                       Quando ligado:
                       <ul className="list-disc list-inside mt-1 ml-1">
@@ -429,7 +485,7 @@ export default function Settings() {
                     ) : (
                       <>
                         <Save className="h-4 w-4" />
-                        Salvar Alterações
+                        Salvar Alteracoes
                       </>
                     )}
                   </button>
@@ -438,17 +494,17 @@ export default function Settings() {
             </div>
           )}
 
-          {/* TAB: LOGÍSTICA */}
+          {/* TAB: LOGISTICA */}
           {activeTab === 'logistics' && (
             <div className="space-y-6 animate-in fade-in duration-300">
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
 
-                {/* Prazo Padrão Geral Config */}
+                {/* Prazo Padrao Geral Config */}
                 <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
                   <div className="border-b border-gray-100 bg-gray-50 px-6 py-4 flex items-center gap-2">
                     <Clock className="h-5 w-5 text-gray-600" />
-                    <h2 className="font-bold text-gray-900">Prazo Padrão Geral</h2>
+                    <h2 className="font-bold text-gray-900">Prazo Padrao Geral</h2>
                   </div>
                   <div className="p-6">
                     <p className="text-sm text-gray-600 mb-4">
@@ -491,7 +547,7 @@ export default function Settings() {
                   </div>
                   <div className="p-6 space-y-4">
                     <p className="text-sm text-gray-600">
-                      Se o endereço contiver qualquer um destes termos, o sistema aplicará o <b>Prazo Rural</b> da cidade.
+                      Se o endereco contiver qualquer um destes termos, o sistema aplicara o <b>Prazo Rural</b> da cidade.
                     </p>
 
                     <div className="flex gap-2">
@@ -500,7 +556,7 @@ export default function Settings() {
                         value={newKeyword}
                         onChange={(e) => setNewKeyword(e.target.value)}
                         onKeyDown={(e) => e.key === 'Enter' && handleAddKeyword()}
-                        placeholder="Ex: ZONA RURAL, SÍTIO..."
+                        placeholder="Ex: ZONA RURAL, SITIO..."
                         className="flex-1 border-gray-300 rounded-lg text-sm px-3 py-2 focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none transition-all uppercase"
                       />
                       <button
@@ -524,7 +580,7 @@ export default function Settings() {
                       ))}
                       {ruralKeywords.length === 0 && (
                         <span className="text-sm text-gray-400 italic">
-                          Nenhuma palavra-chave definida (padrão urbano).
+                          Nenhuma palavra-chave definida (padrao urbano).
                         </span>
                       )}
                     </div>
@@ -538,7 +594,7 @@ export default function Settings() {
                   onClick={save}
                   disabled={saving || loading}
                   className=" bg-blue-600 text-white px-6 py-2 rounded-lg font-medium hover:bg-blue-700 transition-colors shadow-sm disabled:opacity-50 flex items-center gap-2"
-                  title="Salvar Alterações"
+                  title="Salvar Alteracoes"
                 >
                   <Save className="h-4 w-4" />
                   Salvar Tudo
@@ -551,18 +607,18 @@ export default function Settings() {
             </div>
           )}
 
-          {/* TAB: INTEGRAÇÕES */}
+          {/* TAB: INTEGRACOES */}
           {activeTab === 'integrations' && (
             <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden animate-in fade-in duration-300">
               <div className="border-b border-gray-100 bg-gray-50 px-6 py-4 flex items-center gap-2">
                 <Webhook className="h-5 w-5 text-purple-600" />
-                <h2 className="font-bold text-gray-900">Webhooks de Integração</h2>
+                <h2 className="font-bold text-gray-900">Webhooks de Integracao</h2>
               </div>
 
               <div className="p-6 space-y-6">
                 <p className="text-sm text-gray-500 bg-blue-50 text-blue-800 p-3 rounded-lg border border-blue-100 flex items-start gap-2">
                   <AlertCircle className="h-5 w-5 shrink-0" />
-                  Configure aqui as URLs (endpoints) do n8n ou outro sistema para onde os eventos serão enviados.
+                  Configure aqui as URLs (endpoints) do n8n ou outro sistema para onde os eventos serao enviados.
                 </p>
 
                 <div className="grid gap-6">
@@ -601,7 +657,7 @@ export default function Settings() {
                         placeholder="https://webhook.n8n.io/..."
                       />
                     </div>
-                    <p className="text-xs text-gray-500">Acionado ao solicitar emissão de NF para um pedido.</p>
+                    <p className="text-xs text-gray-500">Acionado ao solicitar emissao de NF para um pedido.</p>
                   </div>
 
                   <div className="space-y-2">
@@ -626,7 +682,7 @@ export default function Settings() {
                   <div className="space-y-2">
                     <label className="flex items-center gap-2 text-sm font-medium text-gray-900">
                       <MessageCircle className="h-4 w-4 text-gray-500" />
-                      Notificação WhatsApp (Individual)
+                      Notificacao WhatsApp (Individual)
                     </label>
                     <div className="relative">
                       <Globe className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
@@ -645,7 +701,7 @@ export default function Settings() {
                   <div className="space-y-2">
                     <label className="flex items-center gap-2 text-sm font-medium text-gray-900">
                       <Users className="h-4 w-4 text-gray-500" />
-                      Notificação WhatsApp (Grupo/Rota)
+                      Notificacao WhatsApp (Grupo/Rota)
                     </label>
                     <div className="relative">
                       <Globe className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
@@ -660,11 +716,11 @@ export default function Settings() {
                     <p className="text-xs text-gray-500">Usado para enviar o resumo da rota para o grupo da equipe.</p>
                   </div>
 
-                  {/* Consulta Lançamento (Troca/Assistência) */}
+                  {/* Consulta Lancamento (Troca/Assistencia) */}
                   <div className="space-y-2">
                     <label className="flex items-center gap-2 text-sm font-medium text-gray-900">
                       <FilePlus className="h-4 w-4 text-gray-500" />
-                      Consulta Lançamento Avulso
+                      Consulta Lancamento Avulso
                     </label>
                     <div className="relative">
                       <Globe className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
@@ -676,7 +732,7 @@ export default function Settings() {
                         placeholder="https://webhook.n8n.io/..."
                       />
                     </div>
-                    <p className="text-xs text-gray-500">Usado para buscar dados de Trocas e Assistências pelo número do lançamento.</p>
+                    <p className="text-xs text-gray-500">Usado para buscar dados de Trocas e Assistencias pelo numero do lancamento.</p>
                   </div>
                 </div>
 
@@ -703,7 +759,7 @@ export default function Settings() {
                     ) : (
                       <>
                         <Save className="h-4 w-4" />
-                        Salvar Alterações
+                        Salvar Alteracoes
                       </>
                     )}
                   </button>
@@ -717,3 +773,4 @@ export default function Settings() {
     </div>
   );
 }
+

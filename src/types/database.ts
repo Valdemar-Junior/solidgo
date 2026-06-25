@@ -2,7 +2,7 @@ export interface User {
   id: string;
   email: string;
   name: string;
-  role: 'admin' | 'driver' | 'helper' | 'montador' | 'conferente' | 'consultor';
+  role: 'admin' | 'driver' | 'helper' | 'montador' | 'conferente' | 'consultor' | 'gerente';
   phone?: string;
   active: boolean;
   must_change_password?: boolean;
@@ -180,6 +180,8 @@ export interface Order {
   return_type?: string;          // Tipo: 'NOTA DE DEVOLUCAO'
   return_danfe_base64?: string;  // PDF da DANFE de devolução em Base64
   is_carrier_delivery?: boolean;
+  requires_store_release?: boolean;
+  store_release_status?: 'not_applicable' | 'pending' | 'partial' | 'released';
 }
 
 export interface OrderWithdrawal {
@@ -194,6 +196,36 @@ export interface OrderWithdrawal {
   legacy_route_id?: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface UserStoreReleaseLocation {
+  id: string;
+  user_id: string;
+  store_location: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface StoreReleaseAssignment {
+  id: string;
+  order_id: string;
+  store_location: string;
+  status: 'pending' | 'released';
+  released_at?: string | null;
+  released_by_user_id?: string | null;
+  release_notes?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface StoreReleaseHistory {
+  id: string;
+  order_id: string;
+  store_location: string;
+  action: 'auto_created' | 'auto_cleared' | 'released' | 'reverted';
+  notes?: string | null;
+  acted_by_user_id?: string | null;
+  acted_at: string;
 }
 
 export interface CarrierCity {
@@ -227,6 +259,8 @@ export interface OrderItem {
   labels?: string[];
   location?: string;
   has_assembly?: string;
+  possui_montagem?: string | boolean;
+  produto_e_montavel?: string | boolean;
 }
 
 export interface Route {

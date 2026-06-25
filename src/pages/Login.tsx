@@ -60,6 +60,7 @@ export default function Login() {
           : user.role === 'conferente' ? '/conferente'
             : user.role === 'montador' ? '/montador'
               : user.role === 'consultor' ? '/consultor'
+                : user.role === 'gerente' ? '/gerente/liberacao'
                 : '/driver');
       navigate(path);
       setTimeout(() => { try { window.location.replace(path); } catch { } }, 100);

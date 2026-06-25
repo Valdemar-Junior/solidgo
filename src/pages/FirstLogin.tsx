@@ -81,6 +81,7 @@ export default function FirstLogin() {
             : role === 'conferente' ? '/conferente'
               : role === 'montador' ? '/montador'
                 : role === 'consultor' ? '/consultor'
+                  : role === 'gerente' ? '/gerente/liberacao'
                   : '/');
       } else {
         await useAuthStore.getState().checkAuth();

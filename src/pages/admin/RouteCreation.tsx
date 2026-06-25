@@ -61,6 +61,7 @@ import DatePicker, { registerLocale } from 'react-datepicker';
 import { ptBR } from 'date-fns/locale';
 import 'react-datepicker/dist/react-datepicker.css';
 import { syncAssemblyProductsForPickup } from '../../utils/assembly/syncAssemblyProducts';
+import { getStoreReleaseStatusLabel, isStoreReleaseBlocked } from '../../utils/storeRelease';
 
 registerLocale('pt-BR', ptBR);
 
@@ -123,6 +124,19 @@ type RouteMdfeManifest = {
 };
 
 const ACTIVE_MDFE_STATUSES = new Set<RouteMdfeManifest['status']>(['draft', 'processing', 'issued']);
+
+async function syncStoreReleaseOrderIds(orderIds: string[]) {
+  const ids = Array.from(new Set(orderIds.filter(Boolean).map(String)));
+  if (ids.length === 0) return;
+
+  const { error } = await supabase.rpc('sync_store_release_for_orders', {
+    p_order_ids: ids,
+  });
+
+  if (error) {
+    console.warn('Falha ao sincronizar liberacao de saida de loja:', error);
+  }
+}
 
 // --- ERROR BOUNDARY ---
 class RouteCreationErrorBoundary extends React.Component<
@@ -618,15 +632,6 @@ function RouteCreationContent() {
     });
   }, [filteredRows, sortColumn, sortDirection]);
 
-  const visibleUniqueOrderIds = useMemo(() => {
-    const ids = new Set<string>();
-    sortedRows.forEach(({ order }) => {
-      if (order?.id) ids.add(String(order.id));
-    });
-    return ids;
-  }, [sortedRows]);
-
-
   // Pickup Modal State
   const [showPickupModal, setShowPickupModal] = useState(false);
   const [pickupOrderIds, setPickupOrderIds] = useState<string[]>([]);
@@ -635,6 +640,32 @@ function RouteCreationContent() {
   const [pickupSaving, setPickupSaving] = useState(false);
   const [pickupDocumentsPrinted, setPickupDocumentsPrinted] = useState(false);
   const [openOrderActionsId, setOpenOrderActionsId] = useState<string | null>(null);
+  const [storeReleaseControlSettings, setStoreReleaseControlSettings] = useState({
+    enabled: false,
+    only_block_disassemblable_items: true,
+  });
+  const [storeReleaseNotesByOrder, setStoreReleaseNotesByOrder] = useState<Record<string, string>>({});
+
+  const visibleUniqueOrderIds = useMemo(() => {
+    const ids = new Set<string>();
+    sortedRows.forEach(({ order }) => {
+      if (order?.id) ids.add(String(order.id));
+    });
+    return ids;
+  }, [sortedRows]);
+
+  const isOrderAwaitingStoreRelease = (order: Partial<Order> | null | undefined) =>
+    isStoreReleaseBlocked(order || {}, storeReleaseControlSettings);
+
+  const selectableVisibleOrderIds = useMemo(() => {
+    const ids = new Set<string>();
+    sortedRows.forEach(({ order }) => {
+      if (!order?.id) return;
+      if (isOrderAwaitingStoreRelease(order)) return;
+      ids.add(String(order.id));
+    });
+    return ids;
+  }, [sortedRows, storeReleaseControlSettings]);
 
   // Estados para pedidos bloqueados e coletas pendentes
   const [blockedOrders, setBlockedOrders] = useState<Order[]>([]);
@@ -1186,6 +1217,19 @@ function RouteCreationContent() {
         }
       }
 
+      if (importedOrderIds.length > 0) {
+        try {
+          const { error: syncStoreReleaseErr } = await supabase.rpc('sync_store_release_for_orders', {
+            p_order_ids: importedOrderIds,
+          });
+          if (syncStoreReleaseErr) {
+            console.warn('Falha ao sincronizar liberacao de saida de loja:', syncStoreReleaseErr);
+          }
+        } catch (syncStoreReleaseError) {
+          console.warn('Erro ao sincronizar liberacao de saida de loja:', syncStoreReleaseError);
+        }
+      }
+
       if (errors > 0) {
         toast.warning(`${insertedCount} importado(s), ${errors} erro(s). Verifique duplicidades.`);
         // Mesmo com erros, selecionar os que foram importados com sucesso
@@ -1372,6 +1416,21 @@ function RouteCreationContent() {
   useEffect(() => {
     try { localStorage.setItem('rc_selectedOrders', JSON.stringify(Array.from(selectedOrders))); } catch { }
   }, [selectedOrders]);
+
+  useEffect(() => {
+    setSelectedOrders((current) => {
+      const allowed = new Set<string>();
+      orders.forEach((order) => {
+        if (!order?.id) return;
+        if (isOrderAwaitingStoreRelease(order)) return;
+        allowed.add(String(order.id));
+      });
+
+      const filtered = Array.from(current).filter((id) => allowed.has(String(id)));
+      if (filtered.length === current.size) return current;
+      return new Set(filtered);
+    });
+  }, [orders, storeReleaseControlSettings]);
 
   useEffect(() => {
     fetchBlockedOrdersPage(blockedOrdersPage, true);
@@ -2517,6 +2576,7 @@ function RouteCreationContent() {
         ordersRes,
         vehiclesRes,
         confSettingRes,
+        storeReleaseControlRes,
         driversRes,
         conferentesRes,
         deliveryRouteCatalogRes,
@@ -2530,7 +2590,7 @@ function RouteCreationContent() {
         // OTIMIZAÃ‡ÃƒO: Excluindo colunas pesadas (danfe_base64=88MB, xml_documento, raw_json, return_nfe_xml, return_danfe_base64)
         supabase
           .from('orders')
-          .select('id, order_id_erp, customer_name, phone, address_json, items_json, status, created_at, updated_at, filial_venda, data_venda, previsao_entrega, tem_frete_full, observacoes_publicas, observacoes_internas, customer_cpf, vendedor_nome, return_flag, last_return_reason, last_return_notes, brand, department, service_type, erp_status, blocked_at, blocked_reason, requires_pickup, pickup_created_at, return_nfe_number, return_nfe_key, return_date, return_type, import_source, previsao_montagem, product_group, product_subgroup, danfe_gerada_em, raw_operacoes:raw_json->>operacoes, raw_lancamento_venda:raw_json->>lancamento_venda')
+          .select('id, order_id_erp, customer_name, phone, address_json, items_json, status, created_at, updated_at, filial_venda, data_venda, previsao_entrega, tem_frete_full, observacoes_publicas, observacoes_internas, customer_cpf, vendedor_nome, return_flag, last_return_reason, last_return_notes, brand, department, service_type, erp_status, blocked_at, blocked_reason, requires_pickup, pickup_created_at, return_nfe_number, return_nfe_key, return_date, return_type, import_source, previsao_montagem, product_group, product_subgroup, danfe_gerada_em, requires_store_release, store_release_status, raw_operacoes:raw_json->>operacoes, raw_lancamento_venda:raw_json->>lancamento_venda')
           .in('status', ['pending', 'returned', 'assigned'])
           .is('blocked_at', null)  // SÃ³ pedidos NÃƒO bloqueados
           .order('created_at', { ascending: false }),
@@ -2547,6 +2607,12 @@ function RouteCreationContent() {
           .select('value')
           .eq('key', 'require_route_conference')
           .single(),
+
+        supabase
+          .from('app_settings')
+          .select('value')
+          .eq('key', 'store_release_control')
+          .maybeSingle(),
 
         // Drivers
         supabase
@@ -2585,7 +2651,7 @@ function RouteCreationContent() {
         // Pedidos que precisam de coleta (para aba "Coletas Pendentes") â€” sem colunas pesadas
         supabase
           .from('orders')
-          .select('id, order_id_erp, customer_name, phone, address_json, items_json, status, created_at, updated_at, filial_venda, data_venda, previsao_entrega, tem_frete_full, observacoes_publicas, observacoes_internas, customer_cpf, vendedor_nome, return_flag, last_return_reason, last_return_notes, brand, department, service_type, erp_status, blocked_at, blocked_reason, requires_pickup, pickup_created_at, return_nfe_number, return_nfe_key, return_date, return_type, import_source, previsao_montagem, product_group, product_subgroup, danfe_gerada_em, raw_operacoes:raw_json->>operacoes, raw_lancamento_venda:raw_json->>lancamento_venda')
+          .select('id, order_id_erp, customer_name, phone, address_json, items_json, status, created_at, updated_at, filial_venda, data_venda, previsao_entrega, tem_frete_full, observacoes_publicas, observacoes_internas, customer_cpf, vendedor_nome, return_flag, last_return_reason, last_return_notes, brand, department, service_type, erp_status, blocked_at, blocked_reason, requires_pickup, pickup_created_at, return_nfe_number, return_nfe_key, return_date, return_type, import_source, previsao_montagem, product_group, product_subgroup, danfe_gerada_em, requires_store_release, store_release_status, raw_operacoes:raw_json->>operacoes, raw_lancamento_venda:raw_json->>lancamento_venda')
           .eq('requires_pickup', true)
           .is('pickup_created_at', null)
           .order('blocked_at', { ascending: false })
@@ -2605,6 +2671,7 @@ function RouteCreationContent() {
         const rawOrders = ordersRes.data as Order[];
         let carrierDeliveryMap = new Map<string, boolean>();
         let withdrawnOrderIds = new Set<string>();
+        let releasedNotesMap: Record<string, string> = {};
         if (rawOrders.length > 0) {
           try {
             const { data: carrierFlagsData, error: carrierFlagsError } = await supabase
@@ -2626,10 +2693,27 @@ function RouteCreationContent() {
             if (!withdrawalsError) {
               withdrawnOrderIds = new Set((withdrawalsData || []).map((row: any) => String(row.order_id)));
             }
+
+            const { data: releaseAssignmentsData, error: releaseAssignmentsError } = await supabase
+              .from('store_release_assignments')
+              .select('order_id, status, release_notes, updated_at')
+              .in('order_id', rawOrders.map((order) => String(order.id)))
+              .eq('status', 'released')
+              .order('updated_at', { ascending: false });
+
+            if (!releaseAssignmentsError) {
+              for (const row of releaseAssignmentsData || []) {
+                const orderId = String((row as any).order_id || '');
+                if (!orderId || releasedNotesMap[orderId]) continue;
+                const notes = String((row as any).release_notes || '').trim();
+                if (notes) releasedNotesMap[orderId] = notes;
+              }
+            }
           } catch (error) {
             console.warn('Carrier delivery flag or withdrawals not available yet:', error);
           }
         }
+        setStoreReleaseNotesByOrder(releasedNotesMap);
         setFullUrgentAlert(buildFullUrgentAlertSummary(rawOrders, activeRouteOrdersRes.data || []));
         processedOrders = rawOrders
           .filter(o => !lockedOrderIds.has(o.id)) // SAFETY FILTER
@@ -2690,6 +2774,12 @@ function RouteCreationContent() {
       const confSetting = confSettingRes.data as any;
       const flagEnabled = confSetting?.value?.enabled;
       setRequireConference(flagEnabled === false ? false : true);
+
+      const releaseSetting = storeReleaseControlRes.data as any;
+      setStoreReleaseControlSettings({
+        enabled: releaseSetting?.value?.enabled === true,
+        only_block_disassemblable_items: releaseSetting?.value?.only_block_disassemblable_items !== false,
+      });
 
       // Process drivers - enrich with user data
       let driverList: DriverWithUser[] = [];
@@ -2822,12 +2912,17 @@ function RouteCreationContent() {
   // sobrecarregavam o pool de conexÃµes do Supabase durante operaÃ§Ãµes em lote.
 
   const toggleOrderSelection = (orderId: string) => {
+    const order = (orders || []).find((x: any) => String(x.id) === String(orderId));
+    if (order && isOrderAwaitingStoreRelease(order)) {
+      toast.error('Pedido aguardando liberacao de saida de loja.');
+      return;
+    }
+
     const newSelected = new Set(selectedOrders);
     const wasSelected = newSelected.has(orderId);
 
     // Logic for CPF Grouping (Only when selecting, not deselecting)
     if (!wasSelected) {
-      const order = (orders || []).find((x: any) => String(x.id) === String(orderId));
       const cpf = order?.customer_cpf ? String(order.customer_cpf).trim() : '';
 
       if (cpf) {
@@ -2835,7 +2930,8 @@ function RouteCreationContent() {
         const sameCpfPending = (orders || []).filter((o: any) =>
           String(o.id) !== String(orderId) &&
           String(o.customer_cpf || '').trim() === cpf &&
-          !newSelected.has(o.id)
+          !newSelected.has(o.id) &&
+          !isOrderAwaitingStoreRelease(o)
         );
 
         if (sameCpfPending.length > 0) {
@@ -3544,6 +3640,7 @@ function RouteCreationContent() {
         if (routeOrdersError) throw routeOrdersError;
         const { error: ordersError } = await supabase.from('orders').update({ status: 'assigned' }).in('id', toAdd);
         if (ordersError) throw ordersError;
+        await syncStoreReleaseOrderIds(toAdd);
       }
 
       toast.success(selectedExistingRouteId ? 'Pedidos adicionados ao romaneio' : 'Rota criada com sucesso!');
@@ -3898,12 +3995,12 @@ function RouteCreationContent() {
                   className="h-4 w-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
                   onChange={(e) => {
                     if (e.currentTarget.checked) {
-                      setSelectedOrders(new Set(visibleUniqueOrderIds));
+                      setSelectedOrders(new Set(selectableVisibleOrderIds));
                     } else {
                       setSelectedOrders(new Set());
                     }
                   }}
-                  checked={visibleUniqueOrderIds.size > 0 && selectedOrders.size === visibleUniqueOrderIds.size}
+                  checked={selectableVisibleOrderIds.size > 0 && selectedOrders.size === selectableVisibleOrderIds.size}
                 />
                 <span className="ml-2 text-sm font-medium text-gray-700">Selecionar todos os pedidos</span>
               </label>
@@ -3983,6 +4080,12 @@ function RouteCreationContent() {
                   {/* Reuse the massive mapping logic here but cleaner */}
                   {sortedRows.map(({ order: o, item: it, values }, idx) => {
                     const isSelected = selectedOrders.has(o.id);
+                    const awaitingStoreRelease = isOrderAwaitingStoreRelease(o);
+                    const showStoreReleaseBadge = Boolean(o.requires_store_release) && o.store_release_status && o.store_release_status !== 'not_applicable';
+                    const isStoreReleaseReleased = o.store_release_status === 'released';
+                    const storeReleaseTooltip = isStoreReleaseReleased
+                      ? (storeReleaseNotesByOrder[String(o.id)] || 'Pedido liberado pelo gerente.')
+                      : getStoreReleaseStatusLabel(o.store_release_status);
                     const raw: any = o.raw_json || {};
                     const obsIntLower = String(o.observacoes_internas || raw.observacoes_internas || '').toLowerCase();
                     const obsLower = String(o.observacoes_publicas || raw.observacoes || '').toLowerCase();
@@ -4020,7 +4123,7 @@ function RouteCreationContent() {
                           className="px-4 py-3 cursor-pointer"
                           onClick={() => toggleOrderSelection(o.id)}
                         >
-                          <div className={`w-5 h-5 rounded border flex items-center justify-center transition-colors ${isSelected ? 'bg-blue-600 border-blue-600' : 'border-gray-300 bg-white'}`}>
+                          <div className={`w-5 h-5 rounded border flex items-center justify-center transition-colors ${awaitingStoreRelease ? 'border-amber-300 bg-amber-50' : isSelected ? 'bg-blue-600 border-blue-600' : 'border-gray-300 bg-white'}`}>
                             {isSelected && <CheckCircle2 className="h-3.5 w-3.5 text-white" />}
                           </div>
                         </td>
@@ -4038,6 +4141,16 @@ function RouteCreationContent() {
                               Ações
                               <ChevronDown className="ml-1.5 h-3.5 w-3.5" />
                             </button>
+                            {showStoreReleaseBadge && (
+                              <div className="mt-2">
+                                <span
+                                  className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-semibold ${isStoreReleaseReleased ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'}`}
+                                  title={storeReleaseTooltip}
+                                >
+                                  {getStoreReleaseStatusLabel(o.store_release_status)}
+                                </span>
+                              </div>
+                            )}
 
                             {openOrderActionsId === String(o.id) && (
                               <div
@@ -5461,11 +5574,12 @@ function RouteCreationContent() {
                                 const ids = pIds.filter(Boolean);
                                 if (ids.length === 0) return;
                                 const rid = String(conferenceRoute.id);
-                                const { error: delErr } = await supabase.from('route_orders').delete().eq('route_id', rid).in('order_id', ids);
-                                if (delErr) throw delErr;
-                                const { error: updErr } = await supabase.from('orders').update({ status: 'pending' }).in('id', ids);
-                                if (updErr) throw updErr;
-                                toast.success('Pedidos removidos da rota');
+                              const { error: delErr } = await supabase.from('route_orders').delete().eq('route_id', rid).in('order_id', ids);
+                              if (delErr) throw delErr;
+                              const { error: updErr } = await supabase.from('orders').update({ status: 'pending' }).in('id', ids);
+                              if (updErr) throw updErr;
+                              await syncStoreReleaseOrderIds(ids);
+                              toast.success('Pedidos removidos da rota');
                                 setShowConferenceModal(false);
                                 loadData();
                               } catch (e: any) {
@@ -5515,6 +5629,7 @@ function RouteCreationContent() {
                               if (delErr) throw delErr;
                               const { error: updErr } = await supabase.from('orders').update({ status: 'pending' }).in('id', ids);
                               if (updErr) throw updErr;
+                              await syncStoreReleaseOrderIds(ids);
                               toast.success('Pedidos faltantes removidos da rota');
                               setShowConferenceModal(false);
                               loadData();
@@ -5737,6 +5852,7 @@ function RouteCreationContent() {
                                   if (insErr) throw insErr;
                                   const { error: updErr } = await supabase.from('orders').update({ status: 'assigned' }).in('id', toAddIds);
                                   if (updErr) throw updErr;
+                                  await syncStoreReleaseOrderIds(toAddIds);
                                   toast.success('Pedidos adicionados à rota');
 
                                   // Recarregar dados e atualizar selectedRoute para refletir os novos pedidos no modal
@@ -6399,6 +6515,7 @@ function RouteCreationContent() {
                                         if (delErr) throw delErr;
                                         const { error: updErr } = await supabase.from('orders').update({ status: 'pending' }).eq('id', ro.order_id);
                                         if (updErr) throw updErr;
+                                        await syncStoreReleaseOrderIds([String(ro.order_id)]);
                                         toast.success('Pedido removido da rota');
                                       }
 

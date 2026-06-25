@@ -25,6 +25,7 @@ import ReportsDeliveryOperational from './pages/admin/ReportsDeliveryOperational
 import ReportsAssemblyOperational from './pages/admin/ReportsAssemblyOperational';
 import ReportsDeliveryGoal from './pages/admin/ReportsDeliveryGoal';
 import ReportsWithdrawals from './pages/admin/ReportsWithdrawals';
+import StoreReleaseManagement from './pages/gerente/StoreReleaseManagement';
 import Mdfe from './pages/admin/Mdfe';
 import MdfeEmitters from './pages/admin/MdfeEmitters';
 import MdfeVehicles from './pages/admin/MdfeVehicles';
@@ -206,6 +207,18 @@ function App() {
                 </AdminLayout>
               </ProtectedRoute>
             }
+          />
+          <Route
+            path="/gerente/liberacao"
+            element={
+              <ProtectedRoute allowedRoles={['gerente']}>
+                <StoreReleaseManagement />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/gerente/store-release"
+            element={<Navigate to="/gerente/liberacao" replace />}
           />
           <Route
             path="/admin/fleet"
@@ -441,6 +454,8 @@ function RoleBasedRedirect() {
           ? <Navigate to="/montador" replace />
           : user.role === 'consultor'
             ? <Navigate to="/consultor" replace />
+            : user.role === 'gerente'
+              ? <Navigate to="/gerente/liberacao" replace />
             : <Navigate to="/driver" replace />;
 }
 

@@ -3,12 +3,13 @@ import { ArrowLeft, Loader2, MapPin, Phone, Search, Truck, Hammer, FileText, Fil
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../../supabase/client';
 import { useAuthStore } from '../../stores/authStore';
-import type { Order, OrderWithdrawal } from '../../types/database';
+import type { Order, OrderWithdrawal, StoreReleaseAssignment, StoreReleaseHistory } from '../../types/database';
 import { toast } from 'sonner';
 import { AssemblyPhotosViewer, DeliveryPhotosViewer } from '../../components/photos';
 import { DeliveryProofPdfGenerator } from '../../utils/pdf/deliveryProofPdfGenerator';
 import { DeliverySheetGenerator } from '../../utils/pdf/deliverySheetGenerator';
 import { PDFDocument } from 'pdf-lib';
+import { getStoreReleaseStatusLabel } from '../../utils/storeRelease';
 
 interface RouteOrderInfo {
   id: string;
@@ -163,6 +164,9 @@ export default function OrderLookup() {
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
   const [routeOrders, setRouteOrders] = useState<RouteOrderInfo[]>([]);
   const [withdrawal, setWithdrawal] = useState<WithdrawalInfo | null>(null);
+  const [storeReleaseAssignments, setStoreReleaseAssignments] = useState<StoreReleaseAssignment[]>([]);
+  const [storeReleaseHistory, setStoreReleaseHistory] = useState<StoreReleaseHistory[]>([]);
+  const [storeReleaseUserNames, setStoreReleaseUserNames] = useState<Record<string, string>>({});
   const [assemblies, setAssemblies] = useState<AssemblyInfo[]>([]);
   const [deliveryReceiptsByRouteOrder, setDeliveryReceiptsByRouteOrder] = useState<Record<string, DeliveryReceiptInfo>>({});
   const [deliveryReceiptUserNames, setDeliveryReceiptUserNames] = useState<Record<string, string>>({});
@@ -205,7 +209,7 @@ export default function OrderLookup() {
       const filterStr = filters.join(',');
 
       // OTIMIZAÇÃO: Excluindo campos pesados (danfe_base64, return_danfe_base64, xml_documento, return_nfe_xml)
-      const ORDERS_LOOKUP_COLS = 'id,order_id_erp,customer_name,phone,address_json,items_json,status,created_at,updated_at,filial_venda,data_venda,previsao_entrega,tem_frete_full,observacoes_publicas,observacoes_internas,customer_cpf,vendedor_nome,return_flag,last_return_reason,last_return_notes,brand,department,service_type,erp_status,blocked_at,blocked_reason,requires_pickup,pickup_created_at,return_nfe_number,return_nfe_key,return_date,return_type,import_source,previsao_montagem,product_group,product_subgroup,danfe_gerada_em,raw_json';
+      const ORDERS_LOOKUP_COLS = 'id,order_id_erp,customer_name,phone,address_json,items_json,status,created_at,updated_at,filial_venda,data_venda,previsao_entrega,tem_frete_full,observacoes_publicas,observacoes_internas,customer_cpf,vendedor_nome,return_flag,last_return_reason,last_return_notes,brand,department,service_type,erp_status,blocked_at,blocked_reason,requires_pickup,pickup_created_at,return_nfe_number,return_nfe_key,return_date,return_type,import_source,previsao_montagem,product_group,product_subgroup,danfe_gerada_em,requires_store_release,store_release_status,raw_json';
       const { data, error } = await supabase
         .from('orders')
         .select(ORDERS_LOOKUP_COLS)
@@ -256,6 +260,9 @@ export default function OrderLookup() {
       setSelectedOrder(null);
       setRouteOrders([]);
       setWithdrawal(null);
+      setStoreReleaseAssignments([]);
+      setStoreReleaseHistory([]);
+      setStoreReleaseUserNames({});
       setAssemblies([]);
       setDeliveryReceiptsByRouteOrder({});
       setDeliveryReceiptUserNames({});
@@ -601,13 +608,46 @@ export default function OrderLookup() {
         }
 
         // Enriquecer com driver (mesma lógica do RouteCreation.tsx)
-        const { data: withdrawalData, error: withdrawalError } = await supabase
-          .from('order_withdrawals')
-          .select('*')
-          .eq('order_id', selectedOrder.id)
-          .maybeSingle();
+        const [
+          { data: withdrawalData, error: withdrawalError },
+          { data: releaseAssignmentsData, error: releaseAssignmentsError },
+          { data: releaseHistoryData, error: releaseHistoryError },
+        ] = await Promise.all([
+          supabase
+            .from('order_withdrawals')
+            .select('*')
+            .eq('order_id', selectedOrder.id)
+            .maybeSingle(),
+          supabase
+            .from('store_release_assignments')
+            .select('*')
+            .eq('order_id', selectedOrder.id)
+            .order('store_location'),
+          supabase
+            .from('store_release_history')
+            .select('*')
+            .eq('order_id', selectedOrder.id)
+            .order('acted_at', { ascending: false })
+            .limit(10),
+        ]);
         if (withdrawalError) throw withdrawalError;
+        if (releaseAssignmentsError) throw releaseAssignmentsError;
+        if (releaseHistoryError) throw releaseHistoryError;
         setWithdrawal((withdrawalData || null) as WithdrawalInfo | null);
+        setStoreReleaseAssignments((releaseAssignmentsData || []) as StoreReleaseAssignment[]);
+        setStoreReleaseHistory((releaseHistoryData || []) as StoreReleaseHistory[]);
+
+        const releaseUserIds = Array.from(new Set([
+          ...(releaseAssignmentsData || []).map((item: any) => String(item.released_by_user_id || '').trim()),
+          ...(releaseHistoryData || []).map((item: any) => String(item.acted_by_user_id || '').trim()),
+        ].filter(Boolean)));
+
+        if (releaseUserIds.length > 0) {
+          const namesMap = await fetchUserNamesByIds(releaseUserIds);
+          setStoreReleaseUserNames(namesMap);
+        } else {
+          setStoreReleaseUserNames({});
+        }
 
         if (roData && roData.length > 0) {
           const driverIds = Array.from(new Set((roData as any[]).map((ro: any) => ro.route?.driver_id).filter(Boolean)));
@@ -1677,6 +1717,63 @@ export default function OrderLookup() {
                   </div>
                 )}
               </div>
+
+              {(selectedOrder?.requires_store_release || storeReleaseAssignments.length > 0) && (
+                <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Briefcase className="h-5 w-5 text-emerald-600" />
+                    <div>
+                      <p className="text-xs font-semibold text-gray-500 uppercase">Saida de Loja</p>
+                      <p className={`text-sm font-bold ${selectedOrder?.store_release_status === 'released' ? 'text-emerald-700' : 'text-amber-700'}`}>
+                        {getStoreReleaseStatusLabel(selectedOrder?.store_release_status)}
+                      </p>
+                    </div>
+                  </div>
+                  {storeReleaseAssignments.length === 0 ? (
+                    <p className="text-sm text-gray-500">Nenhuma pendencia de liberacao encontrada.</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {storeReleaseAssignments.map((assignment) => (
+                        <div key={assignment.id} className="rounded-lg border border-gray-100 p-3">
+                          <div className="flex items-center justify-between gap-3">
+                            <p className="text-sm font-semibold text-gray-900">{assignment.store_location}</p>
+                            <span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${assignment.status === 'released' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'}`}>
+                              {assignment.status === 'released' ? 'Liberado' : 'Pendente'}
+                            </span>
+                          </div>
+                          {assignment.status === 'released' && (
+                            <div className="mt-2 space-y-1 text-xs text-gray-600">
+                              <p>
+                                <span className="font-semibold">Liberado por:</span> {storeReleaseUserNames[String(assignment.released_by_user_id || '')] || assignment.released_by_user_id || '-'}
+                              </p>
+                              <p>
+                                <span className="font-semibold">Data:</span> {assignment.released_at ? formatDateTime(assignment.released_at) : '-'}
+                              </p>
+                              {assignment.release_notes && (
+                                <p>
+                                  <span className="font-semibold">Obs.:</span> {assignment.release_notes}
+                                </p>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                      {storeReleaseHistory.length > 0 && (
+                        <div className="rounded-lg border border-gray-100 bg-gray-50 p-3">
+                          <p className="text-xs font-semibold text-gray-700 mb-2">Historico recente</p>
+                          <div className="space-y-1 text-xs text-gray-600">
+                            {storeReleaseHistory.slice(0, 5).map((item) => (
+                              <p key={item.id}>
+                                {item.store_location} - {item.action} - {item.acted_at ? formatDateTime(item.acted_at) : '-'} - {storeReleaseUserNames[String(item.acted_by_user_id || '')] || item.acted_by_user_id || 'sistema'}
+                              </p>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
 
               <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm">
                 <div className="flex items-center gap-2 mb-2">

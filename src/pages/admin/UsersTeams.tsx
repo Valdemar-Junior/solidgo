@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import supabase from '../../supabase/client';
-import type { DeliveryRouteCatalog, User, Vehicle } from '../../types/database';
+import type { DeliveryRouteCatalog, User, UserStoreReleaseLocation, Vehicle } from '../../types/database';
 import { slugifyName, toLoginEmailFromName } from '../../lib/utils';
 import { toast } from 'sonner';
 import {
@@ -15,6 +15,7 @@ import {
   Truck,
   Power,
 } from 'lucide-react';
+import { CONTROLLED_STORE_RELEASE_LOCATIONS } from '../../utils/storeRelease';
 
 type AppRole = User['role'];
 
@@ -36,6 +37,7 @@ const ROLE_LABELS: Record<AppRole, string> = {
   montador: 'Montador',
   conferente: 'Conferente',
   consultor: 'Consultor',
+  gerente: 'Gerente',
 };
 
 const ROLE_STYLES: Record<AppRole, string> = {
@@ -45,6 +47,7 @@ const ROLE_STYLES: Record<AppRole, string> = {
   montador: 'bg-orange-100 text-orange-800',
   conferente: 'bg-teal-100 text-teal-800',
   consultor: 'bg-cyan-100 text-cyan-800',
+  gerente: 'bg-emerald-100 text-emerald-800',
 };
 
 const ensureSelectedOption = (
@@ -66,6 +69,7 @@ export default function UsersTeams() {
   const [teams, setTeams] = useState<TeamRecord[]>([]);
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [deliveryRoutes, setDeliveryRoutes] = useState<DeliveryRouteCatalog[]>([]);
+  const [userStoreReleaseLocations, setUserStoreReleaseLocations] = useState<UserStoreReleaseLocation[]>([]);
 
   const [showUserModal, setShowUserModal] = useState(false);
   const [showTeamModal, setShowTeamModal] = useState(false);
@@ -81,6 +85,7 @@ export default function UsersTeams() {
   const [uPassword, setUPassword] = useState('');
   const [uRole, setURole] = useState<AppRole>('driver');
   const [uActive, setUActive] = useState(true);
+  const [uStoreReleaseLocations, setUStoreReleaseLocations] = useState<string[]>([]);
   const [generatedPassword, setGeneratedPassword] = useState<string | null>(null);
   const [isSavingUser, setIsSavingUser] = useState(false);
 
@@ -131,6 +136,12 @@ export default function UsersTeams() {
         .select('id, name, active, created_at, updated_at')
         .order('name');
       if (routeCatalogData) setDeliveryRoutes(routeCatalogData as DeliveryRouteCatalog[]);
+
+      const { data: storeReleaseLocationData } = await supabase
+        .from('user_store_release_locations')
+        .select('id, user_id, store_location, created_at, updated_at')
+        .order('store_location');
+      if (storeReleaseLocationData) setUserStoreReleaseLocations(storeReleaseLocationData as UserStoreReleaseLocation[]);
     } catch (e) {
       console.error(e);
       toast.error('Falha ao carregar dados');
@@ -147,6 +158,7 @@ export default function UsersTeams() {
     setUPassword('');
     setURole('driver');
     setUActive(true);
+    setUStoreReleaseLocations([]);
     setGeneratedPassword(null);
   };
 
@@ -181,6 +193,11 @@ export default function UsersTeams() {
     setUPassword('');
     setURole(user.role);
     setUActive(user.active ?? true);
+    setUStoreReleaseLocations(
+      userStoreReleaseLocations
+        .filter((item) => item.user_id === user.id)
+        .map((item) => item.store_location)
+    );
     setGeneratedPassword(null);
     setShowUserModal(true);
   };
@@ -284,9 +301,45 @@ export default function UsersTeams() {
     }
   };
 
+  const saveUserStoreReleaseLocations = async (userId: string, role: AppRole, selectedLocations: string[]) => {
+    const normalizedLocations = Array.from(
+      new Set(
+        selectedLocations
+          .map((location) => String(location || '').trim())
+          .filter(Boolean)
+      )
+    );
+
+    const { error: deleteError } = await supabase
+      .from('user_store_release_locations')
+      .delete()
+      .eq('user_id', userId);
+    if (deleteError) throw deleteError;
+
+    if (role !== 'gerente' || normalizedLocations.length === 0) {
+      return;
+    }
+
+    const { error } = await supabase
+      .from('user_store_release_locations')
+      .insert(
+        normalizedLocations.map((storeLocation) => ({
+          user_id: userId,
+          store_location: storeLocation,
+        }))
+      );
+
+    if (error) throw error;
+  };
+
   const saveUser = async () => {
     if (!uName.trim()) {
       toast.error('Informe o nome');
+      return;
+    }
+
+    if (uRole === 'gerente' && uStoreReleaseLocations.length === 0) {
+      toast.error('Selecione pelo menos um local para o gerente');
       return;
     }
 
@@ -304,6 +357,7 @@ export default function UsersTeams() {
         if (error) throw error;
 
         await upsertDriverStatus(editingUser.id, uRole, uActive, editingUser.role);
+        await saveUserStoreReleaseLocations(editingUser.id, uRole, uStoreReleaseLocations);
 
         toast.success('Usuário atualizado com sucesso');
         closeUserModal();
@@ -356,12 +410,24 @@ export default function UsersTeams() {
         throw new Error(resData?.error || `Falha ao criar usuario (HTTP ${response.status})`);
       }
 
+      const createdUserId = String(resData?.user?.id || resData?.id || '').trim();
+      if (createdUserId) {
+        const { error: roleUpdateError } = await supabase
+          .from('users')
+          .update({ role: uRole, active: true })
+          .eq('id', createdUserId);
+        if (roleUpdateError) throw roleUpdateError;
+
+        await saveUserStoreReleaseLocations(createdUserId, uRole, uStoreReleaseLocations);
+      }
+
       setGeneratedPassword(pwd);
       toast.success('Usuário criado com sucesso!');
       setUName('');
       setUPassword('');
       setURole('driver');
       setUActive(true);
+      setUStoreReleaseLocations([]);
       await loadAll();
     } catch (e: any) {
       console.error(e);
@@ -589,13 +655,24 @@ export default function UsersTeams() {
     [activeHelpers, teamHelperId, users]
   );
 
+  const userStoreReleaseLocationsMap = useMemo(() => {
+    const map = new Map<string, string[]>();
+    userStoreReleaseLocations.forEach((item) => {
+      const current = map.get(item.user_id) || [];
+      current.push(item.store_location);
+      map.set(item.user_id, current);
+    });
+    return map;
+  }, [userStoreReleaseLocations]);
+
   const filteredUsers = useMemo(
     () =>
       users.filter((user) => {
-        const haystack = `${user.name} ${user.email} ${user.role} ${user.active ? 'ativo' : 'inativo'}`.toLowerCase();
+        const managerLocations = (userStoreReleaseLocationsMap.get(user.id) || []).join(' ');
+        const haystack = `${user.name} ${user.email} ${user.role} ${managerLocations} ${user.active ? 'ativo' : 'inativo'}`.toLowerCase();
         return haystack.includes(searchTerm.toLowerCase());
       }),
-    [users, searchTerm]
+    [users, searchTerm, userStoreReleaseLocationsMap]
   );
 
   const filteredTeams = useMemo(
@@ -710,6 +787,11 @@ export default function UsersTeams() {
                           {user.active ? 'Ativo' : 'Inativo'}
                         </span>
                       </div>
+                      {user.role === 'gerente' && (
+                        <p className="mt-2 text-xs text-gray-500">
+                          Locais: {(userStoreReleaseLocationsMap.get(user.id) || []).join(', ') || 'Nenhum local vinculado'}
+                        </p>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -965,9 +1047,38 @@ export default function UsersTeams() {
                       <option value="montador">Montador</option>
                       <option value="conferente">Conferente</option>
                       <option value="consultor">Consultor</option>
+                      <option value="gerente">Gerente</option>
                       <option value="admin">Administrador</option>
                     </select>
                   </div>
+                  {uRole === 'gerente' && (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Locais autorizados</label>
+                      <div className="space-y-2 rounded-xl border border-gray-200 bg-gray-50 p-3">
+                        {CONTROLLED_STORE_RELEASE_LOCATIONS.map((location) => {
+                          const checked = uStoreReleaseLocations.includes(location);
+                          return (
+                            <label key={location} className="flex items-center justify-between rounded-lg bg-white px-3 py-2 border border-gray-100">
+                              <span className="text-sm text-gray-700">{location}</span>
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={(event) => {
+                                  setUStoreReleaseLocations((current) => {
+                                    if (event.target.checked) {
+                                      return Array.from(new Set([...current, location]));
+                                    }
+                                    return current.filter((item) => item !== location);
+                                  });
+                                }}
+                                className="h-4 w-4 text-blue-600 border-gray-300 rounded"
+                              />
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
                   {!editingUser && (
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">Senha Inicial (Opcional)</label>

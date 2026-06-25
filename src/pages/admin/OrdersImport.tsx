@@ -611,6 +611,27 @@ export default function OrdersImport() {
         await Promise.all(updatePromises);
       }
 
+      const updatedOrderIds = paraAtualizar
+        .map((order) => {
+          const original = existentes.find((item: any) => String(item.order_id_erp) === String(order.order_id_erp));
+          return original?.id ? String(original.id) : '';
+        })
+        .filter(Boolean);
+
+      const storeReleaseOrderIds = Array.from(new Set([...savedOrderIds, ...updatedOrderIds]));
+      if (storeReleaseOrderIds.length > 0) {
+        try {
+          const { error: syncStoreReleaseErr } = await supabase.rpc('sync_store_release_for_orders', {
+            p_order_ids: storeReleaseOrderIds,
+          });
+          if (syncStoreReleaseErr) {
+            console.warn('[Import] Falha ao sincronizar liberacao de saida de loja:', syncStoreReleaseErr);
+          }
+        } catch (syncStoreReleaseError) {
+          console.warn('[Import] Erro ao sincronizar liberacao de saida de loja:', syncStoreReleaseError);
+        }
+      }
+
       const pedidosImportados = inseridos;
 
       toast.success(`Importação: ${pedidosImportados} novos. ${atualizados > 0 ? `${atualizados} atualizados. ` : ''}(${duplicados} ignorados)`, {
