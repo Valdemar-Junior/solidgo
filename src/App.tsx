@@ -25,6 +25,7 @@ import ReportsDeliveryOperational from './pages/admin/ReportsDeliveryOperational
 import ReportsAssemblyOperational from './pages/admin/ReportsAssemblyOperational';
 import ReportsDeliveryGoal from './pages/admin/ReportsDeliveryGoal';
 import ReportsAssemblyGoal from './pages/admin/ReportsAssemblyGoal';
+import ReportsProductCommitment from './pages/admin/ReportsProductCommitment';
 import ReportsWithdrawals from './pages/admin/ReportsWithdrawals';
 import StoreReleaseManagement from './pages/gerente/StoreReleaseManagement';
 import Mdfe from './pages/admin/Mdfe';
@@ -205,6 +206,16 @@ function App() {
               <ProtectedRoute allowedRoles={['admin']}>
                 <AdminLayout>
                   <ReportsAssemblyGoal />
+                </AdminLayout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/reports/product-commitment"
+            element={
+              <ProtectedRoute allowedRoles={['admin']}>
+                <AdminLayout>
+                  <ReportsProductCommitment />
                 </AdminLayout>
               </ProtectedRoute>
             }

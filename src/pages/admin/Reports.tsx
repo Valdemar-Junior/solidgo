@@ -1,4 +1,4 @@
-import { ArrowRight, FileSpreadsheet, Goal, Hammer, Package, Truck } from 'lucide-react';
+import { ArrowRight, FileSpreadsheet, Goal, Hammer, Package, PackageSearch, Truck } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
 type ReportCard = {
@@ -47,6 +47,15 @@ const REPORT_CARDS: ReportCard[] = [
     icon: Goal,
     accent: 'from-orange-600 to-amber-500',
     iconBg: 'bg-orange-50 text-orange-700',
+  },
+  {
+    id: 'product-commitment',
+    title: 'Relatorio de Produtos Comprometidos',
+    description: 'Consulte unidades compradas reservadas para entrega ou ja entregues, com cliente, venda e rota.',
+    href: '/admin/reports/product-commitment',
+    icon: PackageSearch,
+    accent: 'from-indigo-600 to-blue-500',
+    iconBg: 'bg-indigo-50 text-indigo-700',
   },
   {
     id: 'withdrawals',
