@@ -59,6 +59,8 @@ type PreviewData = {
 };
 
 const MONTHLY_TARGET = 480;
+const MONTHLY_PERFORMANCE_DELIVERY_TARGET = 385;
+const PERFORMANCE_PERCENT_TARGET = 90;
 const WEEKLY_TARGET = 120;
 
 const createInitialFilters = (): FiltersState => ({
@@ -116,25 +118,12 @@ const getCalendarWeekSections = (startDate: string, endDate: string) => {
   return result;
 };
 
-const getPeriodQuantityTarget = (startDate: string, endDate: string) => {
-  const start = new Date(`${startDate}T00:00:00`);
-  const end = new Date(`${endDate}T00:00:00`);
-  let target = 0;
-  const cursor = new Date(start);
-
-  while (cursor <= end) {
-    const daysInMonth = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 0).getDate();
-    target += MONTHLY_TARGET / daysInMonth;
-    cursor.setDate(cursor.getDate() + 1);
-  }
-
-  return Math.max(1, Math.round(target));
-};
-
-const evaluateTarget = (received: number, delivered: number, quantityTarget: number) => {
-  const quantityTargetMet = received >= quantityTarget && delivered >= quantityTarget;
+const evaluateMonthlyTarget = (received: number, delivered: number) => {
+  const quantityTargetMet = delivered >= MONTHLY_TARGET;
   const performancePercent = received > 0 ? (delivered / received) * 100 : 0;
-  const performanceTargetMet = received > 0 && received < quantityTarget && performancePercent >= 90;
+  const performanceTargetMet =
+    delivered >= MONTHLY_PERFORMANCE_DELIVERY_TARGET &&
+    performancePercent >= PERFORMANCE_PERCENT_TARGET;
 
   const finalResult: DeliveryGoalPersonRow['finalResult'] = quantityTargetMet
     ? 'Meta Atingida'
@@ -142,18 +131,33 @@ const evaluateTarget = (received: number, delivered: number, quantityTarget: num
       ? 'Meta Atingida por Desempenho'
       : 'Meta Nao Atingida';
 
-  const analysis =
-    received >= quantityTarget
-      ? `Recebeu ${received} entregas no periodo e realizou ${delivered}. Como o volume recebido atingiu a meta base de ${quantityTarget}, a avaliacao foi feita por quantidade e o resultado foi ${quantityTargetMet ? 'positivo' : 'negativo'}.`
-      : `Recebeu ${received} entregas no periodo, realizou ${delivered} e registrou ${received - delivered} retornos. Como o volume ficou abaixo da meta base de ${quantityTarget}, a avaliacao foi feita por desempenho, alcancando ${formatPercent(performancePercent)}.`;
+  const analysis = quantityTargetMet
+    ? `Recebeu ${received} entregas no periodo e realizou ${delivered}, atingindo a meta mensal por quantidade de ${MONTHLY_TARGET} entregas.`
+    : performanceTargetMet
+      ? `Recebeu ${received} entregas no periodo e realizou ${delivered}, atingindo a meta mensal por desempenho com pelo menos ${MONTHLY_PERFORMANCE_DELIVERY_TARGET} entregas e ${formatPercent(performancePercent)} de desempenho.`
+      : `Recebeu ${received} entregas no periodo, realizou ${delivered} e registrou ${received - delivered} retornos. Nao atingiu a meta mensal de ${MONTHLY_TARGET} entregas por quantidade nem os criterios de desempenho de pelo menos ${MONTHLY_PERFORMANCE_DELIVERY_TARGET} entregas e ${PERFORMANCE_PERCENT_TARGET}%.`;
 
   return {
-    quantityTarget,
+    quantityTarget: MONTHLY_TARGET,
     quantityTargetMet,
     performancePercent,
     performanceTargetMet,
     finalResult,
     analysis,
+  };
+};
+
+const evaluateWeeklyTarget = (received: number, delivered: number) => {
+  const quantityTargetMet = delivered >= WEEKLY_TARGET;
+  const performancePercent = received > 0 ? (delivered / received) * 100 : 0;
+
+  return {
+    quantityTarget: WEEKLY_TARGET,
+    quantityTargetMet,
+    performancePercent,
+    performanceTargetMet: false,
+    finalResult: quantityTargetMet ? 'Meta Atingida' as const : 'Meta Nao Atingida' as const,
+    analysis: `Recebeu ${received} entregas no periodo e realizou ${delivered}. A meta semanal de ${WEEKLY_TARGET} entregas foi ${quantityTargetMet ? 'atingida' : 'nao atingida'}.`,
   };
 };
 
@@ -261,12 +265,14 @@ export default function ReportsDeliveryGoal() {
       const freshData = await fetchPreviewData(filters);
       setPreviewData(freshData);
 
-      const quantityTarget = getPeriodQuantityTarget(filters.startDate, filters.endDate);
       const reportData: DeliveryGoalReportData = {
         periodLabel: formatPeriodLabel(filters.startDate, filters.endDate),
         viewLabel: getViewModesLabel(filters.viewModes),
         peopleLabel: getPeopleLabel(selectedPeople),
-        quantityTarget,
+        quantityTarget: MONTHLY_TARGET,
+        performanceDeliveryTarget: MONTHLY_PERFORMANCE_DELIVERY_TARGET,
+        performancePercentTarget: PERFORMANCE_PERCENT_TARGET,
+        weeklyTarget: WEEKLY_TARGET,
         showRouteDetails: selectedPeople.length === 1,
         generatedAt: new Date().toISOString(),
         weeklySections: freshData.weeklySections,
@@ -354,7 +360,7 @@ export default function ReportsDeliveryGoal() {
             <FilterCard
               icon={<CalendarRange className="h-5 w-5 text-blue-600" />}
               title="Periodo"
-              description="Selecione um intervalo livre de datas. O consolidado usa meta proporcional ao periodo e os blocos semanais seguem semana calendario."
+              description="Selecione o periodo mensal. O consolidado usa metas fixas e os blocos semanais exigem 120 entregas."
             >
               <label className="block">
                 <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500">Inicio</span>
@@ -672,8 +678,6 @@ async function fetchPreviewData(filters: FiltersState): Promise<PreviewData> {
 
   const start = new Date(`${filters.startDate}T00:00:00`);
   const end = new Date(`${filters.endDate}T00:00:00`);
-  const quantityTarget = getPeriodQuantityTarget(filters.startDate, filters.endDate);
-
   const { data, error } = await supabase
     .from('routes')
     .select(`
@@ -761,10 +765,13 @@ async function fetchPreviewData(filters: FiltersState): Promise<PreviewData> {
     addRole('helper', route.helper_id, route.helper?.name);
   });
 
-  const buildRows = (map: Map<string, AggregationBucket>, target: number) =>
+  const buildRows = (
+    map: Map<string, AggregationBucket>,
+    evaluate: (received: number, delivered: number) => Omit<DeliveryGoalPersonRow, 'personId' | 'personName' | 'personType' | 'received' | 'delivered' | 'returned' | 'routes'>
+  ) =>
     Array.from(map.entries())
       .map(([personId, entry]) => {
-        const evaluation = evaluateTarget(entry.received, entry.delivered, target);
+        const evaluation = evaluate(entry.received, entry.delivered);
         return {
           personId,
           personName: entry.personName,
@@ -779,10 +786,10 @@ async function fetchPreviewData(filters: FiltersState): Promise<PreviewData> {
       .sort((a, b) => a.personName.localeCompare(b.personName));
 
   return {
-    monthlyRows: buildRows(monthlyMap, quantityTarget),
+    monthlyRows: buildRows(monthlyMap, evaluateMonthlyTarget),
     weeklySections: weeks.map((week, index) => ({
       label: `Semana ${week.label}`,
-      rows: buildRows(weeklyMaps[index], WEEKLY_TARGET),
+      rows: buildRows(weeklyMaps[index], evaluateWeeklyTarget),
     })),
   };
 }

@@ -37,6 +37,9 @@ export type DeliveryGoalReportData = {
   viewLabel: string;
   peopleLabel?: string;
   quantityTarget: number;
+  performanceDeliveryTarget: number;
+  performancePercentTarget: number;
+  weeklyTarget: number;
   showRouteDetails?: boolean;
   generatedAt: string;
   weeklySections: DeliveryGoalWeekSection[];
@@ -301,12 +304,14 @@ export class DeliveryGoalReportGenerator {
 
     drawHeader();
     drawSummary();
-    drawSectionTitle(`Consolidado do periodo - meta base ${data.quantityTarget}`);
+    drawSectionTitle(
+      `Consolidado mensal - quantidade: ${data.quantityTarget} | desempenho: ${data.performanceDeliveryTarget} e ${data.performancePercentTarget}%`
+    );
     drawTable(data.monthlyRows);
     drawRouteDetails('Rotas do consolidado', data.monthlyRows);
 
     data.weeklySections.forEach((section) => {
-      drawSectionTitle(section.label);
+      drawSectionTitle(`${section.label} - meta: ${data.weeklyTarget} entregas`);
       drawTable(section.rows);
       drawRouteDetails(section.label, section.rows);
     });
