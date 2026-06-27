@@ -40,6 +40,15 @@ const REPORT_CARDS: ReportCard[] = [
     iconBg: 'bg-emerald-50 text-emerald-700',
   },
   {
+    id: 'assembly-goal',
+    title: 'Relatorio de Meta de Montagem',
+    description: 'Acompanhe metas semanais e mensais por montador, com produtos avulsos e kits contabilizados corretamente.',
+    href: '/admin/reports/assembly-goal',
+    icon: Goal,
+    accent: 'from-orange-600 to-amber-500',
+    iconBg: 'bg-orange-50 text-orange-700',
+  },
+  {
     id: 'withdrawals',
     title: 'Relatorio de Retiradas',
     description: 'Acompanhe retiradas por periodo com cliente, produtos, endereco, conferente e status da montagem.',
