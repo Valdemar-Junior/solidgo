@@ -638,7 +638,9 @@ function RouteCreationContent() {
   const [pickupResponsibleName, setPickupResponsibleName] = useState('');
   const [pickupObservations, setPickupObservations] = useState('');
   const [pickupSaving, setPickupSaving] = useState(false);
+  const [pickupPrinting, setPickupPrinting] = useState(false);
   const [pickupDocumentsPrinted, setPickupDocumentsPrinted] = useState(false);
+  const [completedPickupWithdrawals, setCompletedPickupWithdrawals] = useState<OrderWithdrawal[]>([]);
   const [openOrderActionsId, setOpenOrderActionsId] = useState<string | null>(null);
   const [storeReleaseControlSettings, setStoreReleaseControlSettings] = useState({
     enabled: false,
@@ -3044,6 +3046,7 @@ function RouteCreationContent() {
     setPickupResponsibleName('');
     setPickupObservations('');
     setPickupDocumentsPrinted(false);
+    setCompletedPickupWithdrawals([]);
     setShowPickupModal(true);
   };
 
@@ -3053,7 +3056,9 @@ function RouteCreationContent() {
     setPickupResponsibleName('');
     setPickupObservations('');
     setPickupDocumentsPrinted(false);
+    setCompletedPickupWithdrawals([]);
     setPickupSaving(false);
+    setPickupPrinting(false);
   };
 
   useEffect(() => {
@@ -3092,32 +3097,6 @@ function RouteCreationContent() {
       withdrawals,
       orders: ordersForPrint,
     } satisfies PickupPrintBundle;
-  };
-
-  const buildPickupPreviewBundle = async () => {
-    if (pickupOrderIds.length === 0) {
-      throw new Error('Nenhum pedido selecionado para retirada.');
-    }
-    if (!pickupResponsibleName.trim()) {
-      throw new Error('Selecione o responsável pela retirada.');
-    }
-
-    const now = new Date().toISOString();
-    const previewWithdrawals = pickupOrderIds.map((orderId, index) => ({
-      id: `preview-withdrawal-${orderId}-${index + 1}`,
-      order_id: orderId,
-      responsible_name: pickupResponsibleName.trim(),
-      notes: pickupObservations.trim() || null,
-      withdrawn_at: now,
-      registered_by_user_id: authUser?.id || null,
-      registered_by_name: authUser?.name || authUser?.email || null,
-      source: 'manual',
-      legacy_route_id: null,
-      created_at: now,
-      updated_at: now,
-    })) as OrderWithdrawal[];
-
-    return buildPickupPrintBundle(previewWithdrawals);
   };
 
   const generatePickupReceiptPdf = async (bundle: PickupPrintBundle) => {
@@ -3205,7 +3184,11 @@ function RouteCreationContent() {
   };
 
   const printPickupDocuments = async () => {
-    const bundle = await buildPickupPreviewBundle();
+    if (completedPickupWithdrawals.length === 0) {
+      throw new Error('Confirme a retirada antes de imprimir os documentos.');
+    }
+
+    const bundle = await buildPickupPrintBundle(completedPickupWithdrawals);
     const receiptPdf = await generatePickupReceiptPdf(bundle);
     const danfePdf = await generatePickupDanfePdf(bundle);
 
@@ -3222,6 +3205,8 @@ function RouteCreationContent() {
   };
 
   const createPickup = async () => {
+    if (pickupSaving) return;
+
     if (pickupOrderIds.length === 0) {
       toast.error('Selecione pelo menos um pedido para retirada.');
       return;
@@ -3230,10 +3215,7 @@ function RouteCreationContent() {
       toast.error('Selecione o responsável pela retirada.');
       return;
     }
-    const confirmMessage = pickupDocumentsPrinted
-      ? 'Confirme que os documentos já foram impressos. Clique em OK para prosseguir com a retirada ou em Cancelar para voltar.'
-      : 'Os documentos ainda não foram impressos. Clique em Cancelar para imprimir agora ou em OK para prosseguir mesmo assim com a retirada.';
-    if (!window.confirm(confirmMessage)) {
+    if (!window.confirm('Confirma a retirada deste(s) pedido(s)? Após salvar, os documentos serão liberados para impressão.')) {
       return;
     }
 
@@ -3256,6 +3238,9 @@ function RouteCreationContent() {
         .select('*');
 
       if (withdrawalError) throw withdrawalError;
+      if (!withdrawalRows || withdrawalRows.length !== pickupOrderIds.length) {
+        throw new Error('O banco não confirmou todas as retiradas selecionadas. Tente novamente.');
+      }
 
       const { error: updateOrdersError } = await supabase
         .from('orders')
@@ -3266,6 +3251,8 @@ function RouteCreationContent() {
         .in('id', pickupOrderIds);
 
       if (updateOrdersError) throw updateOrdersError;
+
+      setCompletedPickupWithdrawals((withdrawalRows || []) as OrderWithdrawal[]);
 
       const assemblySyncResults = await Promise.allSettled(
         pickupOrderIds.map((orderId) => syncAssemblyProductsForPickup(String(orderId)))
@@ -3283,7 +3270,12 @@ function RouteCreationContent() {
         console.error('Falha ao sincronizar montagem para retiradas:', assemblySyncFailures);
         toast.warning('Retirada registrada, mas houve falha ao gerar parte das tarefas de montagem.');
       }
-      await loadData(false);
+      try {
+        await loadData(false);
+      } catch (loadError) {
+        console.error('Retirada registrada, mas houve falha ao atualizar a listagem:', loadError);
+        toast.warning('Retirada registrada, mas a listagem não pôde ser atualizada automaticamente.');
+      }
     } catch (error: any) {
       console.error('Error creating pickup:', error);
       toast.error('Erro ao registrar retirada: ' + (error?.message || 'Erro desconhecido'));
@@ -5201,88 +5193,126 @@ function RouteCreationContent() {
             <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden">
               <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
                 <h3 className="text-lg font-bold text-gray-900 flex items-center gap-2">
-                  <Store className="h-5 w-5 text-purple-600" />
-                  Retirada pelo cliente
+                  {completedPickupWithdrawals.length > 0
+                    ? <CheckCircle2 className="h-5 w-5 text-emerald-600" />
+                    : <Store className="h-5 w-5 text-purple-600" />}
+                  {completedPickupWithdrawals.length > 0 ? 'Retirada confirmada' : 'Retirada pelo cliente'}
                 </h3>
-                <button onClick={closePickupModal} className="text-gray-400 hover:text-gray-600"><X className="h-5 w-5" /></button>
+                <button
+                  onClick={closePickupModal}
+                  disabled={pickupSaving || pickupPrinting}
+                  className="text-gray-400 hover:text-gray-600 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <X className="h-5 w-5" />
+                </button>
               </div>
-              <div className="p-6 space-y-4">
-                <p className="text-sm text-gray-600 bg-purple-50 p-3 rounded-lg border border-purple-100">
-                  Você está prestes a marcar <strong>{pickupOrderIds.length}</strong> pedido(s) como <strong>RETIRADO</strong>.
-                  Isso encerrará o fluxo de entrega desses pedidos e deixará a retirada visível na consulta de pedidos.
-                </p>
+              {completedPickupWithdrawals.length === 0 ? (
+                <div className="p-6 space-y-4">
+                  <p className="text-sm text-gray-600 bg-purple-50 p-3 rounded-lg border border-purple-100">
+                    Você está prestes a marcar <strong>{pickupOrderIds.length}</strong> pedido(s) como <strong>RETIRADO</strong>.
+                    Isso encerrará o fluxo de entrega desses pedidos e deixará a retirada visível na consulta de pedidos.
+                  </p>
 
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Conferente *</label>
-                  <select
-                    value={pickupResponsibleName}
-                    onChange={(event) => setPickupResponsibleName(event.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 outline-none bg-white"
-                    autoFocus
-                  >
-                    <option value="">Selecione o conferente...</option>
-                    {conferentes.map((conferenteItem) => (
-                      <option key={conferenteItem.id} value={conferenteItem.name}>
-                        {conferenteItem.name}
-                      </option>
-                    ))}
-                  </select>
-                  <p className="text-xs text-gray-500 mt-1">Mantém o mesmo modelo do fluxo antigo para facilitar a migração do histórico.</p>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Conferente *</label>
+                    <select
+                      value={pickupResponsibleName}
+                      onChange={(event) => setPickupResponsibleName(event.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 outline-none bg-white"
+                      autoFocus
+                      disabled={pickupSaving}
+                    >
+                      <option value="">Selecione o conferente...</option>
+                      {conferentes.map((conferenteItem) => (
+                        <option key={conferenteItem.id} value={conferenteItem.name}>
+                          {conferenteItem.name}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="text-xs text-gray-500 mt-1">Mantém o mesmo modelo do fluxo antigo para facilitar a migração do histórico.</p>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Observações (Opcional)</label>
+                    <textarea
+                      value={pickupObservations}
+                      onChange={e => setPickupObservations(e.target.value)}
+                      placeholder="Ex: Cliente conferiu mercadoria no local."
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 outline-none h-24 resize-none"
+                      disabled={pickupSaving}
+                    />
+                  </div>
+
+                  <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600">
+                    Registrado por: <strong>{authUser?.name || authUser?.email || 'Usuário atual'}</strong>
+                  </div>
                 </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Observações (Opcional)</label>
-                  <textarea
-                    value={pickupObservations}
-                    onChange={e => setPickupObservations(e.target.value)}
-                    placeholder="Ex: Cliente conferiu mercadoria no local."
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 outline-none h-24 resize-none"
-                  />
-                </div>
-
-                <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600">
-                  Registrado por: <strong>{authUser?.name || authUser?.email || 'Usuário atual'}</strong>
-                </div>
-
-                {pickupDocumentsPrinted && (
-                  <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4">
-                    <p className="text-sm font-semibold text-emerald-800">Documentos enviados para impressão.</p>
-                    <p className="text-xs text-emerald-700 mt-1">
-                      Se necessário, você pode imprimir novamente antes de confirmar a retirada.
+              ) : (
+                <div className="p-6 space-y-4">
+                  <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-5">
+                    <p className="font-semibold text-emerald-900">
+                      {completedPickupWithdrawals.length === 1 ? 'A retirada foi salva com sucesso.' : 'As retiradas foram salvas com sucesso.'}
+                    </p>
+                    <p className="text-sm text-emerald-800 mt-1">
+                      {completedPickupWithdrawals.length} pedido(s) já foram removidos do fluxo de roteirização. Agora os documentos podem ser impressos com segurança.
                     </p>
                   </div>
-                )}
-              </div>
+                  {pickupDocumentsPrinted && (
+                    <p className="text-sm text-center text-emerald-700 font-medium">Documentos enviados para impressão.</p>
+                  )}
+                </div>
+              )}
               <div className="px-6 py-4 border-t border-gray-100 bg-gray-50 flex justify-end gap-3">
-                <button onClick={closePickupModal} className="px-4 py-2 rounded-lg border border-gray-300 text-gray-700 font-medium hover:bg-white transition-colors">
-                  Cancelar
-                </button>
-                <button
-                  type="button"
-                  onClick={async () => {
-                    try {
-                      const toastId = toast.loading('Gerando comprovante e nota fiscal...');
-                      await printPickupDocuments();
-                      toast.success('Documentos gerados com sucesso!', { id: toastId });
-                    } catch (error: any) {
-                      console.error(error);
-                      toast.error(error?.message || 'Erro ao gerar documentos da retirada');
-                    }
-                  }}
-                  disabled={pickupSaving}
-                  className="px-4 py-2 rounded-lg border border-purple-200 bg-white text-purple-700 font-semibold hover:bg-purple-50 transition-colors flex items-center gap-2"
-                >
-                  <FileText className="h-4 w-4" />
-                  {pickupDocumentsPrinted ? 'Imprimir novamente' : 'Imprimir documentos'}
-                </button>
-                <button
-                  onClick={createPickup}
-                  disabled={pickupSaving}
-                  className="px-6 py-2 rounded-lg bg-purple-600 text-white font-bold hover:bg-purple-700 shadow-md transition-all flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
-                >
-                  {pickupSaving && <RefreshCw className="animate-spin h-4 w-4" />}
-                  Confirmar retirada
-                </button>
+                {completedPickupWithdrawals.length === 0 ? (
+                  <>
+                    <button
+                      onClick={closePickupModal}
+                      disabled={pickupSaving}
+                      className="px-4 py-2 rounded-lg border border-gray-300 text-gray-700 font-medium hover:bg-white transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      onClick={createPickup}
+                      disabled={pickupSaving}
+                      className="px-6 py-2 rounded-lg bg-purple-600 text-white font-bold hover:bg-purple-700 shadow-md transition-all flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
+                    >
+                      {pickupSaving && <RefreshCw className="animate-spin h-4 w-4" />}
+                      {pickupSaving ? 'Salvando retirada...' : 'Confirmar retirada'}
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      onClick={closePickupModal}
+                      disabled={pickupPrinting}
+                      className="px-4 py-2 rounded-lg border border-gray-300 text-gray-700 font-medium hover:bg-white transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+                    >
+                      Fechar
+                    </button>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const toastId = toast.loading('Gerando comprovante e nota fiscal...');
+                        setPickupPrinting(true);
+                        try {
+                          await printPickupDocuments();
+                          toast.success('Documentos gerados com sucesso!', { id: toastId });
+                        } catch (error: any) {
+                          console.error(error);
+                          toast.error(error?.message || 'Erro ao gerar documentos da retirada', { id: toastId });
+                        } finally {
+                          setPickupPrinting(false);
+                        }
+                      }}
+                      disabled={pickupPrinting}
+                      className="px-5 py-2 rounded-lg bg-purple-600 text-white font-semibold hover:bg-purple-700 transition-colors flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
+                    >
+                      {pickupPrinting ? <RefreshCw className="animate-spin h-4 w-4" /> : <FileText className="h-4 w-4" />}
+                      {pickupPrinting ? 'Gerando documentos...' : pickupDocumentsPrinted ? 'Imprimir novamente' : 'Imprimir documentos'}
+                    </button>
+                  </>
+                )}
               </div>
             </div>
           </div>
@@ -7317,8 +7347,5 @@ export default function RouteCreation() {
     </RouteCreationErrorBoundary>
   );
 }
-
-
-
 
 
