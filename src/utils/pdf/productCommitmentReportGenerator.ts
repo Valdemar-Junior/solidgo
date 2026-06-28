@@ -16,6 +16,7 @@ export type ProductCommitmentReportRow = {
   neighborhood?: string | null;
   product_sku: string;
   product_name: string;
+  storage_location?: string | null;
   purchased_quantity: number | string;
   product_reserved_units?: number | string | null;
   product_delivered_units?: number | string | null;
@@ -47,6 +48,7 @@ type ProductCommitmentReportData = {
   filters: {
     search: string;
     situations: Array<'reserved' | 'delivered'>;
+    storageLocations: string[];
     periodLabel: string;
     page: number;
     totalPages: number;
@@ -102,6 +104,15 @@ export class ProductCommitmentReportGenerator {
     drawText(`Periodo de venda: ${data.filters.periodLabel}`, margin, y, 9, false, rgb(0.35, 0.35, 0.4));
     drawText(`Produto: ${data.filters.search || 'Todos'}`, margin + 260, y, 9, false, rgb(0.35, 0.35, 0.4));
     drawText(`Pagina consultada: ${data.filters.page}/${data.filters.totalPages}`, pageWidth - 185, y, 9, false, rgb(0.35, 0.35, 0.4));
+    y -= 14;
+    drawText(
+      fitTextSafe(`Local de estocagem: ${data.filters.storageLocations.join(', ') || 'Todos'}`, pageWidth - margin * 2, font, 8),
+      margin,
+      y,
+      8,
+      false,
+      rgb(0.35, 0.35, 0.4)
+    );
     y -= 18;
 
     const cards = [
@@ -122,15 +133,16 @@ export class ProductCommitmentReportGenerator {
     y -= 58;
 
     const columns = [
-      { key: 'product', label: 'Produto', width: 150 },
-      { key: 'sku', label: 'SKU', width: 62 },
-      { key: 'quantity', label: 'Qtd.', width: 38 },
-      { key: 'status', label: 'Situacao', width: 78 },
-      { key: 'customer', label: 'Cliente', width: 120 },
-      { key: 'order', label: 'Pedido', width: 65 },
-      { key: 'sale', label: 'Venda', width: 55 },
-      { key: 'forecast', label: 'Previsao', width: 58 },
-      { key: 'route', label: 'Rota', width: 155 },
+      { key: 'product', label: 'Produto', width: 130 },
+      { key: 'sku', label: 'SKU', width: 55 },
+      { key: 'location', label: 'Local estoque', width: 75 },
+      { key: 'quantity', label: 'Qtd.', width: 32 },
+      { key: 'status', label: 'Situacao', width: 70 },
+      { key: 'customer', label: 'Cliente', width: 105 },
+      { key: 'order', label: 'Pedido', width: 58 },
+      { key: 'sale', label: 'Venda', width: 48 },
+      { key: 'forecast', label: 'Previsao', width: 52 },
+      { key: 'route', label: 'Rota', width: 130 },
     ] as const;
     const tableWidth = columns.reduce((sum, column) => sum + column.width, 0);
 
@@ -155,15 +167,16 @@ export class ProductCommitmentReportGenerator {
         ? `${row.route_code || ''}${row.route_code && row.route_name ? ' - ' : ''}${row.route_name || ''}`
         : '-';
       const values = {
-        product: fitTextSafe(row.product_name, 143, font, 7.5),
-        sku: fitTextSafe(row.product_sku, 55, font, 7.5),
+        product: fitTextSafe(row.product_name, 123, font, 7.5),
+        sku: fitTextSafe(row.product_sku, 48, font, 7.5),
+        location: fitTextSafe(row.storage_location || 'Sem local', 68, font, 7.5),
         quantity: formatQuantity(row.purchased_quantity),
         status: STATUS_LABEL[row.report_status] || '-',
-        customer: fitTextSafe(row.customer_name, 113, font, 7.5),
-        order: fitTextSafe(row.order_id_erp, 58, font, 7.5),
+        customer: fitTextSafe(row.customer_name, 98, font, 7.5),
+        order: fitTextSafe(row.order_id_erp, 51, font, 7.5),
         sale: formatDate(row.sale_date),
         forecast: formatDate(row.forecast_date),
-        route: fitTextSafe(route, 148, font, 7.5),
+        route: fitTextSafe(route, 123, font, 7.5),
       };
       let x = margin + 3;
       columns.forEach((column) => {

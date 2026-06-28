@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
+import { MultiSelect } from '../../components/ui/MultiSelect';
 import { supabase } from '../../supabase/client';
 import { DeliverySheetGenerator } from '../../utils/pdf/deliverySheetGenerator';
 import {
@@ -28,6 +29,7 @@ type FiltersState = {
   saleStart: string;
   saleEnd: string;
   situations: Situation[];
+  storageLocations: string[];
   pageSize: number;
 };
 
@@ -53,6 +55,7 @@ const createInitialFilters = (): FiltersState => ({
   saleStart: '',
   saleEnd: '',
   situations: ['reserved'],
+  storageLocations: [],
   pageSize: 50,
 });
 
@@ -97,10 +100,30 @@ export default function ReportsProductCommitment() {
   const [draftFilters, setDraftFilters] = useState<FiltersState>(() => createInitialFilters());
   const [appliedFilters, setAppliedFilters] = useState<FiltersState>(() => createInitialFilters());
   const [rows, setRows] = useState<ProductCommitmentReportRow[]>([]);
+  const [locationOptions, setLocationOptions] = useState<string[]>([]);
   const [summary, setSummary] = useState<ProductCommitmentReportSummary>(EMPTY_SUMMARY);
   const [page, setPage] = useState(0);
+  const [hasSearched, setHasSearched] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [loadingLocations, setLoadingLocations] = useState(true);
   const [generatingPdf, setGeneratingPdf] = useState(false);
+
+  useEffect(() => {
+    const loadLocations = async () => {
+      try {
+        setLoadingLocations(true);
+        const { data, error } = await supabase.rpc('get_product_commitment_storage_locations');
+        if (error) throw error;
+        setLocationOptions(Array.isArray(data) ? data.map(String) : []);
+      } catch (error) {
+        console.error('Erro ao carregar locais de estocagem:', error);
+      } finally {
+        setLoadingLocations(false);
+      }
+    };
+
+    void loadLocations();
+  }, []);
 
   const loadReport = async (filters: FiltersState, requestedPage: number) => {
     if (filters.saleStart && filters.saleEnd && filters.saleStart > filters.saleEnd) {
@@ -115,6 +138,7 @@ export default function ReportsProductCommitment() {
         p_sale_start: filters.saleStart || null,
         p_sale_end: filters.saleEnd || null,
         p_situations: filters.situations,
+        p_storage_locations: filters.storageLocations.length > 0 ? filters.storageLocations : null,
         p_page: requestedPage,
         p_page_size: filters.pageSize,
       });
@@ -125,6 +149,7 @@ export default function ReportsProductCommitment() {
       setRows(Array.isArray(payload.rows) ? payload.rows : []);
       setSummary(normalizeSummary((payload.summary || {}) as Partial<ProductCommitmentReportSummary> & Record<string, unknown>));
       setPage(requestedPage);
+      setHasSearched(true);
     } catch (error) {
       console.error('Erro ao carregar relatorio de produtos comprometidos:', error);
       toast.error('Nao foi possivel carregar o relatorio de produtos');
@@ -132,10 +157,6 @@ export default function ReportsProductCommitment() {
       setLoading(false);
     }
   };
-
-  useEffect(() => {
-    void loadReport(createInitialFilters(), 0);
-  }, []);
 
   const totalPages = Math.max(1, Math.ceil(summary.totalRecords / appliedFilters.pageSize));
 
@@ -158,7 +179,10 @@ export default function ReportsProductCommitment() {
     const next = createInitialFilters();
     setDraftFilters(next);
     setAppliedFilters(next);
-    void loadReport(next, 0);
+    setRows([]);
+    setSummary(EMPTY_SUMMARY);
+    setPage(0);
+    setHasSearched(false);
   };
 
   const toggleSituation = (situation: Situation) => {
@@ -184,6 +208,7 @@ export default function ReportsProductCommitment() {
         filters: {
           search: appliedFilters.search,
           situations: appliedFilters.situations,
+          storageLocations: appliedFilters.storageLocations,
           periodLabel,
           page: page + 1,
           totalPages,
@@ -215,7 +240,7 @@ export default function ReportsProductCommitment() {
             <div>
               <h1 className="text-2xl font-bold text-gray-900">Relatorio de produtos comprometidos</h1>
               <p className="mt-1 max-w-3xl text-sm leading-6 text-gray-500">
-                Consulte unidades compradas reservadas para entrega ou ja entregues. Devolucoes nao entram no relatorio.
+                Consulte unidades de pedidos importados em lote, reservadas para entrega ou ja entregues. Devolucoes e coletas nao entram no relatorio.
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
@@ -235,7 +260,7 @@ export default function ReportsProductCommitment() {
           </div>
 
           <div className="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-12">
-            <label className="lg:col-span-4">
+            <label className="lg:col-span-3">
               <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500">Produto ou SKU</span>
               <input
                 value={draftFilters.search}
@@ -246,7 +271,7 @@ export default function ReportsProductCommitment() {
               />
             </label>
 
-            <div className="lg:col-span-3">
+            <div className="lg:col-span-2">
               <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500">Situacao</span>
               <div className="flex h-[38px] items-center gap-4 rounded-lg border border-gray-300 px-3">
                 <label className="flex items-center gap-2 text-sm text-gray-700">
@@ -256,6 +281,17 @@ export default function ReportsProductCommitment() {
                   <input type="checkbox" checked={draftFilters.situations.includes('delivered')} onChange={() => toggleSituation('delivered')} /> Entregue
                 </label>
               </div>
+            </div>
+
+            <div className="lg:col-span-2">
+              <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500">Local de estocagem</span>
+              <MultiSelect
+                options={locationOptions.map((location) => ({ value: location, label: location }))}
+                selected={draftFilters.storageLocations}
+                onChange={(selected) => setDraftFilters((current) => ({ ...current, storageLocations: selected }))}
+                placeholder={loadingLocations ? 'Carregando locais...' : 'Todos os locais'}
+                disabled={loading || loadingLocations}
+              />
             </div>
 
             <label className="lg:col-span-2">
@@ -279,15 +315,15 @@ export default function ReportsProductCommitment() {
           </div>
 
           <p className="mt-3 text-xs text-gray-500">
-            Sem periodo, todas as reservas atuais sao consideradas. A consulta retorna no maximo {appliedFilters.pageSize} linhas por pagina.
+            Nenhuma consulta e executada automaticamente. Sem periodo, a busca considera todas as reservas atuais e retorna no maximo {appliedFilters.pageSize} linhas por pagina.
           </p>
         </section>
 
         <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-          <SummaryCard icon={<PackageSearch className="h-5 w-5 text-amber-700" />} label="Unidades reservadas" value={formatQuantity(summary.reservedUnits)} helper={`${formatQuantity(summary.distinctProducts)} produto(s) distinto(s)`} />
-          <SummaryCard icon={<PackageCheck className="h-5 w-5 text-emerald-700" />} label="Unidades entregues" value={formatQuantity(summary.deliveredUnits)} helper="Conforme os filtros aplicados" />
-          <SummaryCard icon={<Truck className="h-5 w-5 text-blue-700" />} label="Em separacao / rota" value={`${formatQuantity(summary.separatingUnits)} / ${formatQuantity(summary.inRouteUnits)}`} helper={`${formatQuantity(summary.awaitingRouteUnits)} aguardando rota`} />
-          <SummaryCard icon={<FileSpreadsheet className="h-5 w-5 text-violet-700" />} label="Registros encontrados" value={formatQuantity(summary.totalRecords)} helper={periodLabel} />
+          <SummaryCard icon={<PackageSearch className="h-5 w-5 text-amber-700" />} label="Unidades reservadas" value={hasSearched ? formatQuantity(summary.reservedUnits) : '-'} helper={hasSearched ? `${formatQuantity(summary.distinctProducts)} produto(s) distinto(s)` : 'Clique em Buscar'} />
+          <SummaryCard icon={<PackageCheck className="h-5 w-5 text-emerald-700" />} label="Unidades entregues" value={hasSearched ? formatQuantity(summary.deliveredUnits) : '-'} helper="Conforme os filtros aplicados" />
+          <SummaryCard icon={<Truck className="h-5 w-5 text-blue-700" />} label="Em separacao / rota" value={hasSearched ? `${formatQuantity(summary.separatingUnits)} / ${formatQuantity(summary.inRouteUnits)}` : '-'} helper={hasSearched ? `${formatQuantity(summary.awaitingRouteUnits)} aguardando rota` : 'Aguardando consulta'} />
+          <SummaryCard icon={<FileSpreadsheet className="h-5 w-5 text-violet-700" />} label="Registros encontrados" value={hasSearched ? formatQuantity(summary.totalRecords) : '-'} helper={hasSearched ? periodLabel : 'Aguardando consulta'} />
         </section>
 
         <section className="overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm">
@@ -311,10 +347,11 @@ export default function ReportsProductCommitment() {
           </div>
 
           <div className="overflow-x-auto">
-            <table className="min-w-[1180px] w-full divide-y divide-gray-200">
+            <table className="min-w-[1300px] w-full divide-y divide-gray-200">
               <thead className="bg-gray-50">
                 <tr>
                   <TableHead>Produto</TableHead>
+                  <TableHead>Local de estocagem</TableHead>
                   <TableHead align="right">Qtd.</TableHead>
                   <TableHead>Situacao</TableHead>
                   <TableHead>Cliente / Pedido</TableHead>
@@ -326,9 +363,11 @@ export default function ReportsProductCommitment() {
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {loading ? (
-                  <tr><td colSpan={8} className="px-4 py-12 text-center text-sm text-gray-500"><Loader2 className="mx-auto mb-2 h-5 w-5 animate-spin" />Carregando...</td></tr>
+                  <tr><td colSpan={9} className="px-4 py-12 text-center text-sm text-gray-500"><Loader2 className="mx-auto mb-2 h-5 w-5 animate-spin" />Carregando...</td></tr>
+                ) : !hasSearched ? (
+                  <tr><td colSpan={9} className="px-4 py-12 text-center text-sm text-gray-500">Defina os filtros e clique em Buscar para consultar os produtos.</td></tr>
                 ) : rows.length === 0 ? (
-                  <tr><td colSpan={8} className="px-4 py-12 text-center text-sm text-gray-500">Nenhum produto encontrado.</td></tr>
+                  <tr><td colSpan={9} className="px-4 py-12 text-center text-sm text-gray-500">Nenhum produto encontrado.</td></tr>
                 ) : rows.map((row, index) => {
                   const status = STATUS_META[row.report_status] || STATUS_META.awaiting_route;
                   const routeLabel = row.route_code || row.route_name
@@ -343,6 +382,7 @@ export default function ReportsProductCommitment() {
                           Reserva: {formatQuantity(row.product_reserved_units)} · Entregue: {formatQuantity(row.product_delivered_units)}
                         </p>
                       </td>
+                      <td className="px-4 py-3 text-sm font-semibold text-gray-700">{row.storage_location || 'Sem local informado'}</td>
                       <td className="px-4 py-3 text-right text-lg font-bold text-gray-900">{formatQuantity(row.purchased_quantity)}</td>
                       <td className="px-4 py-3"><span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-bold ${status.className}`}>{status.label}</span></td>
                       <td className="px-4 py-3"><p className="font-medium text-gray-900">{row.customer_name}</p><p className="mt-1 text-xs text-gray-500">Pedido {row.order_id_erp}</p></td>
