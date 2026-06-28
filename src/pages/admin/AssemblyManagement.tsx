@@ -188,7 +188,6 @@ function AssemblyManagementContent() {
   const [selectedMontador, setSelectedMontador] = useState<string>('');
   const [selectedVehicle, setSelectedVehicle] = useState<string>('');
   const [observations, setObservations] = useState<string>('');
-  const [deadline, setDeadline] = useState<string>('');
   const [selectedExistingRoute, setSelectedExistingRoute] = useState<string>(''); // '' = criar nova, route_id = adicionar a existente
 
   // UI States
@@ -215,7 +214,6 @@ function AssemblyManagementContent() {
   const [editSelectedDeliveryRouteId, setEditSelectedDeliveryRouteId] = useState('');
   const [editRouteMontador, setEditRouteMontador] = useState('');
   const [editRouteVehicle, setEditRouteVehicle] = useState('');
-  const [editRouteDeadline, setEditRouteDeadline] = useState('');
   const [editRouteObservations, setEditRouteObservations] = useState('');
   const [savingEdit, setSavingEdit] = useState(false);
   // Add orders to route states
@@ -225,7 +223,6 @@ function AssemblyManagementContent() {
   const [ordersPage, setOrdersPage] = useState(1);
   const [ordersPageSize, setOrdersPageSize] = useState(200);
   const isLoadingRef = useRef(false);
-  const isMountedRef = useRef(true);
   const [deliveryInfo, setDeliveryInfo] = useState<Record<string, string>>({});
 
   // Sorting State
@@ -955,20 +952,6 @@ function AssemblyManagementContent() {
       setVehicles(vehiclesData || []);
 
       try {
-        const rid = localStorage.getItem('am_selectedRouteId');
-        const showPref = localStorage.getItem('am_showRouteModal');
-        // We use routesForQuery again for finding selected route
-        const routesAvailable = (routesForQuery.length > 0) ? routesForQuery : assemblyRoutes;
-
-        if (showPref === '1' && rid && isMountedRef.current) {
-          const found = (routesAvailable || []).find((r: any) => String(r.id) === String(rid));
-          if (found) {
-            setSelectedRoute(found);
-            setShowRouteModal(true);
-          }
-        }
-      } catch { }
-      try {
         const orderIds = Array.from(new Set(((productsPending || []) as any[]).map((ap: any) => String(ap.order_id)).filter(Boolean)));
         if (orderIds.length > 0) {
           const { data: roDelivered } = await supabase
@@ -1313,7 +1296,6 @@ function AssemblyManagementContent() {
           .from('assembly_routes')
           .insert({
             name: selectedCatalogRouteName,
-            deadline: null,
             observations: observations.trim() || null,
             assembler_id: selectedMontador || null,
             vehicle_id: selectedVehicle || null,
@@ -1350,7 +1332,6 @@ function AssemblyManagementContent() {
       setSelectedMontador('');
       setSelectedVehicle('');
       setObservations('');
-      setDeadline('');
       setSelectedExistingRoute('');
       setSelectedOrders(new Set());
       setShowCreateModal(false);
@@ -1384,35 +1365,43 @@ function AssemblyManagementContent() {
 
     setSavingEdit(true);
     try {
-      const { error } = await supabase
+      const observationsValue = editRouteObservations.trim() || null;
+      const { data: updatedRoute, error } = await supabase
         .from('assembly_routes')
         .update({
           name: selectedCatalogRouteName,
           assembler_id: editRouteMontador || null,
           vehicle_id: editRouteVehicle || null,
-          deadline: editRouteDeadline || null,
-          observations: editRouteObservations.trim() || null,
+          observations: observationsValue,
           updated_at: new Date().toISOString()
         })
-        .eq('id', selectedRoute.id);
+        .eq('id', selectedRoute.id)
+        .select('*')
+        .single();
 
       if (error) throw error;
 
-      toast.success('Rota de montagem atualizada com sucesso!');
+      const mergeUpdatedRoute = (current: AssemblyRoute) => ({
+        ...current,
+        ...updatedRoute,
+        assembly_products: (current as any).assembly_products,
+      } as AssemblyRoute);
+
+      // A resposta do banco vira a fonte de verdade em todos os pontos da tela.
+      // Isso evita que uma recarga assíncrona restaure uma versão antiga da rota.
+      setSelectedRoute((current) => current ? mergeUpdatedRoute(current) : current);
+      setAssemblyRoutes((current) => current.map((route) =>
+        String(route.id) === String(updatedRoute.id) ? mergeUpdatedRoute(route) : route
+      ));
+      setAllPendingRoutes((current) => current.map((route) =>
+        String(route.id) === String(updatedRoute.id) ? mergeUpdatedRoute(route) : route
+      ));
+      assemblyRoutesRef.current = assemblyRoutesRef.current.map((route) =>
+        String(route.id) === String(updatedRoute.id) ? mergeUpdatedRoute(route) : route
+      );
+
       setIsEditingRoute(false);
-
-      // Update the selectedRoute in state
-      setSelectedRoute({
-        ...selectedRoute,
-        name: selectedCatalogRouteName,
-        assembler_id: editRouteMontador || null,
-        vehicle_id: editRouteVehicle || null,
-        deadline: editRouteDeadline || null,
-        observations: editRouteObservations.trim() || null,
-      } as any);
-
-      // Reload data to refresh the list
-      loadData(true);
+      toast.success('Rota de montagem atualizada com sucesso!');
     } catch (error) {
       console.error('Error updating assembly route:', error);
       toast.error('Erro ao atualizar rota de montagem');
@@ -2913,12 +2902,6 @@ function AssemblyManagementContent() {
                                 {vehicle.model} ({vehicle.plate})
                               </div>
                             )}
-                            {route.deadline && (
-                              <div className="flex items-center text-sm text-gray-600">
-                                <Calendar className="h-4 w-4 mr-2 text-gray-400" />
-                                Prazo: {formatDate(route.deadline)}
-                              </div>
-                            )}
                             {routeObservation && (
                               <div className="flex items-start text-sm text-gray-600">
                                 <MessageSquare className="h-4 w-4 mr-2 mt-0.5 text-gray-400 shrink-0" />
@@ -3240,7 +3223,7 @@ function AssemblyManagementContent() {
             <div className="bg-white rounded-2xl shadow-2xl w-full max-w-6xl max-h-[90vh] flex flex-col overflow-hidden">
               <div className="px-6 py-4 border-b border-gray-100 bg-gray-50">
                 {/* Header with Edit Toggle */}
-                <div className="flex justify-between items-start">
+                <div className={isEditingRoute ? 'flex flex-col gap-4' : 'flex justify-between items-start gap-4'}>
                   {!isEditingRoute ? (
                     <div>
                       <h2 className="text-xl font-bold text-gray-900">
@@ -3264,13 +3247,13 @@ function AssemblyManagementContent() {
                         })()}
                       </p>
                       {selectedRoute.observations && (
-                        <p className="text-sm text-gray-500 mt-1">Obs: {selectedRoute.observations}</p>
+                        <p className="text-sm text-gray-500 mt-1 whitespace-pre-wrap">Obs: {selectedRoute.observations}</p>
                       )}
                     </div>
                   ) : (
-                    <div className="flex-1 mr-4">
-                      <h3 className="text-lg font-bold text-gray-900 mb-3">Editar Rota de Montagem</h3>
-                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                    <div className="w-full">
+                      <h3 className="text-lg font-bold text-gray-900 mb-4">Editar Rota de Montagem</h3>
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                         <div>
                           <label className="block text-xs font-medium text-gray-700 mb-1">Nome da Rota de Montagem *</label>
                           <select
@@ -3313,45 +3296,38 @@ function AssemblyManagementContent() {
                             ))}
                           </select>
                         </div>
-                        <div>
-                          <label className="block text-xs font-medium text-gray-700 mb-1">Prazo</label>
-                          <input
-                            type="date"
-                            value={editRouteDeadline}
-                            onChange={(e) => setEditRouteDeadline(e.target.value)}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                          />
-                        </div>
-                        <div className="md:col-span-2">
+                        <div className="md:col-span-3">
                           <label className="block text-xs font-medium text-gray-700 mb-1">Observações</label>
-                          <input
-                            type="text"
+                          <textarea
                             value={editRouteObservations}
                             onChange={(e) => setEditRouteObservations(e.target.value)}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                            rows={3}
+                            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm leading-relaxed resize-y focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                             placeholder="Observações sobre a rota"
                           />
                         </div>
                       </div>
                     </div>
                   )}
-                  <div className="flex items-center gap-2 flex-shrink-0">
+                  <div className="flex items-center justify-end gap-2 flex-wrap flex-shrink-0">
                     {/* Edit / Save / Cancel buttons */}
                     {!isEditingRoute ? (
                       <button
                         onClick={async () => {
                           const r = selectedRoute as any;
-                          const catalog = await fetchDeliveryRouteCatalog();
-                          const list = (catalog && catalog.length > 0) ? catalog : deliveryRouteCatalog;
+                          setEditRouteMontador(r.assembler_id || '');
+                          setEditRouteVehicle(r.vehicle_id || '');
+                          setEditRouteObservations(String(r.observations || ''));
+                          setIsEditingRoute(true);
+
+                          const catalog = deliveryRouteCatalog.length > 0
+                            ? deliveryRouteCatalog
+                            : await fetchDeliveryRouteCatalog();
+                          const list = catalog.length > 0 ? catalog : deliveryRouteCatalog;
                           const matchedRoute = list.find((route) =>
                             String(route.name || '').trim().toLowerCase() === String(r.name || '').trim().toLowerCase()
                           );
                           setEditSelectedDeliveryRouteId(matchedRoute ? String(matchedRoute.id) : '');
-                          setEditRouteMontador(r.assembler_id || '');
-                          setEditRouteVehicle(r.vehicle_id || '');
-                          setEditRouteDeadline(r.deadline ? r.deadline.split('T')[0] : '');
-                          setEditRouteObservations(r.observations || '');
-                          setIsEditingRoute(true);
                         }}
                         disabled={(selectedRoute as any).status === 'completed'}
                         className="inline-flex items-center px-3 py-2 border border-yellow-200 shadow-sm text-sm font-medium rounded-lg text-yellow-700 bg-yellow-50 hover:bg-yellow-100 disabled:opacity-50 disabled:cursor-not-allowed"

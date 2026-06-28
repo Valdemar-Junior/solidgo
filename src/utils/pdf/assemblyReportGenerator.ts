@@ -205,8 +205,6 @@ export class AssemblyReportGenerator {
             page.drawText(safeValue, { x, y: y - 15, size: 9, font: fontBold, color: rgb(0.2, 0.2, 0.2) });
         };
 
-        const routeDate = data.route.deadline ? new Date(data.route.deadline).toLocaleDateString('pt-BR') : dateStr;
-
         drawDetail('ID ROMANEIO', (data.route as any).route_code || data.route.id.slice(0, 8), 0);
         drawDetail('ROTA', data.route.name || '-', 1);
         drawDetail('MONTADOR', data.installerName || '-', 2);
