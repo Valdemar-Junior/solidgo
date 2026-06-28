@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, Loader2, MapPin, Phone, Search, Truck, Hammer, FileText, FileSpreadsheet, AlertTriangle, LogOut, Eye, ChevronDown, ChevronUp, Copy, Check, Briefcase } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../../supabase/client';
@@ -160,6 +160,7 @@ export default function OrderLookup() {
   const navigate = useNavigate();
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(false);
+  const [suggestionsLoading, setSuggestionsLoading] = useState(false);
   const [orders, setOrders] = useState<Order[]>([]);
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
   const [routeOrders, setRouteOrders] = useState<RouteOrderInfo[]>([]);
@@ -173,6 +174,8 @@ export default function OrderLookup() {
   const [proofPdfLoadingByRouteOrder, setProofPdfLoadingByRouteOrder] = useState<Record<string, boolean>>({});
   const [showObservations, setShowObservations] = useState(false);
   const [withdrawalActionLoading, setWithdrawalActionLoading] = useState<'receipt' | 'danfe' | 'return_danfe' | null>(null);
+  const searchSequenceRef = useRef(0);
+  const suggestionSequenceRef = useRef(0);
 
   // Check if user is consultor to hide certain elements
   const { user, logout } = useAuthStore();
@@ -182,6 +185,9 @@ export default function OrderLookup() {
     await logout();
     navigate('/login');
   };
+
+  // Exclui campos pesados que não são necessários na tela de consulta.
+  const ORDERS_LOOKUP_COLS = 'id,order_id_erp,customer_name,phone,address_json,items_json,status,created_at,updated_at,filial_venda,data_venda,previsao_entrega,tem_frete_full,observacoes_publicas,observacoes_internas,customer_cpf,vendedor_nome,return_flag,last_return_reason,last_return_notes,brand,department,service_type,erp_status,blocked_at,blocked_reason,requires_pickup,pickup_created_at,return_nfe_number,return_nfe_key,return_date,return_type,import_source,previsao_montagem,product_group,product_subgroup,danfe_gerada_em,requires_store_release,store_release_status,raw_json';
 
   const fetchOrders = async (term: string) => {
     const q = term.trim();
@@ -208,8 +214,6 @@ export default function OrderLookup() {
       }
       const filterStr = filters.join(',');
 
-      // OTIMIZAÇÃO: Excluindo campos pesados (danfe_base64, return_danfe_base64, xml_documento, return_nfe_xml)
-      const ORDERS_LOOKUP_COLS = 'id,order_id_erp,customer_name,phone,address_json,items_json,status,created_at,updated_at,filial_venda,data_venda,previsao_entrega,tem_frete_full,observacoes_publicas,observacoes_internas,customer_cpf,vendedor_nome,return_flag,last_return_reason,last_return_notes,brand,department,service_type,erp_status,blocked_at,blocked_reason,requires_pickup,pickup_created_at,return_nfe_number,return_nfe_key,return_date,return_type,import_source,previsao_montagem,product_group,product_subgroup,danfe_gerada_em,requires_store_release,store_release_status,raw_json';
       const { data, error } = await supabase
         .from('orders')
         .select(ORDERS_LOOKUP_COLS)
@@ -249,32 +253,92 @@ export default function OrderLookup() {
     }
   };
 
-  const handleSearch = async (term?: string, fromTyping: boolean = false) => {
+  const fetchDefinitiveOrders = async (term: string): Promise<Order[]> => {
+    const q = term.trim();
+    if (!q) return [];
+
+    const numeric = q.replace(/\D/g, '');
+    const isNumericInput = /^[\d.\-/\s]+$/.test(q) && numeric.length > 0;
+
+    if (!isNumericInput) {
+      return fetchOrders(q);
+    }
+
+    // Número digitado: o pedido exato sempre tem prioridade sobre CPF e sugestões parciais.
+    const orderNumbers = Array.from(new Set([q, numeric].filter(Boolean)));
+    const { data: exactOrders, error: exactOrderError } = await supabase
+      .from('orders')
+      .select(ORDERS_LOOKUP_COLS)
+      .in('order_id_erp', orderNumbers)
+      .limit(10);
+
+    if (exactOrderError) throw exactOrderError;
+    if (exactOrders && exactOrders.length > 0) return exactOrders as Order[];
+
+    // Só interpreta uma entrada numérica como CPF quando ela possui os 11 dígitos completos.
+    if (numeric.length !== 11) return [];
+
+    const formattedCpf = `${numeric.slice(0, 3)}.${numeric.slice(3, 6)}.${numeric.slice(6, 9)}-${numeric.slice(9)}`;
+    const cpfFilters = [
+      `customer_cpf.ilike.${numeric}`,
+      `customer_cpf.ilike.${formattedCpf}`,
+      `raw_json->>destinatario_cpf.ilike.${numeric}`,
+      `raw_json->>destinatario_cpf.ilike.${formattedCpf}`,
+      `raw_json->>cliente_cpf.ilike.${numeric}`,
+      `raw_json->>cliente_cpf.ilike.${formattedCpf}`,
+      `raw_json->>cpf.ilike.${numeric}`,
+      `raw_json->>cpf.ilike.${formattedCpf}`,
+    ];
+    const { data: cpfOrders, error: cpfError } = await supabase
+      .from('orders')
+      .select(ORDERS_LOOKUP_COLS)
+      .or(cpfFilters.join(','))
+      .limit(10);
+
+    if (cpfError) throw cpfError;
+    return (cpfOrders || []) as Order[];
+  };
+
+  const clearSelectedOrderData = () => {
+    setSelectedOrder(null);
+    setRouteOrders([]);
+    setWithdrawal(null);
+    setStoreReleaseAssignments([]);
+    setStoreReleaseHistory([]);
+    setStoreReleaseUserNames({});
+    setAssemblies([]);
+    setDeliveryReceiptsByRouteOrder({});
+    setDeliveryReceiptUserNames({});
+    setProofPdfLoadingByRouteOrder({});
+  };
+
+  const selectSuggestedOrder = (order: Order) => {
+    searchSequenceRef.current += 1;
+    suggestionSequenceRef.current += 1;
+    setSuggestionsLoading(false);
+    setQuery(String(order.order_id_erp || ''));
+    setOrders([order]);
+    setSelectedOrder(order);
+  };
+
+  const handleSearch = async (term?: string) => {
     const q = (term ?? query).trim();
     if (!q) {
-      if (!fromTyping) toast.error('Digite algo para pesquisar (pedido ou CPF)');
+      toast.error('Digite algo para pesquisar (pedido, cliente ou CPF)');
       return;
     }
+    const requestId = ++searchSequenceRef.current;
+    suggestionSequenceRef.current += 1;
     try {
       setLoading(true);
-      setSelectedOrder(null);
-      setRouteOrders([]);
-      setWithdrawal(null);
-      setStoreReleaseAssignments([]);
-      setStoreReleaseHistory([]);
-      setStoreReleaseUserNames({});
-      setAssemblies([]);
-      setDeliveryReceiptsByRouteOrder({});
-      setDeliveryReceiptUserNames({});
-      setProofPdfLoadingByRouteOrder({});
+      setSuggestionsLoading(false);
+      clearSelectedOrderData();
 
-      const results = await fetchOrders(q);
+      const results = await fetchDefinitiveOrders(q);
+      if (requestId !== searchSequenceRef.current) return;
       if (results.length === 0) {
-        if (!fromTyping) toast.error('Nenhum pedido encontrado');
+        toast.error('Nenhum pedido encontrado');
         setOrders([]);
-        setDeliveryReceiptsByRouteOrder({});
-        setDeliveryReceiptUserNames({});
-        setProofPdfLoadingByRouteOrder({});
         return;
       }
       setOrders(results);
@@ -283,9 +347,30 @@ export default function OrderLookup() {
       console.error(e);
       toast.error('Erro ao buscar pedido');
     } finally {
-      setLoading(false);
+      if (requestId === searchSequenceRef.current) setLoading(false);
     }
   };
+
+  useEffect(() => {
+    const q = query.trim();
+    const requestId = ++suggestionSequenceRef.current;
+
+    if (loading || q.length < 3 || (selectedOrder && q === String(selectedOrder.order_id_erp || ''))) {
+      setSuggestionsLoading(false);
+      if (!selectedOrder) setOrders([]);
+      return;
+    }
+
+    const timer = window.setTimeout(async () => {
+      setSuggestionsLoading(true);
+      const results = await fetchOrders(q);
+      if (requestId !== suggestionSequenceRef.current) return;
+      setOrders(results);
+      setSuggestionsLoading(false);
+    }, 250);
+
+    return () => window.clearTimeout(timer);
+  }, [query, selectedOrder, loading]);
 
   const fetchUserNamesByIds = async (ids: string[]) => {
     const uniqueIds = Array.from(new Set(ids.map((id) => String(id || '').trim()).filter(Boolean)));
@@ -1248,48 +1333,52 @@ export default function OrderLookup() {
               </button>
             </div>
           )}
-          <div className="flex flex-col md:flex-row gap-3 md:items-end">
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              void handleSearch(query);
+            }}
+            className="flex flex-col md:flex-row gap-3 md:items-end"
+          >
             <div className="flex-1">
               <label className="text-xs font-bold text-gray-500 uppercase">Busca Rápida</label>
               <input
                 type="text"
                 value={query}
-                onChange={async (e) => {
-                  const val = e.target.value;
+                onChange={(e) => {
+                  const val = e.currentTarget.value;
+                  searchSequenceRef.current += 1;
+                  suggestionSequenceRef.current += 1;
                   setQuery(val);
-                  if (val.trim().length >= 3) {
-                    await handleSearch(val, true);
-                  } else {
-                    setOrders([]);
-                    setSelectedOrder(null);
-                    setRouteOrders([]);
-                    setWithdrawal(null);
-                    setAssemblies([]);
-                    setDeliveryReceiptsByRouteOrder({});
-                    setDeliveryReceiptUserNames({});
-                    setProofPdfLoadingByRouteOrder({});
-                  }
+                  setLoading(false);
+                  setSuggestionsLoading(false);
+                  setOrders([]);
+                  clearSelectedOrderData();
                 }}
-                onKeyDown={(e) => e.key === 'Enter' && handleSearch(query)}
                 placeholder="Pedido, cliente ou CPF..."
                 className="w-full mt-1 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
               />
             </div>
             <button
-              onClick={() => handleSearch(query)}
+              type="submit"
               disabled={loading}
               className="px-4 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-semibold flex items-center gap-2 disabled:opacity-50"
             >
               {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
               Buscar
             </button>
-          </div>
+          </form>
+          {suggestionsLoading && !loading && (
+            <div className="flex items-center gap-2 text-sm text-gray-500">
+              <Loader2 className="h-4 w-4 animate-spin" /> Buscando sugestões...
+            </div>
+          )}
           {orders.length > 0 && (
             <div className="flex flex-wrap gap-2">
               {orders.map(o => (
                 <button
                   key={o.id}
-                  onClick={() => setSelectedOrder(o)}
+                  onClick={() => selectSuggestedOrder(o)}
                   className={`px-3 py-2 rounded-lg border text-sm ${selectedOrder?.id === o.id ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-gray-200 bg-gray-50 text-gray-700'}`}
                 >
                   {o.order_id_erp} — {o.customer_name}
