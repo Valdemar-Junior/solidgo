@@ -84,6 +84,29 @@ const getHighestMountPriority = (priorities: Array<string | null | undefined>): 
 
 const normalizeCpf = (value: unknown): string => String(value || '').replace(/\D/g, '').trim();
 
+const NO_ASSEMBLY_FORECAST_DATE = '__sem_previsao__';
+
+const getAssemblyForecastDateKey = (value: unknown): string => {
+  const text = String(value || '').trim();
+  if (!text) return NO_ASSEMBLY_FORECAST_DATE;
+
+  const isoMatch = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (isoMatch) return `${isoMatch[1]}-${isoMatch[2]}-${isoMatch[3]}`;
+
+  const brMatch = text.match(/^(\d{2})\/(\d{2})\/(\d{4})/);
+  if (brMatch) return `${brMatch[3]}-${brMatch[2]}-${brMatch[1]}`;
+
+  const parsed = new Date(text);
+  if (Number.isNaN(parsed.getTime())) return NO_ASSEMBLY_FORECAST_DATE;
+  return `${parsed.getFullYear()}-${String(parsed.getMonth() + 1).padStart(2, '0')}-${String(parsed.getDate()).padStart(2, '0')}`;
+};
+
+const formatAssemblyForecastDateKey = (dateKey: string): string => {
+  if (dateKey === NO_ASSEMBLY_FORECAST_DATE) return 'Sem previsão';
+  const [year, month, day] = dateKey.split('-');
+  return `${day}/${month}/${year}`;
+};
+
 // --- ERROR BOUNDARY ---
 class AssemblyManagementErrorBoundary extends React.Component<
   { children: React.ReactNode },
@@ -226,6 +249,7 @@ function AssemblyManagementContent() {
   // --- PDF SORT OPTIONS MODAL ---
   const [showPdfSortModal, setShowPdfSortModal] = useState(false);
   const [pdfSortOption, setPdfSortOption] = useState<'data_venda' | 'cidade' | 'previsao_montagem' | 'cliente'>('data_venda');
+  const [selectedPdfForecastDates, setSelectedPdfForecastDates] = useState<Set<string>>(new Set());
 
 
   // Filters
@@ -629,6 +653,46 @@ function AssemblyManagementContent() {
     return parseDateSafe(getPrevisaoMontagemValue(order));
   };
 
+  const getRouteProducts = (route: AssemblyRoute | null): AssemblyProductWithDetails[] => {
+    if (!route) return [];
+    const embeddedProducts = (route as any).assembly_products;
+    if (Array.isArray(embeddedProducts) && embeddedProducts.length > 0) {
+      return embeddedProducts;
+    }
+    return assemblyInRoutes.filter(ap => String(ap.assembly_route_id) === String(route.id));
+  };
+
+  const getPdfForecastDateOptions = (route: AssemblyRoute | null): string[] => {
+    const dateKeys = new Set(
+      getRouteProducts(route)
+        .map(product => product.order)
+        .filter(Boolean)
+        .map(order => getAssemblyForecastDateKey(getPrevisaoMontagemValue(order)))
+    );
+
+    return Array.from(dateKeys).sort((a, b) => {
+      if (a === NO_ASSEMBLY_FORECAST_DATE) return 1;
+      if (b === NO_ASSEMBLY_FORECAST_DATE) return -1;
+      return a.localeCompare(b);
+    });
+  };
+
+  const getPdfForecastOrderCount = (route: AssemblyRoute | null, dateKey: string): number => {
+    const orderIds = new Set(
+      getRouteProducts(route)
+        .filter(product => getAssemblyForecastDateKey(getPrevisaoMontagemValue(product.order)) === dateKey)
+        .map(product => String(product.order_id || product.order?.id || ''))
+        .filter(Boolean)
+    );
+    return orderIds.size;
+  };
+
+  const openPdfOptions = (route: AssemblyRoute) => {
+    setSelectedRoute(route);
+    setSelectedPdfForecastDates(new Set(getPdfForecastDateOptions(route)));
+    setShowPdfSortModal(true);
+  };
+
   const getPrazoStatusForOrder = (o: any): 'within' | 'out' | 'none' => {
     const prev = getPrevisaoMontagem(o);
     if (!prev) return 'none';
@@ -990,7 +1054,11 @@ function AssemblyManagementContent() {
                 customer_cpf,
                 phone,
                 address_json,
-                items_json
+                items_json,
+                raw_json,
+                data_venda,
+                previsao_entrega,
+                previsao_montagem
               )
             )
           `)
@@ -2952,60 +3020,7 @@ function AssemblyManagementContent() {
                             <Eye className="h-4 w-4 mr-2" /> Detalhes
                           </button>
                           <button
-                            onClick={async () => {
-                              try {
-                                const products = assemblyInRoutes.filter(ap => ap.assembly_route_id === route.id);
-                                const orders = products.map(p => p.order).filter(Boolean) as any[];
-
-                                const routeOrders = products.map((p, idx) => ({
-                                  id: String(p.id),
-                                  route_id: String(route.id),
-                                  order_id: String(p.order_id),
-                                  sequence: idx + 1,
-                                  status: 'pending',
-                                  created_at: route.created_at,
-                                  updated_at: route.updated_at
-                                })) as any[];
-
-                                const routeData: any = {
-                                  id: route.id,
-                                  name: route.name,
-                                  driver_id: '',
-                                  vehicle_id: '',
-                                  conferente: '',
-                                  observations: route.observations,
-                                  status: route.status as any,
-                                  created_at: route.created_at,
-                                  updated_at: route.updated_at,
-                                  route_code: (route as any).route_code,
-                                };
-
-                                const assemblyPrioritiesByOrder = products.reduce((acc, product) => {
-                                  const orderId = String(product.order_id || '');
-                                  acc[orderId] = getHighestMountPriority([acc[orderId], product.mount_priority]);
-                                  return acc;
-                                }, {} as Record<string, MountPriority | null>);
-
-                                const data = {
-                                  route: routeData,
-                                  routeOrders,
-                                  driver: { id: '', user_id: '', cpf: '', active: true, name: '—', user: { id: '', email: '', name: '—', role: 'driver', created_at: new Date().toISOString() } } as any,
-                                  vehicle: undefined,
-                                  orders: orders as any,
-                                  generatedAt: new Date().toISOString(),
-                                  assemblyPrioritiesByOrder,
-                                  assemblyInstallerName: montador?.name || montador?.email || '—',
-                                  assemblyVehicleModel: vehicle?.model || '',
-                                  assemblyVehiclePlate: vehicle?.plate || '',
-                                };
-
-                                const pdfBytes = await DeliverySheetGenerator.generateDeliverySheet(data, 'Rota de Montagem');
-                                DeliverySheetGenerator.openPDFInNewTab(pdfBytes);
-                              } catch (e) {
-                                console.error(e);
-                                toast.error('Erro ao gerar PDF da rota de montagem');
-                              }
-                            }}
+                            onClick={() => openPdfOptions(route)}
                             className="flex-1 inline-flex items-center justify-center px-4 py-2 bg-blue-50 border border-blue-100 text-blue-700 text-sm font-medium rounded-lg hover:bg-blue-100 transition-colors"
                           >
                             <FileText className="h-4 w-4 mr-2" /> PDF
@@ -3362,7 +3377,7 @@ function AssemblyManagementContent() {
                       </>
                     )}
                     <button
-                      onClick={() => setShowPdfSortModal(true)}
+                      onClick={() => openPdfOptions(selectedRoute)}
                       className="inline-flex items-center px-3 py-2 border border-blue-200 shadow-sm text-sm font-medium rounded-lg text-blue-700 bg-blue-50 hover:bg-blue-100"
                     >
                       <FileText className="h-4 w-4 mr-2" /> PDF
@@ -3671,7 +3686,16 @@ function AssemblyManagementContent() {
                             completed: 'Concluído',
                             cancelled: 'Retornado'
                           } as Record<string, string>;
-                          return Object.entries(byOrder).map(([orderId, list]) => {
+                          const ordersByOldestForecast = Object.entries(byOrder).sort(([, listA], [, listB]) => {
+                            const dateA = getAssemblyForecastDateKey(getPrevisaoMontagemValue(listA[0]?.order));
+                            const dateB = getAssemblyForecastDateKey(getPrevisaoMontagemValue(listB[0]?.order));
+
+                            if (dateA === NO_ASSEMBLY_FORECAST_DATE) return dateB === NO_ASSEMBLY_FORECAST_DATE ? 0 : 1;
+                            if (dateB === NO_ASSEMBLY_FORECAST_DATE) return -1;
+                            return dateA.localeCompare(dateB);
+                          });
+
+                          return ordersByOldestForecast.map(([orderId, list]) => {
                             const order = list[0]?.order || {} as any;
                             const addr = order.address_json || {};
                             const previsaoMontagem = formatDate(getPrevisaoMontagemValue(order) || null);
@@ -4133,12 +4157,73 @@ function AssemblyManagementContent() {
       {
         showPdfSortModal && selectedRoute && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 overflow-hidden">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg mx-4 overflow-hidden max-h-[90vh] flex flex-col">
               <div className="bg-gradient-to-r from-blue-600 to-blue-700 px-6 py-4">
                 <h3 className="text-lg font-bold text-white">Gerar Rota de Montagem</h3>
-                <p className="text-blue-100 text-sm">Escolha a ordenação dos pedidos</p>
+                <p className="text-blue-100 text-sm">Escolha as previsões que entram no PDF e mantenha a ordenação desejada</p>
               </div>
-              <div className="p-6 space-y-4">
+              <div className="p-6 space-y-5 overflow-y-auto">
+                <div>
+                  <div className="flex items-center justify-between gap-3 mb-3">
+                    <div>
+                      <h4 className="text-sm font-semibold text-gray-900">Previsões de montagem</h4>
+                      <p className="text-xs text-gray-500">Marque uma ou várias datas para imprimir.</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const options = getPdfForecastDateOptions(selectedRoute);
+                        const allSelected = options.length > 0 && options.every(date => selectedPdfForecastDates.has(date));
+                        setSelectedPdfForecastDates(allSelected ? new Set() : new Set(options));
+                      }}
+                      className="text-xs font-medium text-blue-700 hover:text-blue-800"
+                    >
+                      {getPdfForecastDateOptions(selectedRoute).length > 0
+                        && getPdfForecastDateOptions(selectedRoute).every(date => selectedPdfForecastDates.has(date))
+                        ? 'Desmarcar todas'
+                        : 'Selecionar todas'}
+                    </button>
+                  </div>
+                  <div className="border border-gray-200 rounded-lg overflow-y-auto max-h-48 divide-y divide-gray-100">
+                    {getPdfForecastDateOptions(selectedRoute).map(dateKey => (
+                      <label
+                        key={dateKey}
+                        className={`flex items-center justify-between gap-3 px-3 py-2 cursor-pointer transition-colors ${selectedPdfForecastDates.has(dateKey)
+                          ? 'bg-blue-50 text-blue-900'
+                          : 'bg-white text-gray-700 hover:bg-gray-50'
+                          }`}
+                      >
+                        <span className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={selectedPdfForecastDates.has(dateKey)}
+                            onChange={() => {
+                              setSelectedPdfForecastDates(previous => {
+                                const next = new Set(previous);
+                                if (next.has(dateKey)) next.delete(dateKey);
+                                else next.add(dateKey);
+                                return next;
+                              });
+                            }}
+                            className="w-4 h-4 rounded text-blue-600 border-gray-300 focus:ring-blue-500"
+                          />
+                          <span className="text-sm font-medium">{formatAssemblyForecastDateKey(dateKey)}</span>
+                        </span>
+                        <span className="text-xs text-gray-500">
+                          {getPdfForecastOrderCount(selectedRoute, dateKey)} pedido(s)
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                  {getPdfForecastDateOptions(selectedRoute).length === 0 && (
+                    <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                      Nenhum pedido foi encontrado neste romaneio.
+                    </p>
+                  )}
+                </div>
+
+                <div className="border-t border-gray-200 pt-5">
+                  <h4 className="text-sm font-semibold text-gray-900 mb-3">Ordenação dos pedidos</h4>
                 <div className="space-y-3">
                   <label className="flex items-center p-3 border rounded-lg cursor-pointer hover:bg-gray-50 transition-colors">
                     <input
@@ -4197,6 +4282,7 @@ function AssemblyManagementContent() {
                     </div>
                   </label>
                 </div>
+                </div>
               </div>
               <div className="px-6 py-4 bg-gray-50 flex justify-end gap-3">
                 <button
@@ -4210,8 +4296,15 @@ function AssemblyManagementContent() {
                     try {
                       if (!selectedRoute) return;
                       const route = selectedRoute as any;
-                      const products = assemblyInRoutes.filter(ap => ap.assembly_route_id === route.id);
-                      let orders = products.map(p => p.order).filter(Boolean) as any[];
+                      if (selectedPdfForecastDates.size === 0) {
+                        toast.error('Selecione pelo menos uma previsão de montagem');
+                        return;
+                      }
+                      const products = getRouteProducts(selectedRoute).filter(product => {
+                        const forecastDate = getAssemblyForecastDateKey(getPrevisaoMontagemValue(product.order));
+                        return selectedPdfForecastDates.has(forecastDate);
+                      });
+                      const orders = products.map(p => p.order).filter(Boolean) as any[];
 
                       // Ordenar pedidos conforme opção selecionada
                       const parseDate = (d: any) => {
@@ -4298,7 +4391,8 @@ function AssemblyManagementContent() {
                       toast.error('Erro ao gerar PDF da rota de montagem');
                     }
                   }}
-                  className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700"
+                  disabled={selectedPdfForecastDates.size === 0}
+                  className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Gerar PDF
                 </button>
