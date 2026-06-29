@@ -409,7 +409,7 @@ export default function MdfeManifests() {
           </div>
 
           <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-slate-200">
+            <table className="min-w-[1280px] w-full divide-y divide-slate-200">
               <thead className="bg-slate-50">
                 <tr className="text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
                   <th className="px-5 py-3">Manifesto</th>
@@ -418,7 +418,9 @@ export default function MdfeManifests() {
                   <th className="px-5 py-3">Condutor / Veiculo</th>
                   <th className="px-5 py-3">Carga</th>
                   <th className="px-5 py-3">Status</th>
-                  <th className="px-5 py-3 text-right">Acoes</th>
+                  <th className="sticky right-0 z-20 w-44 min-w-44 bg-slate-50 px-5 py-3 text-right shadow-[-8px_0_12px_-12px_rgba(15,23,42,0.35)]">
+                    Acoes
+                  </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -559,14 +561,14 @@ export default function MdfeManifests() {
                               {manifest.issued_at && <p>Emitido em: {formatDateTime(manifest.issued_at)}</p>}
                               {manifest.closed_at && <p>Encerrado em: {formatDateTime(manifest.closed_at)}</p>}
                               {manifest.status === 'error' && manifest.error_message && (
-                                <p className="max-w-xs text-rose-600">{manifest.error_message}</p>
+                                <p className="max-w-xs break-all text-rose-600">{manifest.error_message}</p>
                               )}
                             </div>
                           </div>
                         </td>
 
-                        <td className="px-5 py-4">
-                          <div className="flex justify-end gap-2 flex-wrap">
+                        <td className="sticky right-0 z-10 w-44 min-w-44 bg-white px-5 py-4 shadow-[-8px_0_12px_-12px_rgba(15,23,42,0.35)]">
+                          <div className="flex flex-wrap justify-end gap-2 [&>button]:whitespace-nowrap">
                             <button
                               type="button"
                               onClick={() => void refreshManifest(manifest.id)}
