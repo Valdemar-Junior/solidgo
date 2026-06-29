@@ -931,6 +931,14 @@ async function reconcileManifestStatus({
   focusToken: string;
 }) {
   try {
+    const { data: currentManifest, error: currentManifestError } = await adminClient
+      .from('mdfe_manifests')
+      .select('issued_at')
+      .eq('id', manifestId)
+      .maybeSingle();
+
+    if (currentManifestError) throw currentManifestError;
+
     const response = await fetch(
       `${focusBaseUrl.replace(/\/$/, '')}/v2/mdfe/${encodeURIComponent(reference)}`,
       {
@@ -981,7 +989,7 @@ async function reconcileManifestStatus({
           error_message: mappedStatus === 'error' ? resolveFocusMessage(focusJson) : null,
           issued_at:
             mappedStatus === 'issued' || mappedStatus === 'closed' || mappedStatus === 'cancelled'
-              ? new Date().toISOString()
+              ? currentManifest?.issued_at || new Date().toISOString()
               : null,
           closed_at: mappedStatus === 'closed' ? new Date().toISOString() : null,
         })

@@ -83,6 +83,8 @@ const STATUS_META: Record<
   },
 };
 
+const MDFE_CANCELLATION_WINDOW_MS = 24 * 60 * 60 * 1000;
+
 export default function MdfeManifests() {
   const [loading, setLoading] = useState(true);
   const [syncingId, setSyncingId] = useState<string | null>(null);
@@ -307,6 +309,11 @@ export default function MdfeManifests() {
   };
 
   const cancelManifest = async (manifest: MdfeManifest) => {
+    if (!isWithinCancellationWindow(manifest.issued_at)) {
+      toast.error('O prazo de 24 horas para cancelar este MDF-e ja expirou.');
+      return;
+    }
+
     const justification = window.prompt(
       'Informe a justificativa do cancelamento do MDF-e (minimo 15 caracteres):',
       'Cancelamento antes do inicio do transporte.'
@@ -441,7 +448,8 @@ export default function MdfeManifests() {
                   filteredManifests.map((manifest) => {
                     const statusMeta = STATUS_META[manifest.status];
                     const canClose = manifest.status === 'issued';
-                    const canCancel = manifest.status === 'issued';
+                    const showCancel = manifest.status === 'issued';
+                    const canCancel = showCancel && isWithinCancellationWindow(manifest.issued_at);
                     const isActing = actioningId === manifest.id;
 
                     return (
@@ -605,15 +613,16 @@ export default function MdfeManifests() {
                                 Encerrar
                               </button>
                             )}
-                            {canCancel && (
+                            {showCancel && (
                               <button
                                 type="button"
                                 onClick={() => void cancelManifest(manifest)}
-                                disabled={isActing}
+                                disabled={isActing || !canCancel}
+                                title={!canCancel ? 'Prazo de 24 horas para cancelamento expirado' : undefined}
                                 className="inline-flex items-center gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700 hover:bg-rose-100 disabled:opacity-60"
                               >
                                 {isActing ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />}
-                                Cancelar
+                                {canCancel ? 'Cancelar' : 'Prazo expirado'}
                               </button>
                             )}
                           </div>
@@ -659,6 +668,13 @@ function normalizeFunctionError(error: any, data: any) {
   }
 
   return new Error('A operacao retornou erro sem detalhe.');
+}
+
+function isWithinCancellationWindow(issuedAt: string | null) {
+  if (!issuedAt) return false;
+
+  const issuedAtMs = new Date(issuedAt).getTime();
+  return Number.isFinite(issuedAtMs) && Date.now() < issuedAtMs + MDFE_CANCELLATION_WINDOW_MS;
 }
 
 function MetricCard({

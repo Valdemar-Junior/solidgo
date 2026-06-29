@@ -66,7 +66,7 @@ Deno.serve(async (request) => {
 
     const { data: manifest, error: manifestError } = await adminClient
       .from('mdfe_manifests')
-      .select('id, environment, focus_reference, status')
+      .select('id, environment, focus_reference, status, issued_at')
       .eq('id', manifestId)
       .maybeSingle();
 
@@ -163,7 +163,7 @@ Deno.serve(async (request) => {
       error_message: nextStatus === 'error' ? resolveFocusMessage(remote) : null,
       issued_at:
         nextStatus === 'issued' || nextStatus === 'closed' || nextStatus === 'cancelled'
-          ? new Date().toISOString()
+          ? manifest.issued_at || new Date().toISOString()
           : null,
       closed_at: nextStatus === 'closed' ? new Date().toISOString() : null,
     };

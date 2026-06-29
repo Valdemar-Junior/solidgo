@@ -22,6 +22,8 @@ type CancelRequest = {
   justification?: string;
 };
 
+const MDFE_CANCELLATION_WINDOW_MS = 24 * 60 * 60 * 1000;
+
 Deno.serve(async (request) => {
   if (request.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
@@ -77,7 +79,7 @@ Deno.serve(async (request) => {
 
     const { data: manifest, error: manifestError } = await adminClient
       .from('mdfe_manifests')
-      .select('id, environment, focus_reference, status')
+      .select('id, environment, focus_reference, status, issued_at')
       .eq('id', manifestId)
       .maybeSingle();
 
@@ -93,6 +95,27 @@ Deno.serve(async (request) => {
     }
     if (status === 'cancelled') {
       return jsonResponse({ error: 'Manifesto ja esta cancelado.', user_message: 'Este MDF-e ja foi cancelado anteriormente.' }, 422);
+    }
+
+    const issuedAt = manifest.issued_at ? new Date(manifest.issued_at).getTime() : Number.NaN;
+    if (!Number.isFinite(issuedAt)) {
+      return jsonResponse(
+        {
+          error: 'Manifesto sem data de emissao valida para cancelamento.',
+          user_message: 'Nao foi possivel confirmar a data de emissao deste MDF-e. Atualize o status antes de tentar novamente.',
+        },
+        422
+      );
+    }
+
+    if (Date.now() >= issuedAt + MDFE_CANCELLATION_WINDOW_MS) {
+      return jsonResponse(
+        {
+          error: 'Prazo de cancelamento do MDF-e expirado.',
+          user_message: 'Este MDF-e foi emitido ha 24 horas ou mais e nao pode mais ser cancelado.',
+        },
+        422
+      );
     }
 
     const environment = normalizeEnvironment(manifest.environment);
