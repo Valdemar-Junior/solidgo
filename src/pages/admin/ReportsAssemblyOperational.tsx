@@ -126,6 +126,19 @@ const createInitialFilters = (): FiltersState => {
 const toStartOfDayIso = (value: string) => `${value}T00:00:00.000`;
 const toEndOfDayIso = (value: string) => `${value}T23:59:59.999`;
 const normalizeText = (value: unknown) => String(value || '').trim();
+const normalizeRouteName = (value: unknown) =>
+  normalizeText(value)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+const EXCLUDED_ASSEMBLY_ROUTE_NAMES = new Set([
+  'aguardando montagem',
+  'sem montagem',
+  'cidade sem montagem',
+  'montado',
+]);
+const isExcludedAssemblyRoute = (routeName: unknown) =>
+  EXCLUDED_ASSEMBLY_ROUTE_NAMES.has(normalizeRouteName(routeName));
 
 const formatRouteLabel = (route: { route_code?: string | null; name?: string | null }) => {
   const code = normalizeText(route.route_code);
@@ -226,11 +239,13 @@ export default function ReportsAssemblyOperational() {
         );
 
         setRoutes(
-          ((routesRes.data || []) as any[]).map((route) => ({
-            id: String(route.id),
-            label: formatRouteLabel(route),
-            installerId: route.assembler_id ? String(route.assembler_id) : null,
-          }))
+          ((routesRes.data || []) as any[])
+            .filter((route) => !isExcludedAssemblyRoute(route.name))
+            .map((route) => ({
+              id: String(route.id),
+              label: formatRouteLabel(route),
+              installerId: route.assembler_id ? String(route.assembler_id) : null,
+            }))
         );
       } catch (error) {
         console.error('Erro ao carregar filtros do relatorio de montagem:', error);
@@ -679,6 +694,8 @@ async function fetchCompletedRows(filters: FiltersState): Promise<AssemblyOperat
 
   return Array.from(latestCompletedByOrder.values())
     .filter((row) => {
+      if (isExcludedAssemblyRoute(row.assembly_route?.name)) return false;
+
       const statuses = statusesByOrder.get(String(row.order_id || '')) || [];
       if (statuses.length === 0) return false;
       if (!statuses.every((status) => status === 'completed')) return false;
@@ -810,6 +827,7 @@ async function fetchPendingRows(filters: FiltersState): Promise<{
       .sort((a, b) => String(b?.created_at || '').localeCompare(String(a?.created_at || '')))[0];
 
     if (!activeRoute) return;
+    if (isExcludedAssemblyRoute(activeRoute.name)) return;
 
     if (!matchesGlobalFilters({
       filters,

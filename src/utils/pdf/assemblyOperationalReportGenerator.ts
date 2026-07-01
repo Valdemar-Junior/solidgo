@@ -48,7 +48,7 @@ type SummaryItem = {
 };
 
 type Column = {
-  key: keyof AssemblyOperationalReportRow | 'statusLabel';
+  key: keyof AssemblyOperationalReportRow | 'statusLabel' | 'deadlineStatus';
   label: string;
   width: number;
 };
@@ -131,6 +131,26 @@ export class AssemblyOperationalReportGenerator {
         .slice(0, 10);
 
       return forecastDate < todayDate;
+    };
+
+    const toDateOnly = (value?: string | null) => {
+      if (!value) return null;
+      const normalizedValue = String(value).trim();
+      const isoDate = normalizedValue.match(/^(\d{4}-\d{2}-\d{2})/);
+      if (isoDate) return isoDate[1];
+
+      const date = new Date(normalizedValue);
+      if (Number.isNaN(date.getTime())) return null;
+      return date.toISOString().slice(0, 10);
+    };
+
+    const getDeadlineStatus = (row: AssemblyOperationalReportRow) => {
+      const forecastDate = toDateOnly(row.forecastDate);
+      if (!forecastDate) return 'SEM PREVISAO';
+
+      const comparisonDate = toDateOnly(row.referenceDate || data.filters.generatedAt);
+      if (!comparisonDate) return 'SEM PREVISAO';
+      return comparisonDate <= forecastDate ? 'DENTRO DO PRAZO' : 'FORA DO PRAZO';
     };
 
     const drawHeader = () => {
@@ -284,14 +304,15 @@ export class AssemblyOperationalReportGenerator {
     ) => {
       const columns: Column[] = [
         { key: 'orderIdErp', label: 'Pedido', width: 60 },
-        { key: 'customerName', label: 'Cliente', width: 148 },
-        { key: 'city', label: 'Cidade', width: 74 },
-        { key: 'saleDate', label: 'Data venda', width: 68 },
-        { key: 'forecastDate', label: 'Prev. montagem', width: 76 },
-        { key: 'routeName', label: 'Rota', width: 112 },
-        { key: 'installerName', label: 'Montador', width: 96 },
-        { key: 'statusLabel', label: 'Status', width: 88 },
-        { key: 'referenceDate', label: 'Data ref.', width: 70 },
+        { key: 'customerName', label: 'Cliente', width: 116 },
+        { key: 'city', label: 'Cidade', width: 60 },
+        { key: 'saleDate', label: 'Data venda', width: 62 },
+        { key: 'forecastDate', label: 'Prev. montagem', width: 70 },
+        { key: 'routeName', label: 'Rota', width: 86 },
+        { key: 'installerName', label: 'Montador', width: 74 },
+        { key: 'statusLabel', label: 'Status', width: 72 },
+        { key: 'deadlineStatus', label: 'Situacao prazo', width: 92 },
+        { key: 'referenceDate', label: 'Data ref.', width: 64 },
       ];
 
       const tableWidth = columns.reduce((sum, column) => sum + column.width, 0);
@@ -331,13 +352,23 @@ export class AssemblyOperationalReportGenerator {
           routeName: row.routeCode ? `${row.routeCode} - ${row.routeName || '-'}` : row.routeName || '-',
           installerName: row.installerName || '-',
           statusLabel,
+          deadlineStatus: getDeadlineStatus(row),
           referenceDate: row.referenceDate ? formatDate(row.referenceDate) : '-',
         };
 
         columns.forEach((column) => {
           const maxWidth = column.width - 8;
-          const value = fitTextSafe(values[column.key] || '-', maxWidth, font, 8);
-          drawText(value, x, y - 2, 8, false, column.key === 'statusLabel' ? color : rgb(0.18, 0.18, 0.2));
+          const rawValue = values[column.key] || '-';
+          const value = fitTextSafe(rawValue, maxWidth, font, 8);
+          let textColor = column.key === 'statusLabel' ? color : rgb(0.18, 0.18, 0.2);
+          if (column.key === 'deadlineStatus') {
+            textColor = rawValue === 'DENTRO DO PRAZO'
+              ? rgb(0.07, 0.55, 0.29)
+              : rawValue === 'FORA DO PRAZO'
+                ? rgb(0.75, 0.22, 0.17)
+                : rgb(0.45, 0.45, 0.5);
+          }
+          drawText(value, x, y - 2, 8, false, textColor);
           x += column.width;
         });
 
