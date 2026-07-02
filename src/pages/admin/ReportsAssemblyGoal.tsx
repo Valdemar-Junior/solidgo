@@ -108,7 +108,7 @@ const evaluateMonthlyTarget = (received: number, delivered: number) => {
   const quantityTargetMet = delivered >= MONTHLY_TARGET;
   const performancePercent = received > 0 ? (delivered / received) * 100 : 0;
   const performanceTargetMet =
-    delivered >= MONTHLY_PERFORMANCE_DELIVERY_TARGET &&
+    received >= MONTHLY_PERFORMANCE_DELIVERY_TARGET &&
     performancePercent >= PERFORMANCE_PERCENT_TARGET;
 
   const finalResult: AssemblyGoalPersonRow['finalResult'] = quantityTargetMet
@@ -120,8 +120,8 @@ const evaluateMonthlyTarget = (received: number, delivered: number) => {
   const analysis = quantityTargetMet
     ? `Recebeu ${received} montagens no periodo e realizou ${delivered}, atingindo a meta mensal por quantidade de ${MONTHLY_TARGET} montagens.`
     : performanceTargetMet
-      ? `Recebeu ${received} montagens no periodo e realizou ${delivered}, atingindo a meta mensal por desempenho com pelo menos ${MONTHLY_PERFORMANCE_DELIVERY_TARGET} montagens e ${formatPercent(performancePercent)} de desempenho.`
-      : `Recebeu ${received} montagens no periodo, realizou ${delivered} e registrou ${received - delivered} retornos. Nao atingiu a meta mensal de ${MONTHLY_TARGET} montagens por quantidade nem os criterios de desempenho de pelo menos ${MONTHLY_PERFORMANCE_DELIVERY_TARGET} montagens e ${PERFORMANCE_PERCENT_TARGET}%.`;
+      ? `Recebeu ${received} montagens no periodo e realizou ${delivered}, atingindo a meta mensal por desempenho com pelo menos ${MONTHLY_PERFORMANCE_DELIVERY_TARGET} montagens recebidas e ${formatPercent(performancePercent)} de desempenho.`
+      : `Recebeu ${received} montagens no periodo, realizou ${delivered} e registrou ${received - delivered} retornos. Nao atingiu a meta mensal de ${MONTHLY_TARGET} montagens por quantidade nem os criterios de desempenho de pelo menos ${MONTHLY_PERFORMANCE_DELIVERY_TARGET} montagens recebidas e ${PERFORMANCE_PERCENT_TARGET}%.`;
 
   return {
     quantityTarget: MONTHLY_TARGET,
