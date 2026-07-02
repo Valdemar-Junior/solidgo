@@ -133,6 +133,8 @@ const normalizeRouteName = (value: unknown) =>
     .toLowerCase();
 const EXCLUDED_ASSEMBLY_ROUTE_NAMES = new Set([
   'aguardando montagem',
+  'aguardando cleinte',
+  'aguardando cliente',
   'sem montagem',
   'cidade sem montagem',
   'montado',
