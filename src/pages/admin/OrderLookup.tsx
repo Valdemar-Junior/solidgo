@@ -1601,44 +1601,48 @@ export default function OrderLookup() {
                       </button>
                     </div>
                   </div>
-                ) : isBlockedOrder(selectedOrder) ? (
-                  <div className={`rounded-lg border p-4 space-y-2 ${isBlockedReturnOrder(selectedOrder) ? 'border-red-200 bg-red-50' : 'border-orange-200 bg-orange-50'}`}>
-                    <p className={`text-xs ${isBlockedReturnOrder(selectedOrder) ? 'text-red-800' : 'text-orange-800'}`}>
-                      <span className="font-semibold">Status:</span> {isBlockedReturnOrder(selectedOrder) ? 'Bloqueado por devolução' : 'Bloqueado no ERP'}
-                    </p>
-                    <p className={`text-xs ${isBlockedReturnOrder(selectedOrder) ? 'text-red-800' : 'text-orange-800'}`}>
-                      <span className="font-semibold">Motivo:</span> {selectedOrder?.blocked_reason || '-'}
-                    </p>
-                    <p className={`text-xs ${isBlockedReturnOrder(selectedOrder) ? 'text-red-800' : 'text-orange-800'}`}>
-                      <span className="font-semibold">Data do bloqueio:</span> {selectedOrder?.blocked_at ? formatDateTime(selectedOrder.blocked_at) : '-'}
-                    </p>
-                    {isBlockedReturnOrder(selectedOrder) && (
-                      <>
-                        <p className="text-xs text-red-800">
-                          <span className="font-semibold">NF de devolução:</span> {selectedOrder?.return_nfe_number || '-'}
+                ) : (
+                  <div className="space-y-3">
+                    {isBlockedOrder(selectedOrder) && (
+                      <div className={`rounded-lg border p-4 space-y-2 ${isBlockedReturnOrder(selectedOrder) ? 'border-red-200 bg-red-50' : 'border-orange-200 bg-orange-50'}`}>
+                        <p className={`text-xs ${isBlockedReturnOrder(selectedOrder) ? 'text-red-800' : 'text-orange-800'}`}>
+                          <span className="font-semibold">Status:</span> {isBlockedReturnOrder(selectedOrder) ? 'Bloqueado por devolução' : 'Bloqueado no ERP'}
                         </p>
-                        <div className="pt-2 flex flex-wrap gap-2">
-                          <button
-                            type="button"
-                            onClick={reprintReturnDanfe}
-                            disabled={withdrawalActionLoading !== null}
-                            className="inline-flex items-center rounded-lg border border-red-200 bg-white px-3 py-2 text-xs font-semibold text-red-700 transition-colors hover:bg-red-100 disabled:opacity-60 disabled:cursor-not-allowed"
-                          >
-                            {withdrawalActionLoading === 'return_danfe' ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <FileSpreadsheet className="mr-2 h-3.5 w-3.5" />}
-                            Imprimir nota de devolução
-                          </button>
-                        </div>
-                      </>
+                        <p className={`text-xs ${isBlockedReturnOrder(selectedOrder) ? 'text-red-800' : 'text-orange-800'}`}>
+                          <span className="font-semibold">Motivo:</span> {selectedOrder?.blocked_reason || '-'}
+                        </p>
+                        <p className={`text-xs ${isBlockedReturnOrder(selectedOrder) ? 'text-red-800' : 'text-orange-800'}`}>
+                          <span className="font-semibold">Data do bloqueio:</span> {selectedOrder?.blocked_at ? formatDateTime(selectedOrder.blocked_at) : '-'}
+                        </p>
+                        {isBlockedReturnOrder(selectedOrder) && (
+                          <>
+                            <p className="text-xs text-red-800">
+                              <span className="font-semibold">NF de devolução:</span> {selectedOrder?.return_nfe_number || '-'}
+                            </p>
+                            <div className="pt-2 flex flex-wrap gap-2">
+                              <button
+                                type="button"
+                                onClick={reprintReturnDanfe}
+                                disabled={withdrawalActionLoading !== null}
+                                className="inline-flex items-center rounded-lg border border-red-200 bg-white px-3 py-2 text-xs font-semibold text-red-700 transition-colors hover:bg-red-100 disabled:opacity-60 disabled:cursor-not-allowed"
+                              >
+                                {withdrawalActionLoading === 'return_danfe' ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <FileSpreadsheet className="mr-2 h-3.5 w-3.5" />}
+                                Imprimir nota de devolução
+                              </button>
+                            </div>
+                          </>
+                        )}
+                      </div>
                     )}
-                  </div>
-                ) : routeOrders.length === 0 ? (
+
+                    {routeOrders.length === 0 ? (
                   <p className="text-sm text-gray-500">
                     {derivedStatus === 'delivered'
                       ? 'Entregue, mas rota não foi encontrada no histórico.'
                       : 'Aguardando atribuição a uma rota de entrega.'}
                   </p>
-                ) : (
-                  <div className="space-y-2">
+                    ) : (
+                      <div className="space-y-2">
                     {routeOrders.map((ro) => {
                       // Calcular status específico deste pedido nesta rota
                       const orderStatus = ro.status === 'returned' ? 'returned'
@@ -1803,6 +1807,8 @@ export default function OrderLookup() {
                         </div>
                       );
                     })}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
