@@ -18,6 +18,7 @@ export default function TestWrapper({ children, role }: TestWrapperProps) {
         name: role === 'admin' ? 'Admin Teste' : 'Driver Teste',
         role: role,
         phone: '11999999999',
+        active: true,
         created_at: new Date().toISOString(),
       };
 

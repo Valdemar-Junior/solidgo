@@ -3,14 +3,18 @@ import { CheckCircle2, Loader2, LogOut, RefreshCw, Search, Store, Undo2 } from '
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../../supabase/client';
 import { useAuthStore } from '../../stores/authStore';
-import type { OrderItem, StoreReleaseAssignment, UserStoreReleaseLocation } from '../../types/database';
+import type { OrderItem, OrderItemHold, StoreReleaseAssignment, UserStoreReleaseLocation } from '../../types/database';
 import { getStoreReleaseStatusLabel, normalizeStoreReleaseLocation } from '../../utils/storeRelease';
+import { registerPickupForOrder, pickupItemKey, pickupHoldMatchesItem } from '../../utils/pickup/pickupCore';
+import { buildPickupReceiptPdf } from '../../utils/pickup/pickupReceipt';
+import { DeliverySheetGenerator } from '../../utils/pdf/deliverySheetGenerator';
 import { toast } from 'sonner';
 
 type AssignmentRow = StoreReleaseAssignment & {
   order?: {
     id: string;
     order_id_erp: string;
+    status?: string | null;
     customer_name: string;
     customer_cpf?: string | null;
     phone?: string | null;
@@ -55,6 +59,14 @@ export default function StoreReleaseManagement() {
   const [saving, setSaving] = useState(false);
   const [actionModal, setActionModal] = useState<ActionModalState>(null);
   const [actionNotes, setActionNotes] = useState('');
+
+  // Itens já retirados (picked_up), por pedido — pra esconder da lista do gerente.
+  const [pickedUpByOrderId, setPickedUpByOrderId] = useState<Record<string, OrderItemHold[]>>({});
+  // Modal de retirada (cliente veio buscar).
+  const [pickupModal, setPickupModal] = useState<{ assignment: AssignmentRow; items: OrderItem[] } | null>(null);
+  const [pickupSelectedKeys, setPickupSelectedKeys] = useState<Set<string>>(new Set());
+  const [pickupNotes, setPickupNotes] = useState('');
+  const [pickupSaving, setPickupSaving] = useState(false);
 
   const fetchUserNamesByIds = async (ids: string[]) => {
     const uniqueIds = Array.from(new Set(ids.map((id) => String(id || '').trim()).filter(Boolean)));
@@ -149,6 +161,24 @@ export default function StoreReleaseManagement() {
       );
       setAssignments(rows);
 
+      // Carrega os itens já retirados (picked_up) desses pedidos, pra esconder da lista.
+      const orderIds = Array.from(new Set(rows.map((r) => String(r.order_id)).filter(Boolean)));
+      if (orderIds.length > 0) {
+        const { data: holdsData } = await supabase
+          .from('order_item_holds')
+          .select('*')
+          .in('order_id', orderIds)
+          .eq('status', 'picked_up');
+        const map: Record<string, OrderItemHold[]> = {};
+        (holdsData || []).forEach((h: any) => {
+          const key = String(h.order_id);
+          (map[key] = map[key] || []).push(h as OrderItemHold);
+        });
+        setPickedUpByOrderId(map);
+      } else {
+        setPickedUpByOrderId({});
+      }
+
       const releasedIds = Array.from(
         new Set(
           rows
@@ -238,6 +268,116 @@ export default function StoreReleaseManagement() {
       toast.error(error?.message || 'Erro ao registrar liberacao');
     } finally {
       setSaving(false);
+    }
+  };
+
+  // Itens do local do gerente ainda disponíveis (esconde os já retirados).
+  const visibleAssignmentItems = (assignment: AssignmentRow): OrderItem[] => {
+    const base = getAssignmentItems(assignment.order?.items_json, assignment.store_location);
+    const pickedUp = pickedUpByOrderId[String(assignment.order_id)] || [];
+    return base.filter((it) => !pickedUp.some((h) => pickupHoldMatchesItem(h, it)));
+  };
+
+  const openPickupModal = (assignment: AssignmentRow) => {
+    const items = visibleAssignmentItems(assignment);
+    if (items.length === 0) {
+      toast.error('Nenhum produto deste local disponível para retirada.');
+      return;
+    }
+    setPickupModal({ assignment, items });
+    setPickupSelectedKeys(new Set(items.map(pickupItemKey)));
+    setPickupNotes('');
+  };
+
+  const closePickupModal = () => {
+    setPickupModal(null);
+    setPickupSelectedKeys(new Set());
+    setPickupNotes('');
+    setPickupSaving(false);
+  };
+
+  const togglePickupItem = (key: string) => {
+    setPickupSelectedKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  };
+
+  const confirmPickup = async () => {
+    if (!pickupModal || pickupSaving) return;
+    const order = pickupModal.assignment.order;
+    if (!order) return;
+
+    const pickedItems = pickupModal.items.filter((it) => pickupSelectedKeys.has(pickupItemKey(it)));
+    if (pickedItems.length === 0) {
+      toast.error('Selecione ao menos um item para a retirada.');
+      return;
+    }
+
+    try {
+      setPickupSaving(true);
+
+      // Enriquece os itens com order_item_id/source_line_key reais (items_json não tem).
+      // Casamento por id é estável e não depende de normalização de sku/local (evita que
+      // uma re-importação "perca" a retirada e o item volte a ser entregável).
+      const { data: orderItemsRows } = await supabase
+        .from('order_items')
+        .select('id, sku, storage_location, source_line_key')
+        .eq('order_id', order.id);
+      const enrich = (it: any) => {
+        const match = (orderItemsRows || []).find((oi: any) =>
+          String(oi.sku || '').toLowerCase() === String(it.sku || '').toLowerCase() &&
+          String(oi.storage_location || '').toLowerCase() === String(it.location || it.storage_location || '').toLowerCase()
+        ) || (orderItemsRows || []).find((oi: any) =>
+          String(oi.sku || '').toLowerCase() === String(it.sku || '').toLowerCase()
+        );
+        return match ? { ...it, order_item_id: match.id, source_line_key: match.source_line_key } : it;
+      };
+      const enrichedPicked = pickedItems.map(enrich);
+
+      // Base = todos os itens do pedido ainda não retirados (de todos os locais),
+      // pra decidir se o pedido fecha (delivered) ou continua com o restante.
+      const pickedUp = pickedUpByOrderId[String(order.id)] || [];
+      const allDeliverableItems = ((order.items_json || []) as OrderItem[])
+        .filter((it) => !pickedUp.some((h) => pickupHoldMatchesItem(h, it)))
+        .map(enrich);
+
+      const { withdrawal, assemblyError } = await registerPickupForOrder({
+        order,
+        allDeliverableItems,
+        pickedItems: enrichedPicked,
+        responsibleName: user?.name || user?.email || 'Gerente',
+        notes: pickupNotes.trim() || null,
+        registeredByUserId: user?.id || null,
+        registeredByName: user?.name || user?.email || null,
+      });
+
+      // Comprovante de retirada (só dos itens retirados).
+      try {
+        const pdf = await buildPickupReceiptPdf(
+          [{ order, items: pickedItems, withdrawal }],
+          { conferenteName: user?.name || user?.email || '-' }
+        );
+        DeliverySheetGenerator.openPDFInNewTab(pdf);
+      } catch (pdfError) {
+        console.error('Falha ao gerar comprovante de retirada:', pdfError);
+        toast.warning('Retirada registrada, mas o comprovante não pôde ser gerado.');
+      }
+
+      if (assemblyError) {
+        console.error('Falha ao sincronizar montagem da retirada:', assemblyError);
+        toast.warning('Retirada registrada, mas houve falha ao gerar a montagem.');
+      }
+
+      toast.success('Retirada registrada com sucesso!');
+      closePickupModal();
+      await loadData();
+    } catch (error: any) {
+      console.error(error);
+      toast.error(error?.message || 'Erro ao registrar retirada');
+    } finally {
+      setPickupSaving(false);
     }
   };
 
@@ -359,7 +499,8 @@ export default function StoreReleaseManagement() {
                     </div>
                     <div className="grid gap-2 sm:grid-cols-2">
                       {group.map((assignment) => {
-                        const assignmentItems = getAssignmentItems(order?.items_json, assignment.store_location);
+                        const assignmentItems = visibleAssignmentItems(assignment);
+                        const allPickedUp = getAssignmentItems(order?.items_json, assignment.store_location).length > 0 && assignmentItems.length === 0;
 
                         return (
                         <div key={assignment.id} className="min-w-[280px] rounded-xl border border-gray-200 bg-gray-50 p-4">
@@ -388,6 +529,10 @@ export default function StoreReleaseManagement() {
                                     </div>
                                   </div>
                                 ))
+                              ) : allPickedUp ? (
+                                <p className="text-xs font-semibold text-purple-700">
+                                  Todos os produtos deste local foram retirados pelo cliente.
+                                </p>
                               ) : (
                                 <p className="text-xs text-gray-500">
                                   Nenhum produto deste local foi encontrado no pedido.
@@ -405,7 +550,7 @@ export default function StoreReleaseManagement() {
                             )}
                             {assignment.release_notes && <p>Obs.: {assignment.release_notes}</p>}
                           </div>
-                          <div className="mt-4 flex gap-2">
+                          <div className="mt-4 flex flex-wrap gap-2">
                             {assignment.status === 'pending' ? (
                               <button
                                 type="button"
@@ -423,6 +568,17 @@ export default function StoreReleaseManagement() {
                               >
                                 <Undo2 className="mr-2 h-4 w-4" />
                                 Reverter
+                              </button>
+                            )}
+                            {assignmentItems.length > 0 && (
+                              <button
+                                type="button"
+                                onClick={() => openPickupModal(assignment)}
+                                className="inline-flex flex-1 items-center justify-center rounded-xl border border-purple-200 bg-purple-50 px-3 py-2 text-sm font-semibold text-purple-700 hover:bg-purple-100"
+                                title="Cliente veio buscar o produto na loja"
+                              >
+                                <Store className="mr-2 h-4 w-4" />
+                                Cliente retirou
                               </button>
                             )}
                           </div>
@@ -482,6 +638,90 @@ export default function StoreReleaseManagement() {
               >
                 {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-2 h-4 w-4" />}
                 {actionModal.action === 'release' ? 'Confirmar liberacao' : 'Confirmar reversao'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {pickupModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-lg overflow-hidden rounded-2xl bg-white shadow-2xl">
+            <div className="border-b border-gray-100 px-6 py-4">
+              <h3 className="flex items-center gap-2 text-lg font-bold text-gray-900">
+                <Store className="h-5 w-5 text-purple-600" />
+                Cliente retirou na loja
+              </h3>
+              <p className="mt-1 text-sm text-gray-500">
+                Pedido {pickupModal.assignment.order?.order_id_erp || '-'} · {pickupModal.assignment.store_location}
+              </p>
+            </div>
+            <div className="max-h-[70vh] space-y-4 overflow-y-auto px-6 py-5">
+              <p className="rounded-xl border border-purple-100 bg-purple-50 p-3 text-sm text-gray-600">
+                Marque <strong>o que o cliente está levando</strong>. Sai um comprovante só com esses itens; o que ficar
+                desmarcado continua no fluxo pra entregar depois.
+              </p>
+
+              <div className="rounded-xl border border-gray-200 overflow-hidden">
+                <div className="flex items-center justify-between bg-gray-50 px-3 py-2">
+                  <span className="text-sm font-semibold text-gray-700">
+                    Itens deste local ({pickupSelectedKeys.size}/{pickupModal.items.length})
+                  </span>
+                  <div className="flex items-center gap-2 text-xs">
+                    <button type="button" onClick={() => setPickupSelectedKeys(new Set(pickupModal.items.map(pickupItemKey)))} className="text-purple-700 hover:underline">Todos</button>
+                    <span className="text-gray-300">|</span>
+                    <button type="button" onClick={() => setPickupSelectedKeys(new Set())} className="text-gray-500 hover:underline">Nenhum</button>
+                  </div>
+                </div>
+                <div className="max-h-60 divide-y divide-gray-100 overflow-y-auto">
+                  {pickupModal.items.map((item, index) => {
+                    const key = pickupItemKey(item);
+                    const checked = pickupSelectedKeys.has(key);
+                    return (
+                      <label key={`${key}-${index}`} className="flex items-center gap-3 px-3 py-2 cursor-pointer hover:bg-gray-50">
+                        <input type="checkbox" checked={checked} onChange={() => togglePickupItem(key)} disabled={pickupSaving} className="h-4 w-4 rounded border-gray-300 text-purple-600 focus:ring-purple-500" />
+                        <span className="flex-1 text-sm text-gray-700">
+                          {item.name || item.sku || 'Item'}
+                          <span className="ml-2 text-[11px] text-gray-400">Qtd: {item.quantity ?? '-'}</span>
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div>
+                <label className="mb-2 block text-sm font-medium text-gray-700">Observacao (opcional)</label>
+                <textarea
+                  value={pickupNotes}
+                  onChange={(event) => setPickupNotes(event.target.value)}
+                  rows={3}
+                  className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:border-purple-500 focus:ring-2 focus:ring-purple-100"
+                  placeholder="Ex: Cliente conferiu no local."
+                />
+              </div>
+
+              <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600">
+                Registrado por: <strong>{user?.name || user?.email || 'Gerente'}</strong>
+              </div>
+            </div>
+            <div className="flex justify-end gap-3 border-t border-gray-100 bg-gray-50 px-6 py-4">
+              <button
+                type="button"
+                onClick={closePickupModal}
+                disabled={pickupSaving}
+                className="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-60"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={() => void confirmPickup()}
+                disabled={pickupSaving || pickupSelectedKeys.size === 0}
+                className="inline-flex items-center rounded-xl bg-purple-600 px-4 py-2 text-sm font-semibold text-white hover:bg-purple-700 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {pickupSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Store className="mr-2 h-4 w-4" />}
+                {pickupSaving ? 'Registrando...' : 'Confirmar retirada'}
               </button>
             </div>
           </div>

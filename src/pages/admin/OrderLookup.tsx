@@ -3,13 +3,32 @@ import { ArrowLeft, Loader2, MapPin, Phone, Search, Truck, Hammer, FileText, Fil
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../../supabase/client';
 import { useAuthStore } from '../../stores/authStore';
-import type { Order, OrderWithdrawal, StoreReleaseAssignment, StoreReleaseHistory } from '../../types/database';
+import type {
+  ItemFulfillmentControl,
+  Order,
+  OrderItemHold,
+  OrderItemShadowBalance,
+  OrderReturn,
+  OrderWithdrawal,
+  StoreReleaseAssignment,
+  StoreReleaseHistory,
+  StructuredOrderItem,
+} from '../../types/database';
+import { pickupHoldMatchesItem } from '../../utils/pickup/pickupCore';
+import { buildPickupReceiptPdf } from '../../utils/pickup/pickupReceipt';
 import { toast } from 'sonner';
 import { AssemblyPhotosViewer, DeliveryPhotosViewer } from '../../components/photos';
 import { DeliveryProofPdfGenerator } from '../../utils/pdf/deliveryProofPdfGenerator';
 import { DeliverySheetGenerator } from '../../utils/pdf/deliverySheetGenerator';
 import { PDFDocument } from 'pdf-lib';
 import { getStoreReleaseStatusLabel } from '../../utils/storeRelease';
+import {
+  DEFAULT_ITEM_FULFILLMENT_CONTROL,
+  isFullyReturnedBalance,
+  normalizeItemFulfillmentControl,
+  normalizeOrderItemShadowBalance,
+  normalizeStructuredOrderItem,
+} from '../../utils/itemFulfillment';
 
 interface RouteOrderInfo {
   id: string;
@@ -69,6 +88,19 @@ interface DeliveryPhotoRow {
 }
 
 interface WithdrawalInfo extends OrderWithdrawal {}
+
+interface ReturnEventInfo extends OrderReturn {
+  pickup_route?: {
+    id: string;
+    name?: string | null;
+    route_code?: string | null;
+    status?: string | null;
+  } | null;
+  pickup_order?: {
+    id: string;
+    order_id_erp?: string | null;
+  } | null;
+}
 
 // Legacy only: older customer pickups were represented by routes named "RETIRADA...".
 // The current pickup workflow reads from order_withdrawals.
@@ -164,22 +196,30 @@ export default function OrderLookup() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
   const [routeOrders, setRouteOrders] = useState<RouteOrderInfo[]>([]);
-  const [withdrawal, setWithdrawal] = useState<WithdrawalInfo | null>(null);
+  const [withdrawals, setWithdrawals] = useState<WithdrawalInfo[]>([]);
+  const withdrawal = useMemo(() => (withdrawals.length > 0 ? withdrawals[0] : null), [withdrawals]);
+  const [pickedUpHolds, setPickedUpHolds] = useState<OrderItemHold[]>([]);
   const [storeReleaseAssignments, setStoreReleaseAssignments] = useState<StoreReleaseAssignment[]>([]);
   const [storeReleaseHistory, setStoreReleaseHistory] = useState<StoreReleaseHistory[]>([]);
   const [storeReleaseUserNames, setStoreReleaseUserNames] = useState<Record<string, string>>({});
+  const [itemFulfillmentControl, setItemFulfillmentControl] = useState<ItemFulfillmentControl>(DEFAULT_ITEM_FULFILLMENT_CONTROL);
+  const [structuredItems, setStructuredItems] = useState<StructuredOrderItem[]>([]);
+  const [shadowBalances, setShadowBalances] = useState<OrderItemShadowBalance[]>([]);
+  const [returnEvents, setReturnEvents] = useState<ReturnEventInfo[]>([]);
   const [assemblies, setAssemblies] = useState<AssemblyInfo[]>([]);
   const [deliveryReceiptsByRouteOrder, setDeliveryReceiptsByRouteOrder] = useState<Record<string, DeliveryReceiptInfo>>({});
   const [deliveryReceiptUserNames, setDeliveryReceiptUserNames] = useState<Record<string, string>>({});
   const [proofPdfLoadingByRouteOrder, setProofPdfLoadingByRouteOrder] = useState<Record<string, boolean>>({});
   const [showObservations, setShowObservations] = useState(false);
-  const [withdrawalActionLoading, setWithdrawalActionLoading] = useState<'receipt' | 'danfe' | 'return_danfe' | null>(null);
+  const [showOriginalImportedItems, setShowOriginalImportedItems] = useState(false);
+  const [withdrawalActionLoading, setWithdrawalActionLoading] = useState<string | null>(null);
   const searchSequenceRef = useRef(0);
   const suggestionSequenceRef = useRef(0);
 
   // Check if user is consultor to hide certain elements
   const { user, logout } = useAuthStore();
   const isConsultor = user?.role === 'consultor';
+  const showTechnicalDiagnostics = user?.role === 'admin';
 
   const handleLogout = async () => {
     await logout();
@@ -302,10 +342,15 @@ export default function OrderLookup() {
   const clearSelectedOrderData = () => {
     setSelectedOrder(null);
     setRouteOrders([]);
-    setWithdrawal(null);
+    setWithdrawals([]);
+    setPickedUpHolds([]);
     setStoreReleaseAssignments([]);
     setStoreReleaseHistory([]);
     setStoreReleaseUserNames({});
+    setItemFulfillmentControl(DEFAULT_ITEM_FULFILLMENT_CONTROL);
+    setStructuredItems([]);
+    setShadowBalances([]);
+    setReturnEvents([]);
     setAssemblies([]);
     setDeliveryReceiptsByRouteOrder({});
     setDeliveryReceiptUserNames({});
@@ -442,63 +487,21 @@ export default function OrderLookup() {
     return '';
   };
 
-  const reprintWithdrawalReceipt = async () => {
-    if (!selectedOrder || !withdrawal) return;
+  const reprintWithdrawalReceipt = async (w: WithdrawalInfo) => {
+    if (!selectedOrder || !w) return;
 
     try {
-      setWithdrawalActionLoading('receipt');
-      const routeId = `withdrawal-${withdrawal.id}`;
-      const routeName = `RETIRADA - ${new Date(withdrawal.withdrawn_at || new Date().toISOString()).toLocaleDateString('pt-BR')}`;
-      const routeOrder = {
-        id: withdrawal.id,
-        route_id: routeId,
-        order_id: String(selectedOrder.id),
-        sequence: 1,
-        status: 'delivered',
-        delivered_at: withdrawal.withdrawn_at || new Date().toISOString(),
-        delivery_observations: withdrawal.notes || `Conferente: ${withdrawal.responsible_name || '-'}`,
-      } as any;
-
-      const mappedOrder = mapOrderToPickupSheetOrder(selectedOrder, routeOrder);
-      const pdfBytes = await DeliverySheetGenerator.generateDeliverySheet({
-        route: {
-          id: routeId,
-          name: routeName,
-          route_code: `RET-${String(withdrawal.id).slice(0, 8).toUpperCase()}`,
-          driver_id: '',
-          vehicle_id: '',
-          conferente: withdrawal.registered_by_name || user?.name || user?.email || 'Não informado',
-          observations: `Conferente: ${withdrawal.responsible_name}${withdrawal.notes ? `\nObs: ${withdrawal.notes}` : ''}`,
-          status: 'completed',
-          created_at: withdrawal.created_at,
-          updated_at: withdrawal.updated_at,
-          completed_at: withdrawal.withdrawn_at,
-        } as any,
-        routeOrders: [routeOrder],
-        driver: {
-          id: 'withdrawal',
-          user_id: '',
-          cpf: '',
-          active: true,
-          user: {
-            id: '',
-            email: '',
-            name: 'Retirada pelo cliente',
-            role: 'driver',
-            active: true,
-            created_at: withdrawal.created_at,
-          },
-        } as any,
-        orders: [mappedOrder],
-        generatedAt: new Date().toISOString(),
-        teamName: 'Retirada pelo cliente',
-        helperName: withdrawal.responsible_name,
-        pickupResponsibleName: withdrawal.responsible_name,
-        pickupRegisteredByName: withdrawal.registered_by_name || user?.name || user?.email || '-',
-        pickupWithdrawnAt: withdrawal.withdrawn_at,
-        pickupObservations: withdrawal.notes || '',
-      }, 'Comprovante de Retirada');
-
+      setWithdrawalActionLoading(`${w.id}:receipt`);
+      // Usa os itens efetivamente retirados NESTA retirada (snapshot). Só cai pro pedido
+      // inteiro quando é retirada total/legado (items nulo).
+      const snapshot = (w as any).items;
+      const items = Array.isArray(snapshot) && snapshot.length > 0
+        ? snapshot
+        : (Array.isArray(selectedOrder.items_json) ? selectedOrder.items_json : []);
+      const pdfBytes = await buildPickupReceiptPdf(
+        [{ order: selectedOrder, items, withdrawal: w as any }],
+        { conferenteName: w.registered_by_name || user?.name || user?.email || '-' }
+      );
       DeliverySheetGenerator.openPDFInNewTab(pdfBytes);
       toast.success('Comprovante de retirada reimpresso com sucesso!');
     } catch (error) {
@@ -509,11 +512,11 @@ export default function OrderLookup() {
     }
   };
 
-  const reprintWithdrawalDanfe = async () => {
-    if (!selectedOrder || !withdrawal) return;
+  const reprintWithdrawalDanfe = async (w: WithdrawalInfo) => {
+    if (!selectedOrder || !w) return;
 
     try {
-      setWithdrawalActionLoading('danfe');
+      setWithdrawalActionLoading(`${w.id}:danfe`);
       const { data: orderData, error } = await supabase
         .from('orders')
         .select('danfe_base64')
@@ -571,17 +574,23 @@ export default function OrderLookup() {
     DeliverySheetGenerator.openPDFInNewTab(out);
   };
 
-  const reprintReturnDanfe = async () => {
+  const reprintReturnDanfe = async (returnEvent: ReturnEventInfo) => {
     if (!selectedOrder) return;
 
+    const pickupOrderId = String(returnEvent.pickup_order_id || '').trim();
+    const documentOrderId = pickupOrderId || selectedOrder.id;
+    const returnNfeNumber = String(returnEvent.return_nfe_number || '').trim();
+
+    const loadingKey = `return_danfe:${returnEvent.id}`;
+
     try {
-      setWithdrawalActionLoading('return_danfe');
+      setWithdrawalActionLoading(loadingKey);
 
       const fetchReturnDanfeState = async () => {
         const { data, error } = await supabase
           .from('orders')
           .select('return_danfe_base64, return_nfe_xml, return_nfe_number')
-          .eq('id', selectedOrder.id)
+          .eq('id', documentOrderId)
           .single();
 
         if (error) throw error;
@@ -590,8 +599,17 @@ export default function OrderLookup() {
 
       let orderData = await fetchReturnDanfeState();
 
-      let base64 = String(orderData?.return_danfe_base64 || '');
-      const xml = String(orderData?.return_nfe_xml || '');
+      const cachedDocumentMatchesEvent = Boolean(pickupOrderId)
+        || !returnNfeNumber
+        || String(orderData?.return_nfe_number || '').trim() === returnNfeNumber;
+      let base64 = cachedDocumentMatchesEvent
+        ? String(orderData?.return_danfe_base64 || '')
+        : '';
+      const xml = String(
+        returnEvent.return_xml
+        || (cachedDocumentMatchesEvent ? orderData?.return_nfe_xml : '')
+        || ''
+      );
 
       if (base64.startsWith('JVBER')) {
         await openBase64Pdf(base64);
@@ -601,7 +619,7 @@ export default function OrderLookup() {
 
       if (!base64.startsWith('JVBER')) {
         if (!xml) {
-          toast.error('A nota de devolução ainda não foi gerada para este pedido.');
+          toast.error('O XML desta nota de devolução não está disponível. Em testes simulados apenas com número de NF não é possível gerar o PDF fiscal.');
           return;
         }
 
@@ -610,10 +628,12 @@ export default function OrderLookup() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            route_id: `DEVOLUCAO-${selectedOrder.order_id_erp || selectedOrder.id}`,
+            route_id: returnEvent.pickup_route?.route_code
+              || returnEvent.pickup_route?.name
+              || `DEVOLUCAO-${returnEvent.id}`,
             documentos: [{
-              order_id: selectedOrder.id,
-              numero: orderData?.return_nfe_number || selectedOrder.order_id_erp || selectedOrder.id,
+              order_id: documentOrderId,
+              numero: returnNfeNumber || orderData?.return_nfe_number || documentOrderId,
               xml,
             }],
             count: 1,
@@ -625,9 +645,29 @@ export default function OrderLookup() {
           throw new Error(`Erro ao gerar DANFE de devolução: ${response.status}`);
         }
 
+        // Alguns webhooks devolvem o PDF imediatamente. Isso permite imprimir
+        // eventos sem coleta sem depender do campo consolidado do pedido.
+        try {
+          const payload = await response.clone().json();
+          const payloadItems = Array.isArray(payload) ? payload : [payload];
+          const matchingDocument = Array.isArray(payload?.documentos)
+            ? payload.documentos.find((entry: any) => String(entry?.order_id) === documentOrderId)
+            : null;
+          const responseBase64 = String(
+            payloadItems[0]?.pdf_base64
+            || payload?.data
+            || matchingDocument?.data
+            || matchingDocument?.pdf_base64
+            || ''
+          );
+          if (responseBase64.startsWith('JVBER')) {
+            base64 = responseBase64;
+          }
+        } catch { }
+
         // O webhook persiste o PDF no banco. Após a chamada, reconsulta o pedido
         // em pequenas tentativas para abrir a versão gravada, sem depender do body HTTP.
-        for (let attempt = 0; attempt < 3; attempt += 1) {
+        for (let attempt = 0; attempt < 3 && !base64.startsWith('JVBER'); attempt += 1) {
           if (attempt > 0) {
             await new Promise((resolve) => setTimeout(resolve, 500));
           }
@@ -646,7 +686,7 @@ export default function OrderLookup() {
       }
 
       await openBase64Pdf(base64);
-      toast.success('Nota de devolução aberta com sucesso!');
+      toast.success(`Nota de devolução ${returnEvent.return_nfe_number || ''} aberta com sucesso!`.replace('  ', ' '));
     } catch (error) {
       console.error(error);
       toast.error('Erro ao imprimir nota de devolução');
@@ -660,7 +700,8 @@ export default function OrderLookup() {
       if (!selectedOrder) return;
       try {
         setLoading(true);
-        setWithdrawal(null);
+        setWithdrawals([]);
+        setPickedUpHolds([]);
         // Query com vehicle via join (igual RouteCreation)
         const selectRouteOrder = '*, route:routes(*, route_code, vehicle:vehicles!vehicle_id(id, model, plate)), order:orders(id, order_id_erp)';
 
@@ -694,15 +735,59 @@ export default function OrderLookup() {
 
         // Enriquecer com driver (mesma lógica do RouteCreation.tsx)
         const [
+          { data: itemFulfillmentControlData },
+          { data: structuredItemsData, error: structuredItemsError },
+          { data: shadowBalancesData, error: shadowBalancesError },
+          { data: returnEventsData, error: returnEventsError },
           { data: withdrawalData, error: withdrawalError },
           { data: releaseAssignmentsData, error: releaseAssignmentsError },
           { data: releaseHistoryData, error: releaseHistoryError },
         ] = await Promise.all([
           supabase
+            .from('app_settings')
+            .select('value')
+            .eq('key', 'item_fulfillment_control')
+            .maybeSingle(),
+          supabase
+            .from('order_items')
+            .select('*')
+            .eq('order_id', selectedOrder.id)
+            .order('created_at'),
+          supabase
+            .from('order_item_shadow_balances')
+            .select('*')
+            .eq('order_id', selectedOrder.id)
+            .order('product_name'),
+          supabase
+            .from('order_returns')
+            .select(`
+              id,
+              order_id,
+              external_key,
+              return_nfe_number,
+              return_nfe_key,
+              return_date,
+              return_type,
+              return_xml,
+              reason,
+              processing_status,
+              processing_notes,
+              requires_pickup,
+              pickup_created_at,
+              pickup_order_id,
+              pickup_route_id,
+              created_at,
+              updated_at
+            `)
+            .eq('order_id', selectedOrder.id)
+            .eq('processing_status', 'processed')
+            .order('return_date', { ascending: false })
+            .order('created_at', { ascending: false }),
+          supabase
             .from('order_withdrawals')
             .select('*')
             .eq('order_id', selectedOrder.id)
-            .maybeSingle(),
+            .order('withdrawn_at', { ascending: false }),
           supabase
             .from('store_release_assignments')
             .select('*')
@@ -715,10 +800,25 @@ export default function OrderLookup() {
             .order('acted_at', { ascending: false })
             .limit(10),
         ]);
+        if (structuredItemsError) throw structuredItemsError;
+        if (shadowBalancesError) throw shadowBalancesError;
+        if (returnEventsError) throw returnEventsError;
         if (withdrawalError) throw withdrawalError;
         if (releaseAssignmentsError) throw releaseAssignmentsError;
         if (releaseHistoryError) throw releaseHistoryError;
-        setWithdrawal((withdrawalData || null) as WithdrawalInfo | null);
+        setItemFulfillmentControl(normalizeItemFulfillmentControl((itemFulfillmentControlData as any)?.value));
+        setStructuredItems((structuredItemsData || []).map(normalizeStructuredOrderItem));
+        setShadowBalances((shadowBalancesData || []).map(normalizeOrderItemShadowBalance));
+        setWithdrawals((withdrawalData || []) as WithdrawalInfo[]);
+
+        // Itens retirados pelo cliente (picked_up) — pra mostrar a situação real por item.
+        const { data: pickedUpData } = await supabase
+          .from('order_item_holds')
+          .select('*')
+          .eq('order_id', selectedOrder.id)
+          .eq('status', 'picked_up');
+        setPickedUpHolds((pickedUpData || []) as OrderItemHold[]);
+
         setStoreReleaseAssignments((releaseAssignmentsData || []) as StoreReleaseAssignment[]);
         setStoreReleaseHistory((releaseHistoryData || []) as StoreReleaseHistory[]);
 
@@ -733,6 +833,61 @@ export default function OrderLookup() {
         } else {
           setStoreReleaseUserNames({});
         }
+
+        const rawReturnEvents = (returnEventsData || []) as OrderReturn[];
+        const pickupRouteIds = Array.from(new Set(rawReturnEvents.map((item) => String(item.pickup_route_id || '').trim()).filter(Boolean)));
+        const pickupOrderIds = Array.from(new Set(rawReturnEvents.map((item) => String(item.pickup_order_id || '').trim()).filter(Boolean)));
+
+        let pickupRoutesMap: Record<string, ReturnEventInfo['pickup_route']> = {};
+        let pickupOrdersMap: Record<string, ReturnEventInfo['pickup_order']> = {};
+
+        if (pickupRouteIds.length > 0) {
+          const { data: pickupRoutesData, error: pickupRoutesError } = await supabase
+            .from('routes')
+            .select('id,name,route_code,status')
+            .in('id', pickupRouteIds);
+
+          if (pickupRoutesError) throw pickupRoutesError;
+
+          pickupRoutesMap = Object.fromEntries(
+            (pickupRoutesData || []).map((route: any) => [
+              String(route.id),
+              {
+                id: String(route.id),
+                name: route.name || null,
+                route_code: route.route_code || null,
+                status: route.status || null,
+              },
+            ]),
+          );
+        }
+
+        if (pickupOrderIds.length > 0) {
+          const { data: pickupOrdersData, error: pickupOrdersError } = await supabase
+            .from('orders')
+            .select('id,order_id_erp')
+            .in('id', pickupOrderIds);
+
+          if (pickupOrdersError) throw pickupOrdersError;
+
+          pickupOrdersMap = Object.fromEntries(
+            (pickupOrdersData || []).map((order: any) => [
+              String(order.id),
+              {
+                id: String(order.id),
+                order_id_erp: order.order_id_erp || null,
+              },
+            ]),
+          );
+        }
+
+        setReturnEvents(
+          rawReturnEvents.map((item) => ({
+            ...item,
+            pickup_route: item.pickup_route_id ? pickupRoutesMap[String(item.pickup_route_id)] || null : null,
+            pickup_order: item.pickup_order_id ? pickupOrdersMap[String(item.pickup_order_id)] || null : null,
+          })),
+        );
 
         if (roData && roData.length > 0) {
           const driverIds = Array.from(new Set((roData as any[]).map((ro: any) => ro.route?.driver_id).filter(Boolean)));
@@ -931,17 +1086,18 @@ export default function OrderLookup() {
   // Etapa do processo (exibida no cabeçalho do card)
   const processStage = useMemo(() => {
     if (withdrawal) return 'withdrawn';
-    if (isBlockedReturnOrder(selectedOrder)) return 'blocked_return';
-    if (isBlockedOrder(selectedOrder)) return 'blocked';
+    if (isBlockedOrder(selectedOrder) && !isBlockedReturnOrder(selectedOrder)) return 'blocked';
     const latestRO = routeOrders[0];
     const routeStatus = latestRO?.route?.status;
 
     if (!latestRO) return 'imported'; // Nenhuma rota atribuída
+    if (latestRO.status === 'returned') return 'returned';
+    if (latestRO.status === 'delivered') return 'delivered';
     if (routeStatus === 'in_progress') return 'in_route'; // Rota em andamento
     if (routeStatus === 'pending' || routeStatus === 'assigned') return 'separating'; // Em separação
     if (routeStatus === 'completed') return 'completed'; // Rota finalizada
     return 'imported';
-  }, [routeOrders, withdrawal]);
+  }, [routeOrders, selectedOrder, withdrawal]);
 
   // Status específico do pedido (exibido dentro do card da rota)
   const derivedStatus = useMemo(() => {
@@ -1054,6 +1210,100 @@ export default function OrderLookup() {
 
   function isBlockedOrder(order: Order | null) {
     return Boolean(order?.blocked_at);
+  }
+
+  const returnScopeSummary = useMemo(() => {
+    const returnedItemsCount = shadowBalances.filter((item) => item.returned_quantity > 0).length;
+    const availableItemsCount = shadowBalances.filter((item) => item.shadow_deliverable_quantity > 0).length;
+    const fullyReturnedItemsCount = shadowBalances.filter(isFullyReturnedBalance).length;
+
+    const hasReturnedItems = returnedItemsCount > 0;
+    const isTotalReturn = hasReturnedItems && availableItemsCount === 0;
+    const isPartialReturn = hasReturnedItems && availableItemsCount > 0;
+
+    return {
+      returnedItemsCount,
+      availableItemsCount,
+      fullyReturnedItemsCount,
+      hasReturnedItems,
+      isTotalReturn,
+      isPartialReturn,
+      label: isTotalReturn ? 'Devolução total' : 'Devolução parcial',
+    };
+  }, [shadowBalances]);
+
+  const pendingPickupReturnEvents = useMemo(
+    () => returnEvents.filter((item) => item.requires_pickup && !item.pickup_created_at),
+    [returnEvents],
+  );
+
+  const pickupCreatedReturnEvents = useMemo(
+    () => returnEvents.filter((item) => item.pickup_created_at && item.pickup_route_id),
+    [returnEvents],
+  );
+
+  const latestProcessedReturn = useMemo(() => returnEvents[0] || null, [returnEvents]);
+
+  const uniquePickupRoutes = useMemo(() => {
+    const byRouteId = new Map<string, NonNullable<ReturnEventInfo['pickup_route']>>();
+    pickupCreatedReturnEvents.forEach((item) => {
+      const route = item.pickup_route;
+      if (route?.id && !byRouteId.has(route.id)) {
+        byRouteId.set(route.id, route);
+      }
+    });
+    return Array.from(byRouteId.values());
+  }, [pickupCreatedReturnEvents]);
+
+  const openAdminRouteDetails = (routeId?: string | null) => {
+    if (!routeId) return;
+    try {
+      localStorage.setItem('rc_selectedRouteId', String(routeId));
+      localStorage.setItem('rc_showRouteModal', '1');
+      window.open('/admin/routes', '_blank');
+    } catch { }
+  };
+
+  function getReturnFlowSummary(order: Order | null) {
+    if (!order?.return_flag && !order?.blocked_at && !returnScopeSummary.hasReturnedItems) return null;
+
+    const normalizedType = String(order?.return_type || '').trim().toLowerCase();
+    const fallbackIsPartial = normalizedType === 'partial' || normalizedType === 'parcial';
+    const fallbackIsTotal = normalizedType === 'total';
+    const isTotal = returnScopeSummary.hasReturnedItems ? returnScopeSummary.isTotalReturn : fallbackIsTotal;
+    const isPartial = returnScopeSummary.hasReturnedItems ? returnScopeSummary.isPartialReturn : (fallbackIsPartial || !fallbackIsTotal);
+    const awaitingPickup = pendingPickupReturnEvents.length > 0;
+    const pickupCreated = uniquePickupRoutes.length > 0;
+
+    const scopeLabel = isTotal ? 'Devolução total' : (isPartial ? 'Devolução parcial' : 'Devolução registrada');
+
+    if (awaitingPickup) {
+      return {
+        badge: scopeLabel,
+        stage: `${scopeLabel} aguardando coleta`,
+        helper: isTotal
+          ? 'Todos os produtos deste pedido já foram devolvidos e agora aguardam coleta.'
+          : 'Parte dos produtos foi devolvida e os itens devolvidos aguardam coleta.',
+      };
+    }
+
+    if (pickupCreated) {
+      return {
+        badge: scopeLabel,
+        stage: `${scopeLabel} com coleta gerada`,
+        helper: uniquePickupRoutes.length > 1
+          ? `A devolução foi registrada e ${uniquePickupRoutes.length} coletas já foram criadas para este pedido.`
+          : 'A devolução foi registrada e a coleta já foi criada.',
+      };
+    }
+
+    return {
+      badge: scopeLabel,
+      stage: scopeLabel,
+      helper: isTotal
+        ? 'Todos os produtos deste pedido já foram devolvidos.'
+        : 'O pedido possui produtos devolvidos e o histórico da entrega segue preservado.',
+    };
   }
   const parseAssemblyReturnDetails = (assembly: AssemblyInfo) => {
     const directReason = normalizeReturnReason(assembly.return_reason);
@@ -1270,7 +1520,7 @@ export default function OrderLookup() {
     delivered: 'Entregue',
     returned: 'Retornado',
     blocked: 'Bloqueado',
-    blocked_return: 'Bloqueado por devolução',
+    blocked_return: 'Devolução registrada',
     pickup: 'Retirado pelo cliente',
   };
 
@@ -1286,24 +1536,14 @@ export default function OrderLookup() {
 
   // Labels para etapa do processo (cabeçalho do card)
   const processStageLabel: Record<string, string> = {
-    imported: 'Pedido Importado do ERP',
-    separating: 'Em Separação',
+    imported: 'Aguardando rota',
+    separating: 'Aguardando início',
     in_route: 'Em Rota',
     completed: 'Rota Finalizada',
     blocked: 'Bloqueado no ERP',
-    blocked_return: 'Bloqueado por devolução',
+    returned: 'Retornado',
+    delivered: 'Entregue',
     withdrawn: 'Retirado pelo cliente',
-  };
-
-  // Cores/estilos para cada etapa do processo
-  const processStageStyle: Record<string, string> = {
-    imported: 'text-gray-600',
-    separating: 'text-orange-600',
-    in_route: 'text-blue-600',
-    completed: 'text-green-600',
-    blocked: 'text-orange-700',
-    blocked_return: 'text-red-700',
-    withdrawn: 'text-purple-600',
   };
 
   // Labels para status específico do pedido (dentro do card)
@@ -1313,14 +1553,54 @@ export default function OrderLookup() {
     delivered: 'Entregue',
     returned: 'Retornado',
     blocked: 'Bloqueado',
-    blocked_return: 'Bloqueado por devolução',
+    blocked_return: 'Devolução registrada',
     pickup: 'Retirado pelo cliente',
   };
+
+  const shadowModeActive = itemFulfillmentControl.mode !== 'off';
+  const showShadowItemsPanel = shadowModeActive && (structuredItems.length > 0 || shadowBalances.length > 0);
+  const shadowBalanceByLineKey = shadowBalances.reduce<Record<string, OrderItemShadowBalance>>((acc, item) => {
+    acc[item.source_line_key] = item;
+    return acc;
+  }, {});
+
+  // Situação real do pedido por item: retirado / entregue / devolvido / pendente.
+  const isItemPickedUp = (item: { source_line_key?: string; sku?: string | null; storage_location?: string | null }) =>
+    pickedUpHolds.some((h) => pickupHoldMatchesItem(h, {
+      source_line_key: item.source_line_key,
+      sku: item.sku,
+      location: item.storage_location,
+      storage_location: item.storage_location,
+    }));
+  const itemStates = structuredItems.map((it) => {
+    const s = shadowBalanceByLineKey[it.source_line_key];
+    const pk = isItemPickedUp(it);
+    const remaining = s?.remaining_deliverable_quantity ?? (s?.shadow_deliverable_quantity ?? it.purchased_quantity);
+    const delivered = !pk && (s?.delivered_quantity ?? 0) > 0 && remaining <= 0;
+    const returned = !pk && !delivered && (s?.returned_quantity ?? 0) > 0 && remaining <= 0;
+    const pending = !pk && !delivered && !returned && remaining > 0;
+    return { pk, delivered, returned, pending };
+  });
+  const totalStructuredItems = structuredItems.length;
+  const pickedUpItemCount = itemStates.filter((s) => s.pk).length;
+  const deliveredItemCount = itemStates.filter((s) => s.delivered).length;
+  const pendingItemCount = itemStates.filter((s) => s.pending).length;
+  const hasAnyPickup = Boolean(withdrawal) || pickedUpItemCount > 0;
+  const allResolved = totalStructuredItems > 0 && pendingItemCount === 0;
+  const isPartialPickup = hasAnyPickup && !allResolved;
+  const entregaHeaderLabel = (() => {
+    if (!hasAnyPickup) return processStageLabel[processStage] || 'Pedido Importado do ERP';
+    if (isPartialPickup) return 'Retirado parcialmente';
+    if (deliveredItemCount > 0) return 'Concluído (retirado + entregue)';
+    return 'Retirado pelo cliente';
+  })();
+  const shouldShowLegacyItemsList = !showShadowItemsPanel || showOriginalImportedItems;
+  const returnFlowSummary = getReturnFlowSummary(selectedOrder);
 
   return (
     <div className="w-full">
       <main className="w-full p-4 sm:p-6 lg:p-8 space-y-6">
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5 flex flex-col gap-4">
+        <div className="bg-white rounded-xl border border-gray-200 p-5 flex flex-col gap-4">
           {isConsultor && (
             <div className="flex justify-end">
               <button
@@ -1391,7 +1671,7 @@ export default function OrderLookup() {
         {selectedOrder && (
           <div className="space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm">
+              <div className="bg-white rounded-xl border border-gray-200 p-4">
                 <p className="text-xs font-semibold text-gray-500 uppercase">Pedido</p>
                 <div className="flex items-center gap-2">
                   <p className="text-lg font-bold text-gray-900">{selectedOrder.order_id_erp}</p>
@@ -1460,12 +1740,15 @@ export default function OrderLookup() {
                   <span>{selectedOrder.address_json?.street}, {selectedOrder.address_json?.neighborhood} - {selectedOrder.address_json?.city}</span>
                 </div>
                 <div className="mt-3 flex gap-2 flex-wrap text-xs">
-                  {selectedOrder.return_flag && (
+                  {/* Só mostra "Devolução" se houve devolução REAL. Um pedido todo resolvido
+                      (retirado + entregue) sem devolução não deve exibir a tag, mesmo que
+                      um return_flag antigo tenha ficado gravado. */}
+                  {returnFlowSummary?.badge && !(allResolved && !returnScopeSummary.hasReturnedItems) && (
                     <span className="px-2 py-1 rounded-full bg-red-100 text-red-700 border border-red-200 flex items-center gap-1">
-                      <AlertTriangle className="h-3 w-3" /> Retornado
+                      <AlertTriangle className="h-3 w-3" /> {returnFlowSummary.badge}
                     </span>
                   )}
-                  {selectedOrder.blocked_at && (
+                  {selectedOrder.blocked_at && !returnFlowSummary && (
                     <span className="px-2 py-1 rounded-full bg-orange-100 text-orange-700 border border-orange-200 flex items-center gap-1">
                       <AlertTriangle className="h-3 w-3" /> {isBlockedReturnOrder(selectedOrder) ? 'Bloqueado por devolução' : 'Bloqueado no ERP'}
                     </span>
@@ -1486,13 +1769,13 @@ export default function OrderLookup() {
                     return (
                       <>
                         {prevEntrega && (
-                          <span className="px-2 py-1 rounded-full bg-blue-50 text-blue-700 border border-blue-200" title="Previsão de Entrega">
+                          <span className="px-2 py-1 rounded-full bg-gray-50 text-gray-600 border border-gray-200" title="Previsão de Entrega">
                             Prev. Entrega: {formatDate(prevEntrega)}
                           </span>
                         )}
 
                         {prevMontagem ? (
-                          <span className="px-2 py-1 rounded-full bg-purple-50 text-purple-700 border border-purple-200" title="Previsão Final com Montagem">
+                          <span className="px-2 py-1 rounded-full bg-gray-50 text-gray-600 border border-gray-200" title="Previsão Final com Montagem">
                             Prev. Montagem: {formatDate(prevMontagem)}
                           </span>
                         ) : (
@@ -1544,94 +1827,95 @@ export default function OrderLookup() {
                 })()}
               </div>
 
-              <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm">
+              <div className="bg-white rounded-xl border border-gray-200 p-4">
                 <div className="flex items-center gap-2 mb-2">
-                  <Truck className={`h-5 w-5 ${processStageStyle[processStage] || 'text-blue-600'}`} />
+                  <Truck className="h-5 w-5 text-gray-500" />
                   <div>
                     <p className="text-xs font-semibold text-gray-500 uppercase">Entrega</p>
-                    <p className={`text-sm font-bold capitalize ${processStageStyle[processStage] || 'text-gray-900'}`}>
-                      {processStageLabel[processStage] || 'Pedido Importado do ERP'}
+                    <p className="text-sm font-bold capitalize text-gray-900">
+                      {entregaHeaderLabel}
                     </p>
                   </div>
                 </div>
                 {/* ... Delivery Card Logic ... */}
-                {withdrawal ? (
-                  <div className="rounded-lg border border-purple-200 bg-purple-50 p-4 space-y-2">
-                    <p className="text-xs text-purple-800">
-                      <span className="font-semibold">Conferente:</span> {withdrawal.responsible_name || '-'}
-                    </p>
-                    <p className="text-xs text-purple-800">
-                      <span className="font-semibold">Data:</span> {formatDateTime(withdrawal.withdrawn_at)}
-                    </p>
-                    <p className="text-xs text-purple-800">
-                      <span className="font-semibold">Registrado por:</span> {withdrawal.registered_by_name || withdrawal.registered_by_user_id || '-'}
-                    </p>
-                    {withdrawal.source !== 'legacy_route' && (() => {
-                      const normalizedNotes = normalizeWithdrawalNotes(withdrawal.notes);
-                      if (!normalizedNotes) return null;
-                      return (
-                        <p className="text-xs text-purple-800">
-                          <span className="font-semibold">Obs.:</span> {normalizedNotes}
-                        </p>
-                      );
-                    })()}
-                    {withdrawal.source === 'legacy_route' && (
-                      <p className="text-[11px] text-purple-700">
-                        Origem: fluxo legado de retirada.
+                {withdrawals.length > 0 && (
+                  <div className="mb-3 space-y-3">
+                    {pickedUpItemCount < totalStructuredItems && (
+                      <p className="rounded-md bg-purple-100 px-2 py-1.5 text-xs font-semibold text-purple-900">
+                        Retirada parcial: {pickedUpItemCount} de {totalStructuredItems} itens retirados
+                        {deliveredItemCount > 0 ? `; ${deliveredItemCount} entregue(s)` : ''}
+                        {pendingItemCount > 0 ? `; ${pendingItemCount} pendente(s)` : ''}.
+                        {allResolved ? ' Pedido concluído.' : ' O restante segue no fluxo normal (rota/entrega).'}
                       </p>
                     )}
-                    <div className="pt-2 flex flex-wrap gap-2">
-                      <button
-                        type="button"
-                        onClick={reprintWithdrawalReceipt}
-                        disabled={withdrawalActionLoading !== null}
-                        className="inline-flex items-center rounded-lg border border-purple-200 bg-white px-3 py-2 text-xs font-semibold text-purple-700 transition-colors hover:bg-purple-100 disabled:opacity-60 disabled:cursor-not-allowed"
-                      >
-                        {withdrawalActionLoading === 'receipt' ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <FileText className="mr-2 h-3.5 w-3.5" />}
-                        Reimprimir comprovante
-                      </button>
-                      <button
-                        type="button"
-                        onClick={reprintWithdrawalDanfe}
-                        disabled={withdrawalActionLoading !== null}
-                        className="inline-flex items-center rounded-lg border border-purple-200 bg-white px-3 py-2 text-xs font-semibold text-purple-700 transition-colors hover:bg-purple-100 disabled:opacity-60 disabled:cursor-not-allowed"
-                      >
-                        {withdrawalActionLoading === 'danfe' ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <FileSpreadsheet className="mr-2 h-3.5 w-3.5" />}
-                        Reimprimir nota fiscal
-                      </button>
-                    </div>
+                    {withdrawals.length > 1 && (
+                      <p className="text-xs font-semibold text-purple-900">
+                        {withdrawals.length} retiradas registradas neste pedido (cada uma com seu comprovante).
+                      </p>
+                    )}
+                    {withdrawals.map((w) => {
+                      const normalizedNotes = w.source !== 'legacy_route' ? normalizeWithdrawalNotes(w.notes) : '';
+                      const pickedCount = Array.isArray((w as any).items) ? (w as any).items.length : 0;
+                      return (
+                        <div key={w.id} className="rounded-lg border border-purple-200 bg-purple-50 p-4 space-y-2">
+                          <p className="text-xs text-purple-800">
+                            <span className="font-semibold">Conferente:</span> {w.responsible_name || '-'}
+                          </p>
+                          <p className="text-xs text-purple-800">
+                            <span className="font-semibold">Data:</span> {formatDateTime(w.withdrawn_at)}
+                          </p>
+                          <p className="text-xs text-purple-800">
+                            <span className="font-semibold">Registrado por:</span> {w.registered_by_name || w.registered_by_user_id || '-'}
+                          </p>
+                          {pickedCount > 0 && (
+                            <p className="text-[11px] text-purple-700">
+                              Itens desta retirada: {pickedCount}
+                            </p>
+                          )}
+                          {normalizedNotes && (
+                            <p className="text-xs text-purple-800">
+                              <span className="font-semibold">Obs.:</span> {normalizedNotes}
+                            </p>
+                          )}
+                          {w.source === 'legacy_route' && (
+                            <p className="text-[11px] text-purple-700">Origem: fluxo legado de retirada.</p>
+                          )}
+                          <div className="pt-2 flex flex-wrap gap-2">
+                            <button
+                              type="button"
+                              onClick={() => reprintWithdrawalReceipt(w)}
+                              disabled={withdrawalActionLoading !== null}
+                              className="inline-flex items-center rounded-lg border border-purple-200 bg-white px-3 py-2 text-xs font-semibold text-purple-700 transition-colors hover:bg-purple-100 disabled:opacity-60 disabled:cursor-not-allowed"
+                            >
+                              {withdrawalActionLoading === `${w.id}:receipt` ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <FileText className="mr-2 h-3.5 w-3.5" />}
+                              Reimprimir comprovante
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => reprintWithdrawalDanfe(w)}
+                              disabled={withdrawalActionLoading !== null}
+                              className="inline-flex items-center rounded-lg border border-purple-200 bg-white px-3 py-2 text-xs font-semibold text-purple-700 transition-colors hover:bg-purple-100 disabled:opacity-60 disabled:cursor-not-allowed"
+                            >
+                              {withdrawalActionLoading === `${w.id}:danfe` ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <FileSpreadsheet className="mr-2 h-3.5 w-3.5" />}
+                              Reimprimir nota fiscal
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
-                ) : (
+                )}
+                {(routeOrders.length > 0 || !withdrawal) && (
                   <div className="space-y-3">
-                    {isBlockedOrder(selectedOrder) && (
-                      <div className={`rounded-lg border p-4 space-y-2 ${isBlockedReturnOrder(selectedOrder) ? 'border-red-200 bg-red-50' : 'border-orange-200 bg-orange-50'}`}>
-                        <p className={`text-xs ${isBlockedReturnOrder(selectedOrder) ? 'text-red-800' : 'text-orange-800'}`}>
-                          <span className="font-semibold">Status:</span> {isBlockedReturnOrder(selectedOrder) ? 'Bloqueado por devolução' : 'Bloqueado no ERP'}
-                        </p>
-                        <p className={`text-xs ${isBlockedReturnOrder(selectedOrder) ? 'text-red-800' : 'text-orange-800'}`}>
+                    {isBlockedOrder(selectedOrder) && !isBlockedReturnOrder(selectedOrder) && (
+                      <div className="rounded-lg border border-orange-200 bg-orange-50 p-4 space-y-2">
+                        <p className="text-sm font-semibold text-orange-800">Pedido bloqueado no ERP</p>
+                        <p className="text-xs text-orange-800">
                           <span className="font-semibold">Motivo:</span> {selectedOrder?.blocked_reason || '-'}
                         </p>
-                        <p className={`text-xs ${isBlockedReturnOrder(selectedOrder) ? 'text-red-800' : 'text-orange-800'}`}>
-                          <span className="font-semibold">Data do bloqueio:</span> {selectedOrder?.blocked_at ? formatDateTime(selectedOrder.blocked_at) : '-'}
+                        <p className="text-xs text-orange-800">
+                          <span className="font-semibold">Data do registro:</span> {selectedOrder?.blocked_at ? formatDateTime(selectedOrder.blocked_at) : '-'}
                         </p>
-                        {isBlockedReturnOrder(selectedOrder) && (
-                          <>
-                            <p className="text-xs text-red-800">
-                              <span className="font-semibold">NF de devolução:</span> {selectedOrder?.return_nfe_number || '-'}
-                            </p>
-                            <div className="pt-2 flex flex-wrap gap-2">
-                              <button
-                                type="button"
-                                onClick={reprintReturnDanfe}
-                                disabled={withdrawalActionLoading !== null}
-                                className="inline-flex items-center rounded-lg border border-red-200 bg-white px-3 py-2 text-xs font-semibold text-red-700 transition-colors hover:bg-red-100 disabled:opacity-60 disabled:cursor-not-allowed"
-                              >
-                                {withdrawalActionLoading === 'return_danfe' ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <FileSpreadsheet className="mr-2 h-3.5 w-3.5" />}
-                                Imprimir nota de devolução
-                              </button>
-                            </div>
-                          </>
-                        )}
                       </div>
                     )}
 
@@ -1664,7 +1948,7 @@ export default function OrderLookup() {
                       const isGeneratingProofPdf = proofPdfLoadingByRouteOrder[ro.id] === true;
 
                       return (
-                        <div key={ro.id} className="border border-gray-100 rounded-lg p-3 relative group hover:border-blue-200 transition-colors">
+                        <div key={ro.id} className="border border-gray-200 rounded-lg p-3 relative group hover:border-gray-300 transition-colors">
                           <div className="flex justify-between items-start">
                             <div>
                               <p className="text-sm font-semibold text-gray-900">{ro.route?.name || 'Rota sem nome'}</p>
@@ -1694,20 +1978,20 @@ export default function OrderLookup() {
                           )}
                           {ro.status === 'returned' && (
                             <div className="flex items-center gap-2 mt-1">
-                              <p className="text-xs text-red-600 font-medium">
+                              <p className="text-xs text-gray-600 font-medium">
                                 Retornado em: {formatDateTime(ro.returned_at || ro.delivered_at || ro.route?.updated_at)}
                               </p>
                             </div>
                           )}
                           {ro.status === 'returned' && (returnReason || returnNotes) && (
-                            <div className="mt-2 p-2 rounded-lg border border-red-200 bg-red-50 space-y-1">
+                            <div className="mt-2 p-2 rounded-lg border border-gray-200 bg-gray-50 space-y-1">
                               {returnReason && (
-                                <p className="text-xs text-red-700">
+                                <p className="text-xs text-gray-700">
                                   <span className="font-semibold">Motivo do retorno:</span> {returnReason}
                                 </p>
                               )}
                               {returnNotes && (
-                                <p className="text-xs text-red-700">
+                                <p className="text-xs text-gray-700">
                                   <span className="font-semibold">Observação:</span> {returnNotes}
                                 </p>
                               )}
@@ -1766,7 +2050,7 @@ export default function OrderLookup() {
                                   type="button"
                                   onClick={() => generateProofPdf(ro, receipt)}
                                   disabled={isGeneratingProofPdf}
-                                  className="text-xs px-2 py-1 rounded border border-emerald-200 text-emerald-700 hover:bg-emerald-50 disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-1"
+                                  className="text-xs px-2 py-1 rounded border border-gray-300 text-gray-700 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-1"
                                 >
                                   {isGeneratingProofPdf ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FileText className="h-3.5 w-3.5" />}
                                   PDF
@@ -1775,7 +2059,7 @@ export default function OrderLookup() {
                                   type="button"
                                   onClick={() => openMapFromReceipt(receipt)}
                                   disabled={!hasGpsPoint}
-                                  className="text-xs px-2 py-1 rounded border border-blue-200 text-blue-700 hover:bg-blue-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                                  className="text-xs px-2 py-1 rounded border border-gray-300 text-gray-700 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
                                 >
                                   Abrir no mapa
                                 </button>
@@ -1790,16 +2074,8 @@ export default function OrderLookup() {
 
                           {!isConsultor && (
                             <button
-                              onClick={() => {
-                                try {
-                                  if (ro.route_id) {
-                                    localStorage.setItem('rc_selectedRouteId', String(ro.route_id));
-                                    localStorage.setItem('rc_showRouteModal', '1');
-                                    window.open('/admin/routes', '_blank');
-                                  }
-                                } catch { }
-                              }}
-                              className="w-full mt-1 text-xs px-2 py-1.5 rounded border border-blue-200 text-blue-700 hover:bg-blue-50 transition-colors flex items-center justify-center gap-1"
+                              onClick={() => openAdminRouteDetails(ro.route_id)}
+                              className="w-full mt-1 text-xs px-2 py-1.5 rounded border border-gray-300 text-gray-700 hover:bg-gray-100 transition-colors flex items-center justify-center gap-1"
                             >
                               Detalhes da rota
                             </button>
@@ -1814,7 +2090,7 @@ export default function OrderLookup() {
               </div>
 
               {(selectedOrder?.requires_store_release || storeReleaseAssignments.length > 0) && (
-                <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm">
+                <div className="bg-white rounded-xl border border-gray-200 p-4">
                   <div className="flex items-center gap-2 mb-2">
                     <Briefcase className="h-5 w-5 text-emerald-600" />
                     <div>
@@ -1870,7 +2146,7 @@ export default function OrderLookup() {
                 </div>
               )}
 
-              <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm">
+              <div className="bg-white rounded-xl border border-gray-200 p-4">
                 <div className="flex items-center gap-2 mb-2">
                   <Hammer className="h-5 w-5 text-purple-600" />
                   <div>
@@ -1968,13 +2244,203 @@ export default function OrderLookup() {
               </div>
             </div>
 
-            <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm">
+            {isBlockedReturnOrder(selectedOrder) && (
+              <div className="rounded-xl border border-gray-200 bg-white p-4">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex items-center gap-2">
+                    <FileSpreadsheet className="h-5 w-5 text-gray-500" />
+                    <div>
+                      <p className="text-xs font-semibold uppercase text-gray-500">Devoluções e coletas</p>
+                      <p className="text-sm font-bold text-gray-900">
+                        {returnFlowSummary?.stage || 'Devolução registrada'}
+                      </p>
+                    </div>
+                  </div>
+                  {returnFlowSummary?.badge && (
+                    <span className="self-start rounded-full border border-red-200 bg-red-50 px-3 py-1 text-xs font-semibold text-red-700 sm:self-auto">
+                      {returnFlowSummary.badge}
+                    </span>
+                  )}
+                </div>
+
+                <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-[minmax(260px,0.8fr)_minmax(0,1.7fr)]">
+                  <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 space-y-2">
+                    {returnFlowSummary?.helper && (
+                      <p className="text-xs text-gray-700">{returnFlowSummary.helper}</p>
+                    )}
+                    <p className="text-xs text-gray-700">
+                      <span className="font-semibold">Motivo:</span> {selectedOrder?.blocked_reason || '-'}
+                    </p>
+                    <p className="text-xs text-gray-700">
+                      <span className="font-semibold">Data do registro:</span> {selectedOrder?.blocked_at ? formatDateTime(selectedOrder.blocked_at) : '-'}
+                    </p>
+                  </div>
+
+                  <div className="space-y-2">
+                    <p className="text-xs font-semibold text-gray-700">Notas e coletas relacionadas</p>
+                    {returnEvents.length > 0 ? returnEvents.map((returnEvent) => {
+                      const route = returnEvent.pickup_route;
+                      const loadingKey = `return_danfe:${returnEvent.id}`;
+                      return (
+                        <div key={returnEvent.id} className="flex flex-wrap items-center gap-2 rounded-lg border border-gray-200 bg-gray-50 p-2.5">
+                          <span className="text-xs text-gray-800">
+                            <span className="font-semibold">NF:</span> {returnEvent.return_nfe_number || '-'}
+                          </span>
+                          {route?.id ? (
+                            <button
+                              type="button"
+                              onClick={() => openAdminRouteDetails(route.id)}
+                              className="inline-flex items-center rounded-full border border-gray-300 bg-white px-3 py-1 text-xs font-semibold text-gray-700 transition-colors hover:bg-gray-100"
+                            >
+                              {route.route_code || route.name || 'Rota de coleta'}
+                            </button>
+                          ) : (
+                            <span className="rounded-full border border-gray-200 bg-white px-3 py-1 text-xs font-medium text-gray-600">
+                              {returnEvent.requires_pickup ? 'Aguardando coleta' : 'Sem coleta'}
+                            </span>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => reprintReturnDanfe(returnEvent)}
+                            disabled={withdrawalActionLoading !== null}
+                            className="inline-flex items-center rounded-lg border border-gray-300 bg-white px-3 py-1 text-xs font-semibold text-gray-700 transition-colors hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            {withdrawalActionLoading === loadingKey
+                              ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                              : <FileSpreadsheet className="mr-2 h-3.5 w-3.5" />}
+                            Imprimir esta nota
+                          </button>
+                        </div>
+                      );
+                    }) : (
+                      <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 text-xs text-gray-700">
+                        <span className="font-semibold">NF de devolução:</span> {latestProcessedReturn?.return_nfe_number || selectedOrder?.return_nfe_number || '-'}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div className="bg-white rounded-xl border border-gray-200 p-4">
               <div className="flex items-center gap-2 mb-3">
                 <FileText className="h-5 w-5 text-gray-600" />
                 <p className="text-sm font-semibold text-gray-700">Itens</p>
               </div>
-              {Array.isArray(selectedOrder.items_json) && selectedOrder.items_json.length > 0 ? (
+
+              {showShadowItemsPanel && (
+                <div className="mb-4 rounded-xl border border-gray-200 bg-gray-50 p-4">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <p className="text-sm font-semibold text-gray-900">Situação dos produtos do pedido</p>
+                      <p className="text-xs text-gray-600">
+                        Aqui você vê o que foi comprado, o que foi devolvido e o que ainda segue válido no pedido.
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="text-xs text-gray-600">
+                        Produtos no pedido: <span className="font-semibold">{structuredItems.length}</span>
+                      </div>
+                      {showTechnicalDiagnostics && (
+                        <button
+                          type="button"
+                          onClick={() => setShowOriginalImportedItems(prev => !prev)}
+                          className="inline-flex items-center gap-1 rounded-full border border-gray-300 bg-white px-3 py-1 text-[11px] font-medium text-gray-700 hover:bg-gray-100 transition-colors"
+                        >
+                          {showOriginalImportedItems ? 'Ocultar lista original' : 'Ver lista original importada'}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="mt-3 space-y-2">
+                    {structuredItems.map((item) => {
+                      const shadow = shadowBalanceByLineKey[item.source_line_key];
+                      const boughtQuantity = item.purchased_quantity;
+                      const returnedQuantity = shadow?.returned_quantity ?? 0;
+                      const availableQuantity = shadow?.shadow_deliverable_quantity ?? boughtQuantity;
+                      const isFullyReturned = returnedQuantity > 0 && availableQuantity <= 0;
+                      const isPartialReturn = returnedQuantity > 0 && availableQuantity > 0;
+                      const pickedUp = isItemPickedUp(item);
+                      const deliveredQuantity = shadow?.delivered_quantity ?? 0;
+                      const remainingQuantity = shadow?.remaining_deliverable_quantity ?? availableQuantity;
+                      const isDelivered = !pickedUp && deliveredQuantity > 0 && remainingQuantity <= 0;
+
+                      return (
+                        <div key={item.id} className="rounded-lg border border-gray-200 bg-white px-3 py-2">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <p className="text-sm font-semibold text-gray-900">{item.product_name}</p>
+                              <div className="mt-1 flex flex-wrap gap-2 text-[11px] text-gray-500">
+                                <span>SKU: {item.sku || '-'}</span>
+                                {showTechnicalDiagnostics && showOriginalImportedItems && (
+                                  <span>Chave técnica: {item.source_line_key}</span>
+                                )}
+                              </div>
+                            </div>
+                            <div className="text-right text-xs text-gray-700">
+                              <p>Comprado: <span className="font-semibold">{boughtQuantity}</span></p>
+                              <p>Volumes: <span className="font-semibold">{item.volume_quantity ?? 0}</span></p>
+                            </div>
+                          </div>
+
+                          <div className="mt-2 flex flex-wrap gap-2 text-xs">
+                            <span className="rounded-full border border-gray-200 bg-gray-50 px-2 py-1 text-gray-700">
+                              Local: {item.storage_location || '-'}
+                            </span>
+                            {item.kit_code && (
+                              <span className="rounded-full border border-gray-200 bg-gray-50 px-2 py-1 text-gray-700">
+                                Kit: {item.kit_code}
+                              </span>
+                            )}
+                            {pickedUp ? (
+                              <span className="rounded-full border border-purple-200 bg-purple-50 px-2 py-1 font-semibold text-purple-700">
+                                Retirado pelo cliente
+                              </span>
+                            ) : isDelivered ? (
+                              <span className="rounded-full border border-green-200 bg-green-50 px-2 py-1 font-semibold text-green-700">
+                                Entregue{deliveredQuantity > 1 ? ` (${deliveredQuantity})` : ''}
+                              </span>
+                            ) : (
+                              <span className="rounded-full border border-gray-200 bg-gray-50 px-2 py-1 text-gray-700">
+                                Saldo disponível: {remainingQuantity}
+                              </span>
+                            )}
+                            <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-1 text-amber-700">
+                              Devolvido: {returnedQuantity}
+                            </span>
+                            {isFullyReturned && (
+                              <span className="rounded-full border border-red-200 bg-red-50 px-2 py-1 text-red-700">
+                                Item devolvido
+                              </span>
+                            )}
+                            {isPartialReturn && (
+                              <span className="rounded-full border border-orange-200 bg-orange-50 px-2 py-1 text-orange-700">
+                                Devolução parcial
+                              </span>
+                            )}
+                            {shadow?.has_over_return && (
+                              <span className="rounded-full border border-red-200 bg-red-50 px-2 py-1 text-red-700">
+                                Atenção: devolução maior que a quantidade comprada
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {Array.isArray(selectedOrder.items_json) && selectedOrder.items_json.length > 0 && shouldShowLegacyItemsList ? (
                 <div className="divide-y divide-gray-100">
+                  {showShadowItemsPanel && showOriginalImportedItems && (
+                    <div className="pb-3">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+                        Lista original importada do pedido
+                      </p>
+                    </div>
+                  )}
                   {selectedOrder.items_json.map((it, idx) => (
                     <div key={idx} className="py-2 flex items-start justify-between gap-4">
                       <div className="flex-1">

@@ -272,6 +272,19 @@ export class BackgroundSyncService {
         .in('id', orderIds);
     }
 
+    const { data: routeOrdersToReconcile, error: routeOrdersToReconcileError } = await supabase
+      .from('route_orders')
+      .select('order_id')
+      .eq('route_id', route_id);
+    if (routeOrdersToReconcileError) throw routeOrdersToReconcileError;
+
+    for (const routeOrder of routeOrdersToReconcile || []) {
+      const { error: reconcileReturnError } = await supabase.rpc('reconcile_order_return_state', {
+        p_order_id: routeOrder.order_id,
+      });
+      if (reconcileReturnError) throw reconcileReturnError;
+    }
+
     console.log('[BackgroundSync] Route completed and returns released:', route_id);
 
     try {
@@ -279,6 +292,31 @@ export class BackgroundSyncService {
       console.log('[BackgroundSync] Assembly sync result:', assemblySyncResult);
     } catch (e) {
       console.error('[BackgroundSync] Error generating assembly tasks for route:', e);
+    }
+
+    // ENTREGA PARCIAL: pedidos entregues que ainda tem item faltando (o que "nao coube")
+    // voltam pra fila. A montagem do item entregue ja foi gerada acima.
+    const { data: deliveredRouteOrders } = await supabase
+      .from('route_orders')
+      .select('order_id')
+      .eq('route_id', route_id)
+      .eq('status', 'delivered');
+    const deliveredOrderIds = Array.from(new Set((deliveredRouteOrders || []).map((ro: any) => String(ro.order_id))));
+    if (deliveredOrderIds.length > 0) {
+      const { data: partialBalances } = await supabase
+        .from('order_item_shadow_balances')
+        .select('order_id')
+        .in('order_id', deliveredOrderIds)
+        .eq('source_present', true)
+        .gt('remaining_deliverable_quantity', 0);
+      const partialOrderIds = Array.from(new Set((partialBalances || []).map((b: any) => String(b.order_id))));
+      if (partialOrderIds.length > 0) {
+        await supabase
+          .from('orders')
+          .update({ status: 'pending', return_flag: true })
+          .in('id', partialOrderIds);
+        console.log('[BackgroundSync] Pedidos parciais re-enfileirados:', partialOrderIds);
+      }
     }
   }
 
@@ -409,12 +447,99 @@ export class BackgroundSyncService {
       throw new Error(`Failed to update route order: ${error.message}`);
     }
 
+    const routeOrderItemDelivery = data.route_order_item_delivery;
+    if (routeOrderItemDelivery && data.route_order_id) {
+      if (action === 'delivered') {
+        const deliveredIds: string[] = Array.isArray(routeOrderItemDelivery.delivered_item_ids) ? routeOrderItemDelivery.delivered_item_ids : [];
+        for (const itemId of deliveredIds) {
+          const { data: currentItem } = await supabase
+            .from('route_order_items')
+            .select('status, deliverable_quantity_snapshot')
+            .eq('id', itemId)
+            .single();
+
+          // Guarda anti-entrega-dupla: se o item foi RETIRADO (cancelado) depois que o
+          // motorista carregou a rota offline, NAO marca como entregue. Evita baixar de
+          // novo um item que o cliente ja pegou no balcao.
+          if (String(currentItem?.status) === 'cancelled' || Number(currentItem?.deliverable_quantity_snapshot || 0) <= 0) {
+            continue;
+          }
+
+          const { error: itemError } = await supabase
+            .from('route_order_items')
+            .update({
+              status: 'delivered',
+              delivered_quantity: Number(currentItem?.deliverable_quantity_snapshot || 0),
+            })
+            .eq('id', itemId);
+
+          if (itemError) {
+            throw new Error(`Failed to update delivered route item ${itemId}: ${itemError.message}`);
+          }
+        }
+        // Entrega PARCIAL: itens que nao couberam sao marcados como retornados nesta rota
+        // (delivered=0). Nao cria order_returns — o item volta pra fila na finalizacao.
+        const returnedIds: string[] = Array.isArray(routeOrderItemDelivery.returned_item_ids) ? routeOrderItemDelivery.returned_item_ids : [];
+        for (const itemId of returnedIds) {
+          const { data: currentReturnItem } = await supabase
+            .from('route_order_items')
+            .select('deliverable_quantity_snapshot')
+            .eq('id', itemId)
+            .single();
+
+          const { error: partialReturnError } = await supabase
+            .from('route_order_items')
+            .update({
+              status: 'returned',
+              delivered_quantity: 0,
+              returned_quantity: Number(currentReturnItem?.deliverable_quantity_snapshot || 0),
+            })
+            .eq('id', itemId);
+
+          if (partialReturnError) {
+            throw new Error(`Failed to update partial-returned route item ${itemId}: ${partialReturnError.message}`);
+          }
+        }
+      } else if (action === 'returned') {
+        const { data: routeItems } = await supabase
+          .from('route_order_items')
+          .select('id, deliverable_quantity_snapshot')
+          .eq('route_order_id', data.route_order_id);
+
+        for (const item of routeItems || []) {
+          const { error: itemError } = await supabase
+            .from('route_order_items')
+            .update({
+              status: 'returned',
+              delivered_quantity: 0,
+              returned_quantity: Number(item.deliverable_quantity_snapshot || 0),
+            })
+            .eq('id', item.id);
+
+          if (itemError) {
+            throw new Error(`Failed to update returned route item ${item.id}: ${itemError.message}`);
+          }
+        }
+      }
+    }
+
     if (action === 'delivered') {
+      // Entrega parcial: marca return_flag para a finalizacao re-enfileirar o item que nao coube.
+      const partialReason = data.route_order_item_delivery?.partial_return_reason || null;
+      const partialNotes = data.route_order_item_delivery?.partial_return_notes || null;
       const { error: orderError } = await supabase
         .from('orders')
-        .update({ status: 'delivered', return_flag: false, last_return_reason: null, last_return_notes: null })
+        .update({
+          status: 'delivered',
+          ...(partialReason ? { return_flag: true, last_return_reason: partialReason, last_return_notes: partialNotes } : {}),
+        })
         .eq('id', order_id);
-      if (orderError) console.warn('Failed to update order status:', orderError);
+      if (orderError) throw orderError;
+
+      const { error: reconcileReturnError } = await supabase.rpc('reconcile_order_return_state', {
+        p_order_id: order_id,
+      });
+      if (reconcileReturnError) throw reconcileReturnError;
     } else if (action === 'returned') {
       const { error: orderError2 } = await supabase
         .from('orders')
@@ -448,6 +573,28 @@ export class BackgroundSyncService {
       throw new Error(`Failed to update route order: ${error.message}`);
     }
 
+    const { data: routeItems } = await supabase
+      .from('route_order_items')
+      .select('id, returned_quantity_snapshot')
+      .eq('route_id', route_id)
+      .eq('order_id', order_id);
+
+    for (const item of routeItems || []) {
+      const isBlocked = Number(item.returned_quantity_snapshot || 0) > 0;
+      const { error: itemError } = await supabase
+        .from('route_order_items')
+        .update({
+          delivered_quantity: 0,
+          returned_quantity: 0,
+          status: isBlocked ? 'returned' : 'pending',
+        })
+        .eq('id', item.id);
+
+      if (itemError) {
+        throw new Error(`Failed to revert route item ${item.id}: ${itemError.message}`);
+      }
+    }
+
     const { error: orderError } = await supabase
       .from('orders')
       .update({
@@ -457,7 +604,12 @@ export class BackgroundSyncService {
         last_return_notes: null,
       })
       .eq('id', order_id);
-    if (orderError) console.warn('Failed to update order status on revert:', orderError);
+    if (orderError) throw orderError;
+
+    const { error: reconcileReturnError } = await supabase.rpc('reconcile_order_return_state', {
+      p_order_id: order_id,
+    });
+    if (reconcileReturnError) throw reconcileReturnError;
 
     await this.logSyncAction('return_revert', order_id, 'pending', data.user_id || null);
   }
@@ -478,6 +630,28 @@ export class BackgroundSyncService {
       throw new Error(`Failed to revert delivery: ${error.message}`);
     }
 
+    const { data: routeItems } = await supabase
+      .from('route_order_items')
+      .select('id, returned_quantity_snapshot')
+      .eq('route_id', route_id)
+      .eq('order_id', order_id);
+
+    for (const item of routeItems || []) {
+      const isBlocked = Number(item.returned_quantity_snapshot || 0) > 0;
+      const { error: itemError } = await supabase
+        .from('route_order_items')
+        .update({
+          delivered_quantity: 0,
+          returned_quantity: 0,
+          status: isBlocked ? 'returned' : 'pending',
+        })
+        .eq('id', item.id);
+
+      if (itemError) {
+        throw new Error(`Failed to revert delivered route item ${item.id}: ${itemError.message}`);
+      }
+    }
+
     const { error: orderError } = await supabase
       .from('orders')
       .update({
@@ -485,7 +659,12 @@ export class BackgroundSyncService {
         return_flag: false,
       })
       .eq('id', order_id);
-    if (orderError) console.warn('Failed to update order status on revert:', orderError);
+    if (orderError) throw orderError;
+
+    const { error: reconcileReturnError } = await supabase.rpc('reconcile_order_return_state', {
+      p_order_id: order_id,
+    });
+    if (reconcileReturnError) throw reconcileReturnError;
 
     await this.logSyncAction('delivery_revert', order_id, 'pending', data.user_id || null);
   }

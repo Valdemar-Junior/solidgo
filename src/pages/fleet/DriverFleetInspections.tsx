@@ -47,7 +47,7 @@ export default function DriverFleetInspections() {
         .from('fleet_inspections')
         .select(`
           *,
-          vehicle:fleet_vehicles(*),
+          vehicle:vehicles(*),
           assigned_driver:users!assigned_driver_user_id(id,email,name,role,phone,must_change_password,created_at)
         `)
         .eq('assigned_driver_user_id', user.id)
@@ -81,7 +81,7 @@ export default function DriverFleetInspections() {
           <button
             onClick={async () => {
               await logout();
-              window.location.href = '/login?redirect=%2Ffleet%2Fdriver';
+              window.location.href = '/login?redirect=%2Finspecao';
             }}
             className="inline-flex items-center rounded-xl border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700"
           >
@@ -122,7 +122,7 @@ export default function DriverFleetInspections() {
           inspections.map((inspection) => (
             <button
               key={inspection.id}
-              onClick={() => navigate(`/fleet/driver/inspection/${inspection.id}`)}
+              onClick={() => navigate(`/inspecao/${inspection.id}`)}
               className="rounded-3xl bg-white p-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"
             >
               <div className="flex items-start justify-between gap-3">

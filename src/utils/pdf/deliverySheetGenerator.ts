@@ -10,6 +10,7 @@ export interface DeliverySheetData {
   orders: Order[];
   generatedAt: string;
   printScope?: 'all' | 'full' | 'carrier' | 'normal';
+  assemblyItemsByOrder?: Record<string, any[]>;
   assemblyPrioritiesByOrder?: Record<string, 'baixa' | 'media' | 'alta' | null | undefined>;
   assemblyInstallerName?: string;
   assemblyVehicleModel?: string;
@@ -206,8 +207,16 @@ export class DeliverySheetGenerator {
       // Table config & height estimation
       const headersPre = ['Código', 'Produto', 'Local', 'Data', 'Qtde', 'Marca'];
       const colsPre = [38, 240, 92, 58, 24, 79];
-      const itemsAll = Array.isArray(order.items_json) && order.items_json.length > 0 ? order.items_json : [];
+      const hasAssemblyItemsOverride = isAssemblySheet
+        && Boolean(data.assemblyItemsByOrder)
+        && Object.prototype.hasOwnProperty.call(data.assemblyItemsByOrder || {}, oid);
+      const itemsAll = hasAssemblyItemsOverride
+        ? (data.assemblyItemsByOrder?.[oid] || [])
+        : (Array.isArray(order.items_json) && order.items_json.length > 0 ? order.items_json : []);
       const itemsPre = isAssemblySheet ? itemsAll.filter(isAssemblyItem) : itemsAll;
+      // B12: pedido sem itens imprimíveis não deve gerar bloco/linha em branco ("romaneio fantasma").
+      // Pula o pedido de forma robusta, independente de o chamador ter filtrado ou não.
+      if (!itemsPre || itemsPre.length === 0) { itemIndex--; continue; }
       let contentHeightPre = 16; // header row height
       const normPre = (s: any) => String(s ?? '').toLowerCase().trim();
       const prodLocPre = (order as any).raw_json?.produtos_locais;
@@ -752,4 +761,3 @@ export class DeliverySheetGenerator {
     setTimeout(() => URL.revokeObjectURL(url), 600000);
   }
 }
-

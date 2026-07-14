@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import supabase from '../../supabase/client';
 import type { DeliveryRouteCatalog, User, UserStoreReleaseLocation, Vehicle } from '../../types/database';
-import { slugifyName, toLoginEmailFromName } from '../../lib/utils';
+import { slugifyName, toLoginEmailFromName, formatCpf, onlyDigits, isValidCpf } from '../../lib/utils';
 import { toast } from 'sonner';
 import {
   Search,
@@ -29,6 +29,26 @@ type TeamRecord = {
   driver?: { id?: string; name?: string; active?: boolean } | null;
   helper?: { id?: string; name?: string; active?: boolean } | null;
 };
+
+// Códigos fiscais do MDF-e (mesmos usados na emissão). Só relevantes para veículos
+// que vão emitir MDF-e — por isso ficam numa seção opcional do cadastro de veículo.
+const RODADO_OPTIONS = [
+  { value: '01', label: '01 - Truck' },
+  { value: '02', label: '02 - Toco' },
+  { value: '03', label: '03 - Cavalo Mecânico' },
+  { value: '04', label: '04 - VAN' },
+  { value: '05', label: '05 - Utilitário' },
+  { value: '06', label: '06 - Outros' },
+];
+
+const CARROCERIA_OPTIONS = [
+  { value: '00', label: '00 - Não Aplicável' },
+  { value: '01', label: '01 - Aberta' },
+  { value: '02', label: '02 - Fechada/Baú' },
+  { value: '03', label: '03 - Graneleira' },
+  { value: '04', label: '04 - Porta Container' },
+  { value: '05', label: '05 - Sider' },
+];
 
 const ROLE_LABELS: Record<AppRole, string> = {
   admin: 'Admin',
@@ -83,6 +103,8 @@ export default function UsersTeams() {
 
   const [uName, setUName] = useState('');
   const [uPassword, setUPassword] = useState('');
+  const [uCpf, setUCpf] = useState('');
+  const [driverCpfByUserId, setDriverCpfByUserId] = useState<Record<string, string>>({});
   const [uRole, setURole] = useState<AppRole>('driver');
   const [uActive, setUActive] = useState(true);
   const [uStoreReleaseLocations, setUStoreReleaseLocations] = useState<string[]>([]);
@@ -97,6 +119,14 @@ export default function UsersTeams() {
   const [vModel, setVModel] = useState('');
   const [vPlate, setVPlate] = useState('');
   const [vActive, setVActive] = useState(true);
+  // Dados fiscais do MDF-e (opcionais)
+  const [vRenavam, setVRenavam] = useState('');
+  const [vTaraKg, setVTaraKg] = useState('');
+  const [vCapacityKg, setVCapacityKg] = useState('');
+  const [vCapacityM3, setVCapacityM3] = useState('');
+  const [vBodyType, setVBodyType] = useState('');
+  const [vRodadoType, setVRodadoType] = useState('');
+  const [vLicensingUf, setVLicensingUf] = useState('');
   const [isSavingVehicle, setIsSavingVehicle] = useState(false);
 
   const [deliveryRouteName, setDeliveryRouteName] = useState('');
@@ -127,7 +157,7 @@ export default function UsersTeams() {
 
       const { data: vehiclesData } = await supabase
         .from('vehicles')
-        .select('id, model, plate, active')
+        .select('id, model, plate, active, renavam, tara_kg, capacity_kg, capacity_m3, body_type, rodado_type, licensing_uf')
         .order('model');
       if (vehiclesData) setVehicles((vehiclesData || []) as Vehicle[]);
 
@@ -142,6 +172,19 @@ export default function UsersTeams() {
         .select('id, user_id, store_location, created_at, updated_at')
         .order('store_location');
       if (storeReleaseLocationData) setUserStoreReleaseLocations(storeReleaseLocationData as UserStoreReleaseLocation[]);
+
+      const { data: driversData } = await supabase
+        .from('drivers')
+        .select('user_id, cpf');
+      if (driversData) {
+        const map: Record<string, string> = {};
+        for (const row of driversData as Array<{ user_id: string; cpf: string | null }>) {
+          const digits = onlyDigits(row.cpf || '');
+          // Ignora o antigo placeholder "00000000000" (e qualquer CPF inválido) na exibição.
+          map[row.user_id] = isValidCpf(digits) ? digits : '';
+        }
+        setDriverCpfByUserId(map);
+      }
     } catch (e) {
       console.error(e);
       toast.error('Falha ao carregar dados');
@@ -150,12 +193,20 @@ export default function UsersTeams() {
     }
   };
 
-  const genPassword = () => String(Math.floor(100000 + Math.random() * 900000));
+  // Senha temporária forte (10 caracteres, sem caracteres ambíguos). O usuário
+  // é obrigado a trocá-la no primeiro login (must_change_password).
+  const genPassword = () => {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
+    const arr = new Uint32Array(10);
+    crypto.getRandomValues(arr);
+    return Array.from(arr, (n) => chars[n % chars.length]).join('');
+  };
 
   const resetUserForm = () => {
     setEditingUser(null);
     setUName('');
     setUPassword('');
+    setUCpf('');
     setURole('driver');
     setUActive(true);
     setUStoreReleaseLocations([]);
@@ -174,6 +225,13 @@ export default function UsersTeams() {
     setVModel('');
     setVPlate('');
     setVActive(true);
+    setVRenavam('');
+    setVTaraKg('');
+    setVCapacityKg('');
+    setVCapacityM3('');
+    setVBodyType('');
+    setVRodadoType('');
+    setVLicensingUf('');
   };
 
   const resetDeliveryRouteForm = () => {
@@ -191,6 +249,7 @@ export default function UsersTeams() {
     setEditingUser(user);
     setUName(user.name);
     setUPassword('');
+    setUCpf(formatCpf(driverCpfByUserId[user.id] || ''));
     setURole(user.role);
     setUActive(user.active ?? true);
     setUStoreReleaseLocations(
@@ -235,6 +294,13 @@ export default function UsersTeams() {
     setVModel(vehicle.model || '');
     setVPlate(vehicle.plate || '');
     setVActive(vehicle.active ?? true);
+    setVRenavam(vehicle.renavam || '');
+    setVTaraKg(vehicle.tara_kg != null ? String(vehicle.tara_kg) : '');
+    setVCapacityKg(vehicle.capacity_kg != null ? String(vehicle.capacity_kg) : '');
+    setVCapacityM3(vehicle.capacity_m3 != null ? String(vehicle.capacity_m3) : '');
+    setVBodyType(vehicle.body_type || '');
+    setVRodadoType(vehicle.rodado_type || '');
+    setVLicensingUf(vehicle.licensing_uf || '');
     setShowVehicleModal(true);
   };
 
@@ -260,7 +326,13 @@ export default function UsersTeams() {
     resetDeliveryRouteForm();
   };
 
-  const upsertDriverStatus = async (userId: string, role: AppRole, active: boolean, previousRole?: AppRole) => {
+  const upsertDriverStatus = async (
+    userId: string,
+    role: AppRole,
+    active: boolean,
+    cpf: string | null,
+    previousRole?: AppRole
+  ) => {
     const wasDriver = previousRole === 'driver';
     const willBeDriver = role === 'driver';
 
@@ -275,7 +347,7 @@ export default function UsersTeams() {
       if (existingDriver?.id) {
         const { error: updateDriverError } = await supabase
           .from('drivers')
-          .update({ active })
+          .update({ active, cpf })
           .eq('id', existingDriver.id);
         if (updateDriverError) throw updateDriverError;
       } else {
@@ -283,7 +355,7 @@ export default function UsersTeams() {
           .from('drivers')
           .insert({
             user_id: userId,
-            cpf: '00000000000',
+            cpf,
             vehicle_id: null,
             active,
           });
@@ -343,6 +415,15 @@ export default function UsersTeams() {
       return;
     }
 
+    // CPF do motorista é opcional por enquanto, mas se preenchido precisa ser válido
+    // (é exigência fiscal para emitir MDF-e). Guardamos só os dígitos, ou null se vazio.
+    const cpfDigits = onlyDigits(uCpf);
+    if (uRole === 'driver' && cpfDigits && !isValidCpf(cpfDigits)) {
+      toast.error('CPF do motorista inválido');
+      return;
+    }
+    const driverCpf = uRole === 'driver' && cpfDigits ? cpfDigits : null;
+
     setIsSavingUser(true);
     try {
       if (editingUser) {
@@ -356,7 +437,7 @@ export default function UsersTeams() {
           .eq('id', editingUser.id);
         if (error) throw error;
 
-        await upsertDriverStatus(editingUser.id, uRole, uActive, editingUser.role);
+        await upsertDriverStatus(editingUser.id, uRole, uActive, driverCpf, editingUser.role);
         await saveUserStoreReleaseLocations(editingUser.id, uRole, uStoreReleaseLocations);
 
         toast.success('Usuário atualizado com sucesso');
@@ -386,12 +467,11 @@ export default function UsersTeams() {
         role: uRole,
       };
 
-      if (uRole !== 'driver') {
-        const { data: sessionData } = await supabase.auth.getSession();
-        const accessToken = sessionData?.session?.access_token;
-        if (!accessToken) throw new Error('Sessao expirada. Faca login novamente.');
-        payload.auth_token = accessToken;
-      }
+      // Criar usuário é sempre operação de admin — envia o token do admin logado.
+      const { data: sessionData } = await supabase.auth.getSession();
+      const accessToken = sessionData?.session?.access_token;
+      if (!accessToken) throw new Error('Sessao expirada. Faca login novamente.');
+      payload.auth_token = accessToken;
 
       const response = await fetch(functionUrl, {
         method: 'POST',
@@ -419,12 +499,22 @@ export default function UsersTeams() {
         if (roleUpdateError) throw roleUpdateError;
 
         await saveUserStoreReleaseLocations(createdUserId, uRole, uStoreReleaseLocations);
+
+        // A edge function já criou a linha em `drivers` (sem CPF); grava o CPF digitado.
+        if (uRole === 'driver' && driverCpf) {
+          const { error: driverCpfError } = await supabase
+            .from('drivers')
+            .update({ cpf: driverCpf })
+            .eq('user_id', createdUserId);
+          if (driverCpfError) throw driverCpfError;
+        }
       }
 
       setGeneratedPassword(pwd);
       toast.success('Usuário criado com sucesso!');
       setUName('');
       setUPassword('');
+      setUCpf('');
       setURole('driver');
       setUActive(true);
       setUStoreReleaseLocations([]);
@@ -488,9 +578,36 @@ export default function UsersTeams() {
       return;
     }
 
+    const uf = vLicensingUf.trim().toUpperCase();
+    if (uf && uf.length !== 2) {
+      toast.error('UF de licenciamento deve ter 2 letras');
+      return;
+    }
+
+    const toIntOrNull = (value: string) => {
+      const trimmed = value.trim();
+      if (trimmed === '') return null;
+      const n = Number(trimmed);
+      return Number.isFinite(n) && n >= 0 ? Math.round(n) : null;
+    };
+
+    // Campos fiscais são opcionais; só entram preenchidos. O MDF-e só mostra o
+    // veículo depois que rodado + carroceria + UF + tara estiverem completos.
+    const fiscalPayload = {
+      renavam: vRenavam.trim() ? vRenavam.replace(/\D/g, '') : null,
+      tara_kg: toIntOrNull(vTaraKg),
+      capacity_kg: toIntOrNull(vCapacityKg),
+      capacity_m3: toIntOrNull(vCapacityM3),
+      body_type: vBodyType.trim() || null,
+      rodado_type: vRodadoType.trim() || null,
+      licensing_uf: uf || null,
+    };
+
     setIsSavingVehicle(true);
     try {
-      const plate = vPlate.trim().toUpperCase();
+      // Placa no mesmo formato que a API da Focus aceita (maiúscula, só letras/números,
+      // sem traço/espaço) — igual a emit-mdfe normaliza antes de enviar.
+      const plate = vPlate.toUpperCase().replace(/[^A-Z0-9]/g, '');
 
       if (editingVehicle) {
         const { error } = await supabase
@@ -499,16 +616,26 @@ export default function UsersTeams() {
             model: vModel.trim(),
             plate,
             active: vActive,
+            ...fiscalPayload,
           })
           .eq('id', editingVehicle.id);
         if (error) throw error;
         toast.success('Veículo atualizado com sucesso');
       } else {
-        const { error: rpcError } = await supabase.rpc('insert_vehicle', {
+        const { data: newVehicleId, error: rpcError } = await supabase.rpc('insert_vehicle', {
           p_model: vModel.trim(),
           p_plate: plate,
         });
         if (rpcError) throw rpcError;
+
+        // A RPC insere só modelo/placa; grava os campos fiscais em seguida.
+        if (newVehicleId) {
+          const { error: fiscalError } = await supabase
+            .from('vehicles')
+            .update(fiscalPayload)
+            .eq('id', newVehicleId);
+          if (fiscalError) throw fiscalError;
+        }
         toast.success('Veículo salvo com sucesso');
       }
 
@@ -813,9 +940,13 @@ export default function UsersTeams() {
                     onClick={async () => {
                       const temp = genPassword();
                       try {
+                        const { data: { session } } = await supabase.auth.getSession();
                         const resp = await fetch('/api/reset-password', {
                           method: 'POST',
-                          headers: { 'Content-Type': 'application/json' },
+                          headers: {
+                            'Content-Type': 'application/json',
+                            Authorization: `Bearer ${session?.access_token ?? ''}`,
+                          },
                           body: JSON.stringify({ userId: user.id, newPassword: temp }),
                         });
                         if (!resp.ok) {
@@ -843,9 +974,13 @@ export default function UsersTeams() {
                     onClick={async () => {
                       if (!window.confirm(`Remover usuário "${user.name}"?`)) return;
                       try {
+                        const { data: { session } } = await supabase.auth.getSession();
                         const resp = await fetch('/api/delete-user', {
                           method: 'POST',
-                          headers: { 'Content-Type': 'application/json' },
+                          headers: {
+                            'Content-Type': 'application/json',
+                            Authorization: `Bearer ${session?.access_token ?? ''}`,
+                          },
                           body: JSON.stringify({ userId: user.id }),
                         });
                         if (!resp.ok) {
@@ -1051,6 +1186,21 @@ export default function UsersTeams() {
                       <option value="admin">Administrador</option>
                     </select>
                   </div>
+                  {uRole === 'driver' && (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        CPF <span className="text-gray-400 font-normal">(usado no MDF-e)</span>
+                      </label>
+                      <input
+                        value={uCpf}
+                        onChange={(event) => setUCpf(formatCpf(event.target.value))}
+                        inputMode="numeric"
+                        maxLength={14}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                        placeholder="000.000.000-00"
+                      />
+                    </div>
+                  )}
                   {uRole === 'gerente' && (
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-2">Locais autorizados</label>
@@ -1185,13 +1335,13 @@ export default function UsersTeams() {
 
       {showVehicleModal && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-in fade-in zoom-in-95 duration-200">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden max-h-[90vh] flex flex-col">
             <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
               <h3 className="text-lg font-bold text-gray-900">{editingVehicle ? 'Editar Veículo' : 'Novo Veículo'}</h3>
               <button onClick={closeVehicleModal} className="text-gray-400 hover:text-gray-600"><X className="h-5 w-5" /></button>
             </div>
 
-            <div className="p-6 space-y-4">
+            <div className="p-6 space-y-4 overflow-y-auto">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Modelo</label>
                 <input
@@ -1205,11 +1355,95 @@ export default function UsersTeams() {
                 <label className="block text-sm font-medium text-gray-700 mb-1">Placa</label>
                 <input
                   value={vPlate}
-                  onChange={(event) => setVPlate(event.target.value)}
+                  onChange={(event) => setVPlate(event.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''))}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
-                  placeholder="ABC-1234"
+                  maxLength={7}
+                  placeholder="ABC1234"
                 />
               </div>
+
+              <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 space-y-3">
+                <p className="text-sm font-semibold text-gray-700">
+                  Dados fiscais <span className="text-gray-400 font-normal">(MDF-e — opcional)</span>
+                </p>
+                <p className="text-xs text-gray-500">
+                  Preencha só para veículos que emitem MDF-e. Sem estes dados o veículo não aparece na emissão.
+                </p>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">RENAVAM</label>
+                    <input
+                      value={vRenavam}
+                      onChange={(event) => setVRenavam(event.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">UF licenciamento</label>
+                    <input
+                      value={vLicensingUf}
+                      maxLength={2}
+                      onChange={(event) => setVLicensingUf(event.target.value.toUpperCase())}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm"
+                      placeholder="RN"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Tara (kg)</label>
+                    <input
+                      type="number"
+                      value={vTaraKg}
+                      onChange={(event) => setVTaraKg(event.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Capacidade (kg)</label>
+                    <input
+                      type="number"
+                      value={vCapacityKg}
+                      onChange={(event) => setVCapacityKg(event.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Capacidade (m³)</label>
+                    <input
+                      type="number"
+                      value={vCapacityM3}
+                      onChange={(event) => setVCapacityM3(event.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Tipo de rodado</label>
+                    <select
+                      value={vRodadoType}
+                      onChange={(event) => setVRodadoType(event.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm bg-white"
+                    >
+                      <option value="">Selecione...</option>
+                      {RODADO_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="col-span-2">
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Tipo de carroceria</label>
+                    <select
+                      value={vBodyType}
+                      onChange={(event) => setVBodyType(event.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm bg-white"
+                    >
+                      <option value="">Selecione...</option>
+                      {CARROCERIA_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              </div>
+
               {editingVehicle && (
                 <label className="flex items-center justify-between rounded-lg border border-gray-200 px-4 py-3">
                   <span className="text-sm font-medium text-gray-700">Veículo ativo</span>

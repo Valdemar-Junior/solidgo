@@ -8,16 +8,16 @@ import { useAuthStore } from '../../stores/authStore';
 import { isAssemblyRequired, syncAssemblyProductsForOrder } from '../../utils/assembly/syncAssemblyProducts';
 
 type ActiveSection = 'geral' | 'venda' | 'rotas';
-const AUDIT_ADMIN_PASSWORD = '0000';
 
 export default function AuditDashboard() {
     const navigate = useNavigate();
     const { user } = useAuthStore();
     const [loading, setLoading] = useState(true);
-    const [generalAccessGranted, setGeneralAccessGranted] = useState(false);
+    // Acesso já é restrito a admin pela rota; sem "senha de teatro" fixa no código.
+    const [generalAccessGranted, setGeneralAccessGranted] = useState(true);
     const [generalAccessPassword, setGeneralAccessPassword] = useState('');
     const [generalAccessError, setGeneralAccessError] = useState('');
-    const [routeAccessGranted, setRouteAccessGranted] = useState(false);
+    const [routeAccessGranted, setRouteAccessGranted] = useState(true);
     const [routeAccessPassword, setRouteAccessPassword] = useState('');
     const [routeAccessError, setRouteAccessError] = useState('');
     const [isRefreshing, setIsRefreshing] = useState(false);
@@ -122,26 +122,16 @@ export default function AuditDashboard() {
 
     const handleUnlockGeneralSection = (e?: React.FormEvent) => {
         if (e) e.preventDefault();
-        if (generalAccessPassword === AUDIT_ADMIN_PASSWORD) {
-            setGeneralAccessGranted(true);
-            setGeneralAccessError('');
-            setGeneralAccessPassword('');
-            return;
-        }
-        setGeneralAccessError('Senha invalida.');
-        toast.error('Senha invalida.');
+        setGeneralAccessGranted(true);
+        setGeneralAccessError('');
+        setGeneralAccessPassword('');
     };
 
     const handleUnlockRouteSection = (e?: React.FormEvent) => {
         if (e) e.preventDefault();
-        if (routeAccessPassword === AUDIT_ADMIN_PASSWORD) {
-            setRouteAccessGranted(true);
-            setRouteAccessError('');
-            setRouteAccessPassword('');
-            return;
-        }
-        setRouteAccessError('Senha invalida.');
-        toast.error('Senha invalida.');
+        setRouteAccessGranted(true);
+        setRouteAccessError('');
+        setRouteAccessPassword('');
     };
 
     const loadE2EDrivers = async () => {

@@ -1,6 +1,7 @@
 ﻿import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../../supabase/client';
+import type { ItemFulfillmentControl, ItemFulfillmentMode, WaitingAutoRules } from '../../types/database';
 import {
   ArrowLeft,
   Save,
@@ -26,6 +27,11 @@ import { toast } from 'sonner';
 import { WorkingDaysCalendar } from '../../components/settings/WorkingDaysCalendar';
 import { CarrierCitiesTable } from '../../components/settings/CarrierCitiesTable';
 import { CityRulesTable } from '../../components/settings/CityRulesTable';
+import {
+  DEFAULT_ITEM_FULFILLMENT_CONTROL,
+  getItemFulfillmentModeLabel,
+  normalizeItemFulfillmentControl,
+} from '../../utils/itemFulfillment';
 
 type Tab = 'general' | 'logistics' | 'integrations';
 
@@ -52,10 +58,22 @@ export default function Settings() {
   const [deliveryProofRequireGps, setDeliveryProofRequireGps] = useState(false);
   const [storeReleaseControlEnabled, setStoreReleaseControlEnabled] = useState(false);
   const [storeReleaseOnlyDisassemblable, setStoreReleaseOnlyDisassemblable] = useState(true);
+  const [itemFulfillmentControl, setItemFulfillmentControl] = useState<ItemFulfillmentControl>(DEFAULT_ITEM_FULFILLMENT_CONTROL);
+  const [requireAdmin2fa, setRequireAdmin2fa] = useState(false); // Segurança: exigir 2FA no login dos admins
 
   // State for Logistics
   const [ruralKeywords, setRuralKeywords] = useState<string[]>([]);
   const [newKeyword, setNewKeyword] = useState('');
+
+  // "Em Espera": regras de move automatico (palavras na observacao / operacoes do ERP)
+  const [waitingKeywords, setWaitingKeywords] = useState<string[]>([]);
+  const [waitingOperations, setWaitingOperations] = useState<string[]>([]);
+  const [newWaitingKeyword, setNewWaitingKeyword] = useState('');
+  const [newWaitingOperation, setNewWaitingOperation] = useState('');
+  const [operationSuggestions, setOperationSuggestions] = useState<string[]>([]);
+
+  // Configuração de NF (DANFE): logo da empresa em base64 (sem prefixo data:).
+  const [nfLogoBase64, setNfLogoBase64] = useState<string>('');
 
   // New State for General Defaults
   const [defaultDeliveryDays, setDefaultDeliveryDays] = useState(15);
@@ -76,7 +94,7 @@ export default function Settings() {
   const load = async () => {
     try {
       setLoading(true);
-      const [p, n, nd, m, g, l, confFlag, updateFlag, photoFlag, deliveryPhotoFlag, deliveryProofFlag, ruralKeys, generalDeadlines, storeReleaseFlag] = await Promise.all([
+      const [p, n, nd, m, g, l, confFlag, updateFlag, photoFlag, deliveryPhotoFlag, deliveryProofFlag, ruralKeys, generalDeadlines, storeReleaseFlag, itemFulfillmentFlag, waitingRulesFlag, nfConfigFlag] = await Promise.all([
         getUrl('envia_pedidos'),
         getUrl('gera_nf'),
         getUrl('gera_nf_devolucao'),
@@ -91,6 +109,9 @@ export default function Settings() {
         supabase.from('app_settings').select('value').eq('key', 'rural_keywords').maybeSingle(),
         supabase.from('app_settings').select('value').eq('key', 'general_deadlines').maybeSingle(),
         supabase.from('app_settings').select('value').eq('key', 'store_release_control').maybeSingle(),
+        supabase.from('app_settings').select('value').eq('key', 'item_fulfillment_control').maybeSingle(),
+        supabase.from('app_settings').select('value').eq('key', 'waiting_auto_rules').maybeSingle(),
+        supabase.from('app_settings').select('value').eq('key', 'nf_config').maybeSingle(),
       ]);
       setEnviaPedidos(p || '');
       setGeraNf(n || '');
@@ -127,6 +148,37 @@ export default function Settings() {
       const storeRelease = (storeReleaseFlag.data as any)?.value || {};
       setStoreReleaseControlEnabled(storeRelease?.enabled === true);
       setStoreReleaseOnlyDisassemblable(storeRelease?.only_block_disassemblable_items !== false);
+      setItemFulfillmentControl(normalizeItemFulfillmentControl((itemFulfillmentFlag.data as any)?.value));
+
+      const nfConfig = (nfConfigFlag.data as any)?.value || {};
+      setNfLogoBase64(String(nfConfig?.logoBase64 || ''));
+
+      const waitingRules = (waitingRulesFlag.data as any)?.value || {};
+      setWaitingKeywords(Array.isArray(waitingRules?.keywords) ? waitingRules.keywords : ['*retirada*']);
+      setWaitingOperations(Array.isArray(waitingRules?.operations) ? waitingRules.operations : []);
+
+      const { data: twoFaFlag } = await supabase
+        .from('app_settings')
+        .select('value')
+        .eq('key', 'require_admin_2fa')
+        .maybeSingle();
+      setRequireAdmin2fa((twoFaFlag as any)?.value?.enabled === true);
+
+      // Sugestoes de operacoes conhecidas (so o texto de raw_json.operacoes, leve).
+      try {
+        const { data: opsData } = await supabase
+          .from('orders')
+          .select('op:raw_json->>operacoes')
+          .not('raw_json->>operacoes', 'is', null)
+          .limit(2000);
+        const opList: string[] = ((opsData as any[]) || [])
+          .map((r: any) => String(r.op || '').trim())
+          .filter((s: string) => s.length > 0);
+        const distinct: string[] = Array.from(new Set<string>(opList)).sort();
+        setOperationSuggestions(distinct);
+      } catch {
+        setOperationSuggestions([]);
+      }
 
     } catch {
       toast.error('Erro ao carregar configuracoes');
@@ -148,6 +200,45 @@ export default function Settings() {
 
   const handleRemoveKeyword = (keyword: string) => {
     setRuralKeywords(ruralKeywords.filter(k => k !== keyword));
+  };
+
+  // Upload do logo da NF: lê a imagem e guarda o base64 SEM o prefixo data:image.
+  const handleNfLogoUpload = (file: File | null) => {
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      toast.error('Selecione uma imagem (PNG ou JPG).');
+      return;
+    }
+    if (file.size > 1024 * 1024) {
+      toast.error('Logo muito grande (máx. 1MB). Reduza a imagem.');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result || '');
+      const raw = result.includes(',') ? result.split(',')[1] : result; // tira "data:image/...;base64,"
+      setNfLogoBase64(raw);
+    };
+    reader.onerror = () => toast.error('Falha ao ler a imagem.');
+    reader.readAsDataURL(file);
+  };
+
+  const handleAddWaitingKeyword = () => {
+    const kw = newWaitingKeyword.trim();
+    if (!kw) return;
+    if (!waitingKeywords.some(k => k.toLowerCase() === kw.toLowerCase())) {
+      setWaitingKeywords([...waitingKeywords, kw]);
+    }
+    setNewWaitingKeyword('');
+  };
+
+  const handleAddWaitingOperation = () => {
+    const op = newWaitingOperation.trim();
+    if (!op) return;
+    if (!waitingOperations.some(o => o.toLowerCase() === op.toLowerCase())) {
+      setWaitingOperations([...waitingOperations, op]);
+    }
+    setNewWaitingOperation('');
   };
 
 
@@ -216,6 +307,14 @@ export default function Settings() {
           only_block_disassemblable_items: storeReleaseOnlyDisassemblable
         },
         updated_at: new Date().toISOString()
+      }, {
+        key: 'item_fulfillment_control',
+        value: itemFulfillmentControl,
+        updated_at: new Date().toISOString()
+      }, {
+        key: 'require_admin_2fa',
+        value: { enabled: requireAdmin2fa },
+        updated_at: new Date().toISOString()
       }], { onConflict: 'key' });
       if (flagErr) throw flagErr;
 
@@ -232,6 +331,21 @@ export default function Settings() {
         updated_at: new Date().toISOString()
       }], { onConflict: 'key' });
       if (generalErr) throw generalErr;
+
+      const waitingRulesValue: WaitingAutoRules = { keywords: waitingKeywords, operations: waitingOperations };
+      const { error: waitingErr } = await supabase.from('app_settings').upsert([{
+        key: 'waiting_auto_rules',
+        value: waitingRulesValue,
+        updated_at: new Date().toISOString()
+      }], { onConflict: 'key' });
+      if (waitingErr) throw waitingErr;
+
+      const { error: nfErr } = await supabase.from('app_settings').upsert([{
+        key: 'nf_config',
+        value: { logoBase64: nfLogoBase64 || '' },
+        updated_at: new Date().toISOString()
+      }], { onConflict: 'key' });
+      if (nfErr) throw nfErr;
 
       const { error: syncStoreReleaseErr } = await supabase.rpc('sync_store_release_for_open_orders');
       if (syncStoreReleaseErr) {
@@ -254,6 +368,14 @@ export default function Settings() {
     { id: 'logistics', label: 'Logistica', icon: Truck },
     { id: 'integrations', label: 'Integracoes', icon: Webhook },
   ];
+
+  const handleItemFulfillmentModeChange = (mode: ItemFulfillmentMode) => {
+    setItemFulfillmentControl((prev) => ({
+      ...prev,
+      mode,
+      enabled: mode !== 'off',
+    }));
+  };
 
   return (
     <div className="w-full pb-20">
@@ -335,6 +457,101 @@ export default function Settings() {
 
                 <hr className="border-gray-100 my-4" />
 
+                <div className="space-y-3">
+                  <p className="text-sm text-gray-600">
+                    Entrega por produto
+                  </p>
+                  <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 space-y-4">
+                    <div>
+                      <p className="text-sm font-semibold text-gray-900">Controle gradual da nova estrutura</p>
+                      <p className="text-xs text-gray-500 mt-1">
+                        Permite validar a camada por produto sem mexer no fluxo atual de rota e entrega.
+                      </p>
+                    </div>
+
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                      {(['off', 'shadow', 'pilot', 'enabled'] as ItemFulfillmentMode[]).map((mode) => {
+                        const isActive = itemFulfillmentControl.mode === mode;
+                        return (
+                          <button
+                            key={mode}
+                            type="button"
+                            onClick={() => handleItemFulfillmentModeChange(mode)}
+                            className={`px-3 py-2 rounded-lg border text-sm font-semibold transition-colors ${
+                              isActive
+                                ? 'border-blue-500 bg-blue-50 text-blue-700'
+                                : 'border-gray-200 bg-white text-gray-600 hover:border-blue-200 hover:text-blue-700'
+                            }`}
+                          >
+                            {getItemFulfillmentModeLabel(mode)}
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <label className="flex items-center justify-between rounded-lg border border-gray-200 bg-white px-4 py-3">
+                        <div>
+                          <p className="text-sm font-semibold text-gray-900">Devolução parcial</p>
+                          <p className="text-xs text-gray-500">Prepara estrutura de retorno por item.</p>
+                        </div>
+                        <input
+                          type="checkbox"
+                          checked={itemFulfillmentControl.partial_returns_enabled}
+                          onChange={(e) => setItemFulfillmentControl((prev) => ({ ...prev, partial_returns_enabled: e.target.checked }))}
+                          className="h-5 w-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                        />
+                      </label>
+
+                      <label className="flex items-center justify-between rounded-lg border border-gray-200 bg-white px-4 py-3">
+                        <div>
+                          <p className="text-sm font-semibold text-gray-900">Alocação por item</p>
+                          <p className="text-xs text-gray-500">Impede saldo devolvido de entrar em rota.</p>
+                        </div>
+                        <input
+                          type="checkbox"
+                          checked={itemFulfillmentControl.item_route_allocation_enabled}
+                          onChange={(e) => setItemFulfillmentControl((prev) => ({ ...prev, item_route_allocation_enabled: e.target.checked }))}
+                          className="h-5 w-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                        />
+                      </label>
+
+                      <label className="flex items-center justify-between rounded-lg border border-gray-200 bg-white px-4 py-3">
+                        <div>
+                          <p className="text-sm font-semibold text-gray-900">Entrega por item</p>
+                          <p className="text-xs text-gray-500">Habilita entregas parciais de forma controlada.</p>
+                        </div>
+                        <input
+                          type="checkbox"
+                          checked={itemFulfillmentControl.item_delivery_enabled}
+                          onChange={(e) => setItemFulfillmentControl((prev) => ({ ...prev, item_delivery_enabled: e.target.checked }))}
+                          className="h-5 w-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                        />
+                      </label>
+
+                      <label className="flex items-center justify-between rounded-lg border border-gray-200 bg-white px-4 py-3">
+                        <div>
+                          <p className="text-sm font-semibold text-gray-900">Agendamento por item</p>
+                          <p className="text-xs text-gray-500">Reserva itens aguardando liberação posterior.</p>
+                        </div>
+                        <input
+                          type="checkbox"
+                          checked={itemFulfillmentControl.item_scheduling_enabled}
+                          onChange={(e) => setItemFulfillmentControl((prev) => ({ ...prev, item_scheduling_enabled: e.target.checked }))}
+                          className="h-5 w-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                        />
+                      </label>
+                    </div>
+
+                    <div className="rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-xs text-blue-800">
+                      Modo atual: <span className="font-semibold">{getItemFulfillmentModeLabel(itemFulfillmentControl.mode)}</span>.
+                      {' '}No modo sombra, a aplicação apenas consulta e diagnostica os itens estruturados.
+                    </div>
+                  </div>
+                </div>
+
+                <hr className="border-gray-100 my-4" />
+
                 <label className="flex items-center justify-between bg-gray-50 border border-gray-100 rounded-lg px-4 py-3">
                   <div>
                     <p className="text-sm font-semibold text-gray-900">Exigir conferencia antes de iniciar</p>
@@ -345,6 +562,22 @@ export default function Settings() {
                     checked={requireConference}
                     onChange={(e) => setRequireConference(e.target.checked)}
                     className="h-5 w-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                  />
+                </label>
+
+                <label className="flex items-center justify-between bg-amber-50 border border-amber-200 rounded-lg px-4 py-3">
+                  <div>
+                    <p className="text-sm font-semibold text-gray-900">Exigir 2FA (código do celular) para administradores</p>
+                    <p className="text-xs text-gray-500">
+                      Quando ligado, todo admin precisa confirmar um código do app autenticador (Google Authenticator etc.) no login.
+                      Não afeta motorista/montador. Se travar o acesso, é possível desligar direto no banco (rede de segurança).
+                    </p>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={requireAdmin2fa}
+                    onChange={(e) => setRequireAdmin2fa(e.target.checked)}
+                    className="h-5 w-5 text-amber-600 border-gray-300 rounded focus:ring-amber-500"
                   />
                 </label>
 
@@ -470,6 +703,48 @@ export default function Settings() {
                   />
                 </label>
 
+                {/* Configuração de NF (DANFE) */}
+                <div className="mt-6 pt-4 border-t border-gray-100">
+                  <h3 className="font-bold text-gray-900 mb-1">Configuração de NF (DANFE)</h3>
+                  <p className="text-sm text-gray-600 mb-3">
+                    Logo da empresa que aparece na DANFE. Envie um PNG ou JPG — o sistema guarda e usa automaticamente na geração da nota (não precisa mexer no n8n).
+                  </p>
+                  <div className="flex items-center gap-4">
+                    <div className="h-20 w-40 flex items-center justify-center rounded-lg border border-gray-200 bg-gray-50 overflow-hidden">
+                      {nfLogoBase64 ? (
+                        <img
+                          src={`data:image/${nfLogoBase64.startsWith('/9j/') ? 'jpeg' : 'png'};base64,${nfLogoBase64}`}
+                          alt="Logo NF"
+                          className="max-h-full max-w-full object-contain"
+                        />
+                      ) : (
+                        <span className="text-xs text-gray-400">Sem logo</span>
+                      )}
+                    </div>
+                    <div className="flex flex-col gap-2">
+                      <label className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-300 text-sm font-medium text-gray-700 hover:bg-gray-50 cursor-pointer">
+                        <input
+                          type="file"
+                          accept="image/png,image/jpeg"
+                          className="hidden"
+                          onChange={(e) => handleNfLogoUpload(e.target.files?.[0] || null)}
+                        />
+                        {nfLogoBase64 ? 'Trocar logo' : 'Enviar logo'}
+                      </label>
+                      {nfLogoBase64 && (
+                        <button
+                          type="button"
+                          onClick={() => setNfLogoBase64('')}
+                          className="text-xs text-red-600 hover:underline text-left"
+                        >
+                          Remover logo
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  <p className="text-xs text-gray-400 mt-2">Depois de enviar, clique em "Salvar Alteracoes" abaixo.</p>
+                </div>
+
                 {/* Salvar Button inside the module for General */}
                 <div className="mt-6 pt-4 border-t border-gray-100 flex justify-end">
                   <button
@@ -583,6 +858,96 @@ export default function Settings() {
                           Nenhuma palavra-chave definida (padrao urbano).
                         </span>
                       )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Em Espera - move automatico */}
+                <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                  <div className="border-b border-gray-100 bg-gray-50 px-6 py-4 flex items-center gap-2">
+                    <Clock className="h-5 w-5 text-amber-600" />
+                    <h2 className="font-bold text-gray-900">Mover automatico para "Em Espera"</h2>
+                  </div>
+                  <div className="p-6 space-y-6">
+                    <p className="text-sm text-gray-600">
+                      Pedidos que baterem com estas regras saem sozinhos da fila de roteirizacao e vao
+                      para a aba <b>Em Espera</b>. Voce informa a data de agendamento (ou a retirada) la dentro.
+                    </p>
+
+                    {/* Palavras-chave na observacao */}
+                    <div className="space-y-3">
+                      <label className="text-sm font-semibold text-gray-800">Palavras na observacao interna</label>
+                      <p className="text-xs text-gray-500">Se a observacao interna contiver qualquer um destes termos, o pedido vai para Em Espera. Ex: <code>*retirada*</code>.</p>
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          value={newWaitingKeyword}
+                          onChange={(e) => setNewWaitingKeyword(e.target.value)}
+                          onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), handleAddWaitingKeyword())}
+                          placeholder="Ex: *retirada*, *agendar*..."
+                          className="flex-1 border-gray-300 rounded-lg text-sm px-3 py-2 focus:ring-2 focus:ring-amber-500 focus:border-amber-500 outline-none transition-all"
+                        />
+                        <button
+                          onClick={handleAddWaitingKeyword}
+                          className="bg-amber-600 text-white px-3 py-2 rounded-lg font-medium hover:bg-amber-700 transition-colors flex items-center gap-1 text-sm"
+                        >
+                          <Plus className="h-4 w-4" />
+                          Add
+                        </button>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {waitingKeywords.map(kw => (
+                          <span key={kw} className="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-amber-100 text-amber-800 text-sm font-medium border border-amber-200">
+                            {kw}
+                            <button onClick={() => setWaitingKeywords(waitingKeywords.filter(k => k !== kw))} className="hover:text-amber-900 p-0.5 rounded-full hover:bg-amber-200 transition-colors">
+                              <X className="h-3 w-3" />
+                            </button>
+                          </span>
+                        ))}
+                        {waitingKeywords.length === 0 && (
+                          <span className="text-sm text-gray-400 italic">Nenhuma palavra definida.</span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Operacoes do ERP */}
+                    <div className="space-y-3">
+                      <label className="text-sm font-semibold text-gray-800">Operacoes do ERP</label>
+                      <p className="text-xs text-gray-500">Pedidos cuja operacao esteja nesta lista vao para Em Espera. Ex: <code>Venda com Retirada</code>.</p>
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          list="waiting-operation-suggestions"
+                          value={newWaitingOperation}
+                          onChange={(e) => setNewWaitingOperation(e.target.value)}
+                          onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), handleAddWaitingOperation())}
+                          placeholder="Escolha ou digite a operacao..."
+                          className="flex-1 border-gray-300 rounded-lg text-sm px-3 py-2 focus:ring-2 focus:ring-amber-500 focus:border-amber-500 outline-none transition-all"
+                        />
+                        <datalist id="waiting-operation-suggestions">
+                          {operationSuggestions.map(op => (<option key={op} value={op} />))}
+                        </datalist>
+                        <button
+                          onClick={handleAddWaitingOperation}
+                          className="bg-amber-600 text-white px-3 py-2 rounded-lg font-medium hover:bg-amber-700 transition-colors flex items-center gap-1 text-sm"
+                        >
+                          <Plus className="h-4 w-4" />
+                          Add
+                        </button>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {waitingOperations.map(op => (
+                          <span key={op} className="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-amber-100 text-amber-800 text-sm font-medium border border-amber-200">
+                            {op}
+                            <button onClick={() => setWaitingOperations(waitingOperations.filter(o => o !== op))} className="hover:text-amber-900 p-0.5 rounded-full hover:bg-amber-200 transition-colors">
+                              <X className="h-3 w-3" />
+                            </button>
+                          </span>
+                        ))}
+                        {waitingOperations.length === 0 && (
+                          <span className="text-sm text-gray-400 italic">Nenhuma operacao definida.</span>
+                        )}
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -773,4 +1138,3 @@ export default function Settings() {
     </div>
   );
 }
-

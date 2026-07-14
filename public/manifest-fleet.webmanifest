@@ -1,13 +1,13 @@
 {
-  "id": "/fleet/",
+  "id": "/inspecao/",
   "name": "SOLIDGO Frota",
   "short_name": "Frota",
   "description": "Inspeções de frota para motoristas",
   "theme_color": "#0f172a",
   "background_color": "#0f172a",
   "display": "standalone",
-  "scope": "/fleet/",
-  "start_url": "/fleet/",
+  "scope": "/inspecao/",
+  "start_url": "/inspecao/",
   "icons": [
     {
       "src": "/fleet-pwa-64x64.png",

@@ -22,6 +22,33 @@ import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { supabase } from '../../supabase/client';
 
+const syncOrderItemsShadowForImport = async (orderIds: string[]) => {
+  const normalizedIds = Array.from(new Set(orderIds.map((value) => String(value || '').trim()).filter(Boolean)));
+  if (normalizedIds.length === 0) {
+    return { attempted: 0, failed: 0 };
+  }
+
+  const results = await Promise.allSettled(
+    normalizedIds.map(async (orderId) => {
+      const { error } = await supabase.rpc('sync_order_items_shadow', {
+        p_order_id: orderId,
+      });
+      if (error) throw error;
+    })
+  );
+
+  const failures = results.filter((result) => result.status === 'rejected');
+  if (failures.length > 0) {
+    console.warn('[Import] Falha ao sincronizar order_items para alguns pedidos:', failures);
+    throw new Error(`A importação salvou os pedidos, mas falhou ao estruturar ${failures.length} deles para o fluxo por item.`);
+  }
+
+  return {
+    attempted: normalizedIds.length,
+    failed: failures.length,
+  };
+};
+
 export default function OrdersImport() {
   const [loading, setLoading] = useState(false);
   const [lastImport, setLastImport] = useState<Date | null>(null);
@@ -279,12 +306,6 @@ export default function OrdersImport() {
     if (!insertedOrders.length || !importedOrders.length) return;
 
     try {
-      let nfWebhook = 'https://n8n.lojaodosmoveis.shop/webhook/gera_nf';
-      try {
-        const { data: s } = await supabase.from('webhook_settings').select('url').eq('key', 'gera_nf').eq('active', true).single();
-        if (s?.url) nfWebhook = s.url;
-      } catch { }
-
       const xmlByNumero = new Map<string, string>(
         importedOrders
           .map((o: any) => [String(o.order_id_erp || '').trim(), String(o.xml_documento || '').trim()] as const)
@@ -304,70 +325,47 @@ export default function OrdersImport() {
         return;
       }
 
-      console.log(`[Import] Enviando ${docs.length} pedidos para geracao de DANFE em background`);
+      console.log(`[Import] Gerando DANFE de ${docs.length} pedido(s) via /api/danfe`);
 
-      const response = await fetch(nfWebhook, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ documentos: docs, count: docs.length })
-      });
+      // Token da sessão pra autenticar no endpoint (que exige usuário logado).
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token || '';
 
-      const text = await response.text();
-      let payload: any = null;
-      try {
-        payload = JSON.parse(text);
-      } catch {
-        payload = { raw: text };
-      }
-
-      if (!response.ok) {
-        console.warn('[Import] Webhook gera_nf retornou erro:', response.status, payload);
-        return;
-      }
-
-      const { base64List, byOrderId, byNumero } = parseDanfeWebhookPayload(payload);
-      if (base64List.length === 0) {
-        console.warn('[Import] Webhook gera_nf nao retornou DANFE em base64.');
-        return;
-      }
-
-      const updates = new Map<string, string>();
-      docs.forEach((doc: any, idx: number) => {
-        if (byOrderId.has(doc.order_id)) {
-          updates.set(doc.order_id, byOrderId.get(doc.order_id)!);
-          return;
-        }
-        if (byNumero.has(doc.numero)) {
-          updates.set(doc.order_id, byNumero.get(doc.numero)!);
-          return;
-        }
-        if (base64List.length === docs.length && base64List[idx]) {
-          updates.set(doc.order_id, base64List[idx]);
-        }
-      });
-
-      if (updates.size === 0 && docs.length === 1 && base64List[0]) {
-        updates.set(docs[0].order_id, base64List[0]);
-      }
-
+      // Gera 1 DANFE por pedido, em lotes (não sobrecarrega Vercel/Gotenberg).
+      const CONCURRENCY = 4;
       let savedCount = 0;
-      for (const [orderId, b64] of updates.entries()) {
-        const { error } = await supabase
-          .from('orders')
-          .update({ danfe_base64: b64, danfe_gerada_em: new Date().toISOString() })
-          .eq('id', orderId);
-        if (error) {
-          console.warn(`[Import] Falha ao salvar DANFE do pedido ${orderId}:`, error);
-        } else {
-          savedCount++;
-        }
+      for (let i = 0; i < docs.length; i += CONCURRENCY) {
+        const batch = docs.slice(i, i + CONCURRENCY);
+        await Promise.all(batch.map(async (doc: any) => {
+          try {
+            const resp = await fetch('/api/danfe', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+              body: JSON.stringify({ xml: doc.xml })
+            });
+            if (!resp.ok) {
+              console.warn(`[Import] /api/danfe erro (${resp.status}) no pedido ${doc.numero}`);
+              return;
+            }
+            const data = await resp.json().catch(() => null);
+            const b64 = String(data?.danfe_base64 || '');
+            if (!b64) {
+              console.warn(`[Import] /api/danfe nao retornou base64 no pedido ${doc.numero}`);
+              return;
+            }
+            const { error } = await supabase
+              .from('orders')
+              .update({ danfe_base64: b64, danfe_gerada_em: new Date().toISOString() })
+              .eq('id', doc.order_id);
+            if (error) console.warn(`[Import] Falha ao salvar DANFE do pedido ${doc.order_id}:`, error);
+            else savedCount++;
+          } catch (e) {
+            console.warn(`[Import] Erro ao gerar DANFE do pedido ${doc.numero}:`, e);
+          }
+        }));
       }
 
-      if (savedCount > 0) {
-        console.log(`[Import] DANFE em background concluida: ${savedCount} pedido(s) atualizado(s).`);
-      } else {
-        console.warn('[Import] Nenhuma DANFE foi salva apos retorno do webhook.');
-      }
+      console.log(`[Import] DANFE concluida: ${savedCount}/${docs.length} salvo(s).`);
     } catch (e) {
       console.warn('[Import] Erro ao gerar/salvar DANFE em background:', e);
     }
@@ -618,6 +616,17 @@ export default function OrdersImport() {
         })
         .filter(Boolean);
 
+      const shadowSyncOrderIds = Array.from(new Set([...savedOrderIds, ...updatedOrderIds]));
+      let shadowSyncOutcome: { attempted: number; failed: number } | null = null;
+      if (shadowSyncOrderIds.length > 0) {
+        try {
+          shadowSyncOutcome = await syncOrderItemsShadowForImport(shadowSyncOrderIds);
+        } catch (syncOrderItemsError) {
+          console.warn('[Import] Erro ao sincronizar estrutura por item:', syncOrderItemsError);
+          toast.error(syncOrderItemsError instanceof Error ? syncOrderItemsError.message : 'Falha ao estruturar os itens importados.');
+        }
+      }
+
       const storeReleaseOrderIds = Array.from(new Set([...savedOrderIds, ...updatedOrderIds]));
       if (storeReleaseOrderIds.length > 0) {
         try {
@@ -638,6 +647,12 @@ export default function OrdersImport() {
         duration: 5000,
         style: { background: '#10B981', color: 'white' }
       });
+
+      if (shadowSyncOutcome && shadowSyncOutcome.attempted > 0 && shadowSyncOutcome.failed === 0) {
+        toast.success(`Estrutura por item sincronizada em ${shadowSyncOutcome.attempted} pedido(s).`, {
+          duration: 3500,
+        });
+      }
 
       await Promise.all([
         fetchImportStats(),

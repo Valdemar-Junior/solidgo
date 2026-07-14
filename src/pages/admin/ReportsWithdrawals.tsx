@@ -593,6 +593,7 @@ async function fetchWithdrawalPreview(filters: FiltersState): Promise<PreviewRow
       registered_by_name,
       source,
       legacy_route_id,
+      items,
       order:orders!inner(
         id,
         order_id_erp,
@@ -629,7 +630,11 @@ async function fetchWithdrawalPreview(filters: FiltersState): Promise<PreviewRow
 
   return withdrawals.map((row) => {
     const order = row.order!;
-    const items = buildItemRows(parseItemsJson(order.items_json));
+    // Retirada parcial: usa o snapshot dos itens efetivamente retirados (coluna items);
+    // só cai pro pedido inteiro (items_json) em retirada total/legado (items nulo).
+    const pickedSnapshot = (row as any).items;
+    const itemsSource = Array.isArray(pickedSnapshot) && pickedSnapshot.length > 0 ? pickedSnapshot : order.items_json;
+    const items = buildItemRows(parseItemsJson(itemsSource));
     const hasAssemblyItems = items.some((item) => item.hasAssembly);
 
     return {

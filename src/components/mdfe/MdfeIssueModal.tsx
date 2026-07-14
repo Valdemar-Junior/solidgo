@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { supabase } from '../../supabase/client';
+import { formatCpf, isValidCpf, onlyDigits } from '../../lib/utils';
 
 type MdfeIssueModalProps = {
   isOpen: boolean;
@@ -45,21 +46,27 @@ type MdfeEmitter = {
   cnpj: string;
 };
 
+// Veículo vem do cadastro principal (vehicles + campos fiscais). A linha em
+// mdfe_vehicles é criada/espelhada por placa na hora de emitir.
 type MdfeVehicle = {
   id: string;
   display_name: string;
   plate: string;
+  renavam: string | null;
+  tara_kg: number | null;
+  capacity_kg: number | null;
+  capacity_m3: number | null;
   body_type: string;
   rodado_type: string | null;
   licensing_uf: string;
-  active: boolean;
 };
 
+// Motorista vem do cadastro principal (users + drivers.cpf), não mais da lista
+// separada mdfe_drivers. A chave usada no seletor é o CPF (só dígitos), único por
+// motorista; a linha em mdfe_drivers é criada/espelhada na hora de emitir.
 type MdfeDriver = {
-  id: string;
-  name: string;
   cpf: string;
-  active: boolean;
+  name: string;
 };
 
 type RouteOrderForMdfe = {
@@ -124,7 +131,7 @@ export default function MdfeIssueModal({
   const [state, setState] = useState<LoadState>(INITIAL_STATE);
   const [selectedEmitterId, setSelectedEmitterId] = useState('');
   const [selectedVehicleId, setSelectedVehicleId] = useState('');
-  const [selectedDriverId, setSelectedDriverId] = useState('');
+  const [selectedDriverCpf, setSelectedDriverCpf] = useState('');
   const [selectedRouteOrderIds, setSelectedRouteOrderIds] = useState<Set<string>>(new Set());
   const [manualGrossWeight, setManualGrossWeight] = useState('');
 
@@ -147,15 +154,14 @@ export default function MdfeIssueModal({
               .eq('active', true)
               .order('company_name', { ascending: true }),
             supabase
-              .from('mdfe_vehicles')
-              .select('id, display_name, plate, body_type, rodado_type, licensing_uf, active')
+              .from('vehicles')
+              .select('id, model, plate, active, renavam, tara_kg, capacity_kg, capacity_m3, body_type, rodado_type, licensing_uf')
               .eq('active', true)
-              .order('display_name', { ascending: true }),
+              .order('model', { ascending: true }),
             supabase
-              .from('mdfe_drivers')
-              .select('id, name, cpf, active')
-              .eq('active', true)
-              .order('name', { ascending: true }),
+              .from('drivers')
+              .select('cpf, active, user:users!user_id(name, active)')
+              .eq('active', true),
             supabase
               .from('routes')
               .select(`
@@ -186,8 +192,56 @@ export default function MdfeIssueModal({
 
         const settings = (settingsResponse.data || null) as MdfeSettings | null;
         const emitters = (emittersResponse.data || []) as MdfeEmitter[];
-        const vehicles = (vehiclesResponse.data || []) as MdfeVehicle[];
-        const drivers = (driversResponse.data || []) as MdfeDriver[];
+        // Só entram no MDF-e veículos com os dados fiscais mínimos preenchidos
+        // (tipo de rodado, carroceria, UF e tara) — o resto a emissão rejeita.
+        const vehicles = ((vehiclesResponse.data || []) as Array<{
+          id: string;
+          model: string;
+          plate: string | null;
+          renavam: string | null;
+          tara_kg: number | null;
+          capacity_kg: number | null;
+          capacity_m3: number | null;
+          body_type: string | null;
+          rodado_type: string | null;
+          licensing_uf: string | null;
+        }>)
+          .map((row) => ({
+            id: row.id,
+            display_name: String(row.model || '').trim(),
+            plate: String(row.plate || '').trim(),
+            renavam: row.renavam,
+            tara_kg: row.tara_kg,
+            capacity_kg: row.capacity_kg,
+            capacity_m3: row.capacity_m3,
+            body_type: String(row.body_type || '').trim(),
+            rodado_type: row.rodado_type ? String(row.rodado_type).trim() : null,
+            licensing_uf: String(row.licensing_uf || '').trim().toUpperCase(),
+          }))
+          .filter((v) =>
+            v.plate &&
+            v.body_type &&
+            v.rodado_type &&
+            v.licensing_uf.length === 2 &&
+            v.tara_kg != null
+          ) as MdfeVehicle[];
+        // Só entram no MDF-e motoristas com CPF válido (exigência fiscal).
+        const drivers = ((driversResponse.data || []) as Array<{
+          cpf: string | null;
+          active: boolean;
+          user: { name: string; active: boolean } | { name: string; active: boolean }[] | null;
+        }>)
+          .map((row) => {
+            const user = Array.isArray(row.user) ? row.user[0] : row.user;
+            return {
+              cpf: onlyDigits(row.cpf || ''),
+              name: String(user?.name || '').trim(),
+              userActive: user?.active ?? false,
+            };
+          })
+          .filter((row) => row.userActive && row.name && isValidCpf(row.cpf))
+          .map(({ cpf, name }) => ({ cpf, name } as MdfeDriver))
+          .sort((a, b) => a.name.localeCompare(b.name));
         const routeData = routeResponse.data as any;
         const routeOrders = ((routeData?.route_orders || []) as RouteOrderForMdfe[]).sort(
           (left, right) => Number(left.sequence || 0) - Number(right.sequence || 0)
@@ -209,7 +263,6 @@ export default function MdfeIssueModal({
               cityCode: null,
               cityName: null,
               uf: null,
-              issues: ['Pedido nao encontrado na rota.'],
               blockingIssues: ['Pedido nao encontrado na rota.'],
               warnings: [],
             } satisfies ParsedDocument;
@@ -256,7 +309,7 @@ export default function MdfeIssueModal({
           );
           setSelectedEmitterId(defaultEmitterId || '');
           setSelectedVehicleId(matchedVehicle?.id || '');
-          setSelectedDriverId(matchedDriver?.id || '');
+          setSelectedDriverCpf(matchedDriver?.cpf || '');
           setManualGrossWeight(formatWeightInput(documents.reduce((acc, item) => acc + Number(item.grossWeight || 0), 0)));
         }
       } catch (error: any) {
@@ -286,8 +339,8 @@ export default function MdfeIssueModal({
     [state.vehicles, selectedVehicleId]
   );
   const selectedDriver = useMemo(
-    () => state.drivers.find((item) => item.id === selectedDriverId) || null,
-    [state.drivers, selectedDriverId]
+    () => state.drivers.find((item) => item.cpf === selectedDriverCpf) || null,
+    [state.drivers, selectedDriverCpf]
   );
 
   const includedDocuments = useMemo(() => {
@@ -367,7 +420,7 @@ export default function MdfeIssueModal({
     Boolean(routeId) &&
     Boolean(selectedEmitterId) &&
     Boolean(selectedVehicleId) &&
-    Boolean(selectedDriverId) &&
+    Boolean(selectedDriverCpf) &&
     includedDocuments.length > 0 &&
     !hasBlockingIssues &&
     Boolean(selectedVehicle?.rodado_type) &&
@@ -378,14 +431,31 @@ export default function MdfeIssueModal({
   const handleEmit = async () => {
     if (!canEmit || !routeId) return;
 
+    if (!selectedDriver) {
+      toast.error('Selecione o condutor.');
+      return;
+    }
+
+    if (!selectedVehicle) {
+      toast.error('Selecione o veículo.');
+      return;
+    }
+
     try {
       setSubmitting(true);
+
+      // Ponte: motorista e veículo vêm do cadastro principal, mas a emissão fiscal
+      // ainda usa mdfe_drivers.id / mdfe_vehicles.id. Garantimos aqui espelhos estáveis
+      // (find-or-create por CPF / por placa) — sem tocar na edge function fiscal.
+      const mdfeDriverId = await resolveMdfeDriverId(selectedDriver.cpf, selectedDriver.name);
+      const mdfeVehicleId = await resolveMdfeVehicleId(selectedVehicle);
+
       const { data, error } = await supabase.functions.invoke('emit-mdfe', {
         body: {
           routeId,
           emitterId: selectedEmitterId,
-          vehicleId: selectedVehicleId,
-          driverId: selectedDriverId,
+          vehicleId: mdfeVehicleId,
+          driverId: mdfeDriverId,
           routeOrderIds: Array.from(selectedRouteOrderIds),
           manualGrossWeight: manualGrossWeight.trim() === '' ? 0 : effectiveGrossWeight,
         },
@@ -559,7 +629,7 @@ export default function MdfeIssueModal({
                         }))}
                       />
                       <SelectField
-                        label="Veiculo MDF-e"
+                        label="Veículo"
                         value={selectedVehicleId}
                         onChange={setSelectedVehicleId}
                         options={state.vehicles.map((item) => ({
@@ -568,12 +638,12 @@ export default function MdfeIssueModal({
                         }))}
                       />
                       <SelectField
-                        label="Condutor MDF-e"
-                        value={selectedDriverId}
-                        onChange={setSelectedDriverId}
+                        label="Condutor"
+                        value={selectedDriverCpf}
+                        onChange={setSelectedDriverCpf}
                         options={state.drivers.map((item) => ({
-                          value: item.id,
-                          label: `${item.name} - ${item.cpf}`,
+                          value: item.cpf,
+                          label: `${item.name} - ${formatCpf(item.cpf)}`,
                         }))}
                       />
                     </div>
@@ -1031,4 +1101,88 @@ function normalize(value: string | null | undefined) {
     .replace(/[\u0300-\u036f]/g, '')
     .trim()
     .toLowerCase();
+}
+
+// Espelha o motorista escolhido (do cadastro principal) para mdfe_drivers, casando
+// por CPF. Reaproveita a linha existente (mant\u00e9m o mesmo id \u2192 a regra fiscal de "um
+// MDF-e aberto por condutor" continua valendo) ou cria uma nova. Retorna o id fiscal.
+async function resolveMdfeDriverId(cpfDigits: string, name: string): Promise<string> {
+  const { data: rows, error } = await supabase
+    .from('mdfe_drivers')
+    .select('id, cpf, name, active');
+  if (error) throw error;
+
+  const match = (rows || []).find(
+    (row: { id: string; cpf: string | null }) => onlyDigits(row.cpf || '') === cpfDigits
+  ) as { id: string; name: string; active: boolean } | undefined;
+
+  if (match) {
+    if (!match.active || match.name !== name) {
+      const { error: updateError } = await supabase
+        .from('mdfe_drivers')
+        .update({ active: true, name })
+        .eq('id', match.id);
+      if (updateError) throw updateError;
+    }
+    return match.id;
+  }
+
+  const { data: created, error: insertError } = await supabase
+    .from('mdfe_drivers')
+    .insert({ name, cpf: cpfDigits, active: true })
+    .select('id')
+    .single();
+  if (insertError) throw insertError;
+  return (created as { id: string }).id;
+}
+
+// Espelha o veículo escolhido (do cadastro principal) para mdfe_vehicles, casando
+// por placa. Reaproveita a linha existente (mantém o mesmo id → a regra fiscal de "um
+// MDF-e aberto por placa" continua valendo) ou cria uma nova. Retorna o id fiscal.
+async function resolveMdfeVehicleId(vehicle: MdfeVehicle): Promise<string> {
+  const plateKey = normalizePlate(vehicle.plate);
+  const payload = {
+    display_name: vehicle.display_name || vehicle.plate,
+    plate: plateKey,
+    renavam: vehicle.renavam ? String(vehicle.renavam).replace(/\D/g, '') || null : null,
+    tara_kg: Number(vehicle.tara_kg || 0),
+    capacity_kg: vehicle.capacity_kg == null ? null : Number(vehicle.capacity_kg),
+    capacity_m3: vehicle.capacity_m3 == null ? null : Number(vehicle.capacity_m3),
+    body_type: vehicle.body_type,
+    rodado_type: vehicle.rodado_type,
+    licensing_uf: vehicle.licensing_uf,
+    active: true,
+  };
+
+  const { data: rows, error } = await supabase
+    .from('mdfe_vehicles')
+    .select('id, plate');
+  if (error) throw error;
+
+  const match = (rows || []).find(
+    (row: { id: string; plate: string | null }) => normalizePlate(row.plate || '') === plateKey
+  ) as { id: string } | undefined;
+
+  if (match) {
+    const { error: updateError } = await supabase
+      .from('mdfe_vehicles')
+      .update(payload)
+      .eq('id', match.id);
+    if (updateError) throw updateError;
+    return match.id;
+  }
+
+  const { data: created, error: insertError } = await supabase
+    .from('mdfe_vehicles')
+    .insert(payload)
+    .select('id')
+    .single();
+  if (insertError) throw insertError;
+  return (created as { id: string }).id;
+}
+
+// Placa normalizada como a emit-mdfe / o índice único do mdfe_vehicles fazem:
+// sem separadores, maiúscula, sem espaços.
+function normalizePlate(value: string | null | undefined) {
+  return String(value || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 }

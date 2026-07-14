@@ -60,6 +60,34 @@ export async function syncAssemblyProductsForOrder(orderId: string): Promise<Ass
   };
 }
 
+// Versao POR ITEM: cria montagem so dos SKUs efetivamente retirados (retirada parcial).
+export async function syncAssemblyProductsForPickupItems(orderId: string, skus: string[]): Promise<AssemblySyncResult> {
+  const normalizedOrderId = String(orderId || '').trim();
+  if (!normalizedOrderId) {
+    throw new Error('orderId invalido para sincronizar montagem da retirada por item');
+  }
+  const normalizedSkus = Array.from(new Set((skus || []).map((s) => String(s ?? '').trim()).filter(Boolean)));
+  if (normalizedSkus.length === 0) {
+    return { order_id: normalizedOrderId, inserted_products: 0 };
+  }
+
+  const { data, error } = await supabase.rpc('sync_missing_assembly_products_for_pickup_items', {
+    p_order_id: normalizedOrderId,
+    p_skus: normalizedSkus,
+  });
+
+  if (error) {
+    throw error;
+  }
+
+  const result = (data || {}) as Partial<AssemblySyncResult>;
+
+  return {
+    order_id: String(result.order_id || normalizedOrderId),
+    inserted_products: Number(result.inserted_products || 0),
+  };
+}
+
 export async function syncAssemblyProductsForPickup(orderId: string): Promise<AssemblySyncResult> {
   const normalizedOrderId = String(orderId || '').trim();
   if (!normalizedOrderId) {

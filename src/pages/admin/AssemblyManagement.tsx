@@ -659,6 +659,74 @@ function AssemblyManagementContent() {
     return assemblyInRoutes.filter(ap => String(ap.assembly_route_id) === String(route.id));
   };
 
+  const buildAssemblyPdfItemsByOrder = (products: AssemblyProductWithDetails[]): Record<string, any[]> => {
+    const byOrder: Record<string, Record<string, any>> = {};
+    const normalize = (value: unknown) => String(value || '').trim().toLowerCase();
+
+    const findOriginalItem = (product: AssemblyProductWithDetails): any => {
+      const originalItems = Array.isArray(product.order?.items_json) ? product.order.items_json : [];
+      const productSku = normalize(product.product_sku);
+      const productName = normalize(product.product_name);
+
+      return originalItems.find((item: any) => productSku && normalize(item?.sku) === productSku)
+        || originalItems.find((item: any) => productName && normalize(item?.name) === productName)
+        || null;
+    };
+
+    const resolveLocation = (product: AssemblyProductWithDetails, originalItem: any): string => {
+      if (originalItem?.location) return String(originalItem.location);
+
+      const prodLoc = (product.order as any)?.raw_json?.produtos_locais;
+      if (!Array.isArray(prodLoc)) return '';
+
+      const productSku = normalize(product.product_sku || originalItem?.sku);
+      const productName = normalize(product.product_name || originalItem?.name);
+      const byCode = prodLoc.find((p: any) => productSku && normalize(p?.codigo_produto) === productSku);
+      if (byCode?.local_estocagem) return String(byCode.local_estocagem);
+
+      const byName = prodLoc.find((p: any) => productName && normalize(p?.nome_produto) === productName);
+      if (byName?.local_estocagem) return String(byName.local_estocagem);
+
+      return '';
+    };
+
+    products
+      // Exclui do romaneio apenas os produtos devolvidos/cancelados (status 'cancelled').
+      // NÃO usar was_returned aqui: o clone de remontagem é pending mas tem was_returned=true
+      // e PRECISA aparecer no romaneio da nova rota.
+      .filter((product) => String(product.status || '').trim().toLowerCase() !== 'cancelled')
+      .forEach((product) => {
+        const orderId = String(product.order_id || product.order?.id || '');
+        if (!orderId) return;
+
+        const originalItem = findOriginalItem(product);
+        const sku = String(product.product_sku || originalItem?.sku || '').trim();
+        const name = String(product.product_name || originalItem?.name || 'Produto sem nome').trim();
+        const key = `${sku || 'sem-sku'}|${name}`;
+
+        if (!byOrder[orderId]) byOrder[orderId] = {};
+        if (!byOrder[orderId][key]) {
+          byOrder[orderId][key] = {
+            ...(originalItem || {}),
+            sku,
+            name,
+            location: resolveLocation(product, originalItem),
+            purchased_quantity: 0,
+            quantity: 0,
+            has_assembly: 'sim',
+            possui_montagem: 'sim',
+          };
+        }
+
+        byOrder[orderId][key].purchased_quantity += 1;
+        byOrder[orderId][key].quantity += 1;
+      });
+
+    return Object.fromEntries(
+      Object.entries(byOrder).map(([orderId, items]) => [orderId, Object.values(items)])
+    );
+  };
+
   const getPdfForecastDateOptions = (route: AssemblyRoute | null): string[] => {
     const dateKeys = new Set(
       getRouteProducts(route)
@@ -3771,6 +3839,7 @@ function AssemblyManagementContent() {
                                             vehicle: undefined,
                                             orders: [order] as any,
                                             generatedAt: new Date().toISOString(),
+                                            assemblyItemsByOrder: buildAssemblyPdfItemsByOrder(list),
                                             assemblyPrioritiesByOrder: {
                                               [String(order.id)]: getHighestMountPriority(list.map((item) => item.mount_priority)),
                                             },
@@ -4280,7 +4349,14 @@ function AssemblyManagementContent() {
                         const forecastDate = getAssemblyForecastDateKey(getPrevisaoMontagemValue(product.order));
                         return selectedPdfForecastDates.has(forecastDate);
                       });
-                      const orders = products.map(p => p.order).filter(Boolean) as any[];
+                      const orders = Array.from(
+                        products.reduce((acc, product) => {
+                          if (product.order?.id && !acc.has(String(product.order.id))) {
+                            acc.set(String(product.order.id), product.order);
+                          }
+                          return acc;
+                        }, new Map<string, any>()).values()
+                      ) as any[];
 
                       // Ordenar pedidos conforme opção selecionada
                       const parseDate = (d: any) => {
@@ -4354,6 +4430,7 @@ function AssemblyManagementContent() {
                         vehicle: undefined,
                         orders: orders as any,
                         generatedAt: new Date().toISOString(),
+                        assemblyItemsByOrder: buildAssemblyPdfItemsByOrder(products),
                         assemblyPrioritiesByOrder,
                         assemblyInstallerName: m?.name || m?.email || '—',
                         assemblyVehicleModel: v?.model || '',

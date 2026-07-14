@@ -1,4 +1,4 @@
-import { FileText, Settings, Truck, Users, ArrowRight, ScrollText, Building2 } from 'lucide-react';
+import { FileText, Settings, ArrowRight, ScrollText, Building2 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
 export default function Mdfe() {
@@ -14,18 +14,6 @@ export default function Mdfe() {
       description: 'Cadastrar empresa emitente, endereco fiscal e dados fixos do emissor.',
       icon: Building2,
       href: '/admin/mdfe/emitters',
-    },
-    {
-      title: 'Veiculos MDF-e',
-      description: 'Cadastrar os veiculos fiscais sem depender do cadastro operacional atual.',
-      icon: Truck,
-      href: '/admin/mdfe/vehicles',
-    },
-    {
-      title: 'Condutores MDF-e',
-      description: 'Cadastrar nome e CPF dos condutores usados nas emissoes.',
-      icon: Users,
-      href: '/admin/mdfe/drivers',
     },
     {
       title: 'Historico MDF-e',
@@ -66,7 +54,7 @@ export default function Mdfe() {
           </p>
         </section>
 
-        <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+        <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {cards.map((card) => (
             <article key={card.title} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
               <div className="mb-4 inline-flex rounded-xl bg-slate-100 p-3 text-slate-700">
