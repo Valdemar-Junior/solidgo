@@ -1,5 +1,7 @@
 // Conversor XML NF-e (modelo 55) -> DANFE em HTML.
-// Portado da API original (danfe_generation) pra dentro do projeto.
+// Layout refeito (jul/2026): fonte legível, página A4 de altura travada
+// (rodapé sempre fecha embaixo) e paginação por altura real em mm —
+// notas com muitos itens quebram limpo, com cabeçalho repetido e "FOLHA X de Y".
 // Núcleo exportado: processXmlToHtml(xml, logoBase64?) -> { html, meta }.
 import { XMLParser } from "fast-xml-parser";
 // @ts-ignore — bwip-js resolve em runtime (build node); os tipos não casam com moduleResolution bundler.
@@ -8,367 +10,336 @@ import bwipjs from "bwip-js";
 // Namespace NFe 4.00
 const NFE_NS = "http://www.portalfiscal.inf.br/nfe";
 
-// Template HTML DANFE - baseado no modelo do usuário
+// ================================================
+// CSS — página A4 exata; .page é flex-coluna com altura fixa, a área de
+// itens estica (flex:1) e o rodapé fica sempre colado embaixo.
+// ================================================
 const PAGE_CSS = `
 <style type="text/css">
-    @media print {
-        @page { margin: 2mm; }
-        footer { page-break-after: always; }
-        * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
-    }
-    * { margin: 0; }
-    .ui-widget-content { border: none !important; }
-    .nfeArea.page { 
-        width: 198mm; 
-        /* Sem min-height para evitar alinhamento vertical indesejado */
-        position: relative; 
-        font-family: "Times New Roman", serif; 
-        color: #000; 
-        margin: 0 auto; 
-        display: block !important; /* Força comportamento de bloco */
-        page-break-inside: avoid;
-        page-break-before: always;
+    @page { size: A4; margin: 0; }
+    html, body { margin: 0; padding: 0; }
+    body { font-family: Arial, Helvetica, sans-serif; color: #000; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    * { margin: 0; box-sizing: border-box; }
+
+    .page {
+        width: 210mm;
+        height: 296mm;                 /* levemente < 297 pra não estourar folha em branco */
+        padding: 4mm 6mm;
+        margin: 0 auto;
+        display: flex;
+        flex-direction: column;
         overflow: hidden;
+        page-break-after: always;
+        page-break-inside: avoid;
+        background: #fff;
     }
-    .nfeArea.page:first-of-type {
-        page-break-before: auto;
+    .page:last-child { page-break-after: auto; }
+
+    .page table { border-collapse: collapse; width: 100%; font-family: Arial, Helvetica, sans-serif; color: #000; }
+    .page td, .page th { border: 1px solid #000; vertical-align: top; padding: 0.6mm 1mm; overflow: hidden; }
+
+    .nf-label { display: block; font-size: 5pt; text-transform: uppercase; line-height: 1.25; letter-spacing: 0.1px; }
+    .info { display: block; font-size: 8pt; font-weight: bold; line-height: 1.2; word-break: break-word; }
+    .area-name { font-size: 6.5pt; font-weight: bold; text-transform: uppercase; margin: 1.2mm 0 0.5mm; }
+    .txt-center { text-align: center; }
+    .txt-right { text-align: right; }
+    .txt-upper { text-transform: uppercase; }
+    .bold { font-weight: bold; }
+    .block { display: block; }
+    .no-top td { border-top: none; }
+    .hr-dashed { border: none; border-top: 1px dashed #444; margin: 1.6mm 0; }
+
+    /* Canhoto (só folha 1) */
+    .canhoto td { font-size: 6.5pt; }
+    .canhoto .tserie { width: 34mm; vertical-align: middle; text-align: center; }
+    .canhoto .tserie .nfe-title { font-size: 12pt; font-weight: bold; display: block; margin-bottom: 1mm; }
+    .canhoto .tserie span { display: block; font-size: 8pt; font-weight: bold; }
+
+    /* Cabeçalho do emitente */
+    .emit-name { font-size: 9pt; font-weight: bold; display: block; margin-bottom: 1mm; }
+    .emit-addr { font-size: 7pt; line-height: 1.35; }
+    .danfe-title { font-size: 12pt; font-weight: bold; letter-spacing: 0.5px; }
+    .danfe-sub { font-size: 6.5pt; line-height: 1.25; margin: 0.8mm 0; }
+    .danfe-nf { font-size: 8.5pt; font-weight: bold; line-height: 1.35; }
+    .danfe-folha { font-size: 7.5pt; font-weight: bold; }
+    .entradaSaida { margin: 1mm 0; }
+    .entradaSaida .legenda { text-align: left; margin-left: 3mm; display: inline-block; font-size: 6.5pt; line-height: 1.3; }
+    .entradaSaida .legenda span { display: block; }
+    .entradaSaida .identificacao { float: right; margin-right: 2mm; border: 1px solid #000; width: 5.5mm; height: 5.5mm; text-align: center; line-height: 5.5mm; font-size: 8pt; font-weight: bold; }
+    .chave { font-size: 8pt; font-weight: bold; letter-spacing: 0.3px; }
+    .consulta { font-size: 6.5pt; line-height: 1.3; }
+    .client_logo { max-height: 100%; max-width: 100%; object-fit: contain; margin: 0 auto; display: block; }
+    .barcode-cell img { width: 96%; max-height: 12mm; display: block; margin: 0.5mm auto; }
+
+    /* Caixa de impostos: 9 colunas iguais */
+    .boxImposto { table-layout: fixed; }
+    .boxImposto td { width: 11.11%; }
+    .boxImposto .nf-label { font-size: 4.6pt; letter-spacing: 0; }
+    .boxImposto .info { text-align: right; }
+
+    .freteConta .quadro { float: right; border: 1px solid #000; width: 5.5mm; height: 5.5mm; text-align: center; line-height: 5.5mm; font-size: 8pt; font-weight: bold; }
+    .freteConta p { font-size: 5pt; line-height: 1.3; }
+
+    .boxFatura .dup-list { border: 1px solid #000; padding: 1mm; font-size: 7pt; min-height: 7mm; line-height: 1.5; }
+
+    /* Área de itens: estica pra preencher a folha */
+    .items-area { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; }
+    .items-box { flex: 1 1 auto; border: 1px solid #000; border-top: none; overflow: hidden; }
+    .items-box table { table-layout: fixed; }
+    .items-box th {
+        font-size: 5.2pt; font-weight: bold; text-transform: uppercase;
+        padding: 0.9mm 0.4mm; text-align: center; vertical-align: middle;
+        border: 1px solid #000; border-top: 1px solid #000;
     }
-    .nfeArea.page:last-child { 
-        page-break-after: auto; 
+    .items-box td {
+        font-size: 7.5pt; line-height: 1.25; padding: 0.7mm 0.8mm;
+        border: none; border-left: 1px solid #000; vertical-align: top;
+        word-break: break-word;
     }
-    .nfeArea .font-12 { font-size: 12pt; }
-    .nfeArea .font-8 { font-size: 8pt; }
-    .nfeArea .bold { font-weight: bold; }
-    .nfeArea .area-name { font-family: "Times New Roman", serif; color: #000; font-weight: bold; margin: 5px 0 0; font-size: 6pt; text-transform: uppercase; }
-    .nfeArea .txt-upper { text-transform: uppercase; }
-    .nfeArea .txt-center { text-align: center; }
-    .nfeArea .txt-right { text-align: right; }
-    .nfeArea .nf-label { text-transform: uppercase; margin-bottom: 3px; display: block; }
-    .nfeArea .nf-label.label-small { letter-spacing: -0.5px; font-size: 4pt; }
-    .nfeArea .info { font-weight: bold; font-size: 8pt; display: block; line-height: 1em; }
-    .nfeArea table { font-family: "Times New Roman", serif; color: #000; font-size: 5pt; border-collapse: collapse; width: 100%; border-color: #000; }
-    .nfeArea .no-top { margin-top: -1px; }
-    .nfeArea .valign-middle { vertical-align: middle; }
-    .nfeArea td { vertical-align: top; box-sizing: border-box; overflow: hidden; border-color: #000; padding: 1px; height: 5mm; }
-    .nfeArea .tserie { width: 32.2mm; vertical-align: middle; font-size: 8pt; font-weight: bold; }
-    .nfeArea .tserie span { display: block; }
-    .nfeArea .entradaSaida .legenda { text-align: left; margin-left: 2mm; display: block; }
-    .nfeArea .entradaSaida .legenda span { display: block; }
-    .nfeArea .entradaSaida .identificacao { float: right; margin-right: 2mm; border: 1px solid black; width: 5mm; height: 5mm; text-align: center; line-height: 5mm; }
-    .nfeArea .hr-dashed { border: none; border-top: 1px dashed #444; margin: 5px 0; }
-    .nfeArea .client_logo { max-height: 100%; max-width: 100%; object-fit: contain; margin: 0 auto; display: block; }
-    .nfeArea .title { font-size: 10pt; margin-bottom: 2mm; }
-    .nfeArea .txtc { text-align: center; }
-    .nfeArea .pd-0 { padding: 0; }
-    .nfeArea .mb2 { margin-bottom: 2mm; }
-    .nfeArea table table { margin: -1pt; width: 100.5%; }
-    .nfeArea .wrapper-table { margin-bottom: 2pt; }
-    .nfeArea .boxImposto { table-layout: fixed; }
-    .nfeArea .boxImposto td { width: 11.11%; }
-    .nfeArea .boxImposto .nf-label { font-size: 5pt; }
-    .nfeArea .boxImposto .info { text-align: right; }
-    .nfeArea .no-border { border: none !important; }
-    .nfeArea .wrapper-border { border: 1px solid #000; border-width: 0 1px 1px; min-height: 90mm; }
-    .nfeArea .wrapper-border.full-page { min-height: auto; }
-    .nfeArea .wrapper-border table { margin: 0 -1px; width: 100.4%; }
-    .nfeArea .content-spacer { display: block; height: 10px; }
-    .nfeArea .titles th { padding: 3px 0; }
-    .nfeArea .listProdutoServico td { padding: 0; }
-    .nfeArea .codigo { display: block; text-align: center; margin-top: 5px; }
-    .nfeArea .boxProdutoServico tr td:first-child { border-left: none; }
-    .nfeArea .boxProdutoServico td { font-size: 8pt; height: auto; }
-    .nfeArea .boxFatura span { display: block; }
-    .nfeArea .boxFatura td { border: 1px solid #000; }
-    .nfeArea .freteConta .border { width: 5mm; height: 5mm; float: right; text-align: center; line-height: 5mm; border: 1px solid black; }
-    .nfeArea .freteConta .info { line-height: 5mm; }
-    .page .boxFields td p { font-family: "Times New Roman", serif; font-size: 5pt; line-height: 1.2em; color: #000; }
-    .page .boxFields td.txtc.txt-upper p { font-size: 7pt; }
-    .nfeArea .block { display: block; }
-    .barcode-container { display: flex; justify-content: center; align-items: center; height: 100%; width: 100%; padding: 2px; box-sizing: border-box; }
-    .barcode { display: flex; height: 13mm; overflow: hidden; }
-    .barcode .bar { background-color: #000 !important; height: 100%; display: inline-block; }
-    .barcode .space { background-color: transparent; height: 100%; display: inline-block; }
+    .items-box td:first-child { border-left: none; }
+    .items-box tbody tr:first-child td { padding-top: 1mm; }
+
+    /* Rodapé (ISSQN + dados adicionais) */
+    .boxDadosAdicionais td { height: 25mm; }
+    .boxDadosAdicionais .obs { font-size: 6.5pt; line-height: 1.35; word-break: break-word; }
 </style>`;
 
-// -- PARTES DO TEMPLATE PARA PAGINAÇÃO --
+// ================================================
+// TEMPLATES
+// ================================================
 
-const TPL_HEADER_REPEATED = `
-    <div class="boxFields" style="padding-top: 5px;">
-        <table cellpadding="0" cellspacing="0" border="1">
-            <tbody>
-                <tr>
-                    <td colspan="2" class="txt-upper">Recebemos de [emit_xNome] os produtos e serviços constantes na nota fiscal indicada ao lado</td>
-                    <td rowspan="2" class="tserie txt-center">
-                        <span class="font-12" style="margin-bottom: 5px;">NF-e</span>
-                        <span>Nº [ide_nNF]</span>
-                        <span>Série [ide_serie]</span>
-                    </td>
-                </tr>
-                <tr>
-                    <td style="width: 32mm"><span class="nf-label">Data de recebimento</span></td>
-                    <td style="width: 124.6mm"><span class="nf-label">Identificação de assinatura do Recebedor</span></td>
-                </tr>
-            </tbody>
-        </table>
-        <hr class="hr-dashed" />
-        <table cellpadding="0" cellspacing="0" border="1" style="table-layout: fixed; width: 100%;">
-            <tbody>
-                <tr>
-                    <td rowspan="3" style="width: 76mm; font-size: 7pt; vertical-align: top;" class="txt-center">
-                        <div style="height: 18mm; width: 76mm; display: flex; align-items: center; justify-content: center; overflow: hidden; margin: 0 auto 1mm auto;">[logo_image]</div>
-                        <div style="font-size: 7pt;">
-                            <span class="mb2 bold block" style="font-size: 8pt;">[emit_xNome]</span>
-                            <span class="block">[emit_xLgr], [emit_nro]</span>
-                            <span class="block">[emit_xBairro] - [emit_CEP]</span>
-                            <span class="block">[emit_xMun] - [emit_UF] - Fone: [emit_fone]</span>
-                        </div>
-                    </td>
-                    <td rowspan="3" class="txtc txt-upper" style="width: 34mm; height: 29.5mm; font-size: 7pt;">
-                        <h3 class="title">Danfe</h3>
-                        <p class="mb2">Documento auxiliar da Nota Fiscal Eletrônica </p>
-                        <p class="entradaSaida mb2">
-                            <span class="identificacao"><span>[ide_tpNF]</span></span>
-                            <span class="legenda"><span>0 - Entrada</span><span>1 - Saída</span></span>
-                        </p>
-                        <p>
-                            <span class="block bold"><span>Nº</span> <span>[ide_nNF]</span></span>
-                            <span class="block bold"><span>SÉRIE:</span> <span>[ide_serie]</span></span>
-                            <span class="block"><span>Página [current_page] de [total_pages]</span></span>
-                        </p>
-                    </td>
-                    <td class="txt-upper" style="height: auto;">
-                        <span class="nf-label">Controle do Fisco</span>
-                        <div class="codigo"><span style='font-size:7pt'>{BarCode}</span></div>
-                    </td>
-                </tr>
-                <tr>
-                    <td style="height: auto;"><span class="nf-label">CHAVE DE ACESSO</span><span class="bold block txt-center info">[chave_acesso]</span></td>
-                </tr>
-                <tr>
-                    <td class="txt-center valign-middle" style="height: auto;"><span class="block">Consulta de autenticidade no portal nacional da NF-e </span> www.nfe.fazenda.gov.br/portal ou no site da Sefaz Autorizada.</td>
-                </tr>
-            </tbody>
-        </table>
-        <table cellpadding="0" cellspacing="0" class="boxNaturezaOperacao no-top" border="1">
-            <tbody>
-                <tr>
-                    <td><span class="nf-label">NATUREZA DA OPERAÇÃO</span><span class="info">[ide_natOp]</span></td>
-                    <td><span class="nf-label">PROTOCOLO DE AUTORIZAÇÃO DE USO</span><span class="info">[protocolo]</span></td>
-                </tr>
-            </tbody>
-        </table>
-        <table cellpadding="0" cellspacing="0" class="boxInscricao no-top" border="1">
-            <tbody>
-                <tr>
-                    <td><span class="nf-label">INSCRIÇÃO ESTADUAL</span><span class="info">[emit_IE]</span></td>
-                    <td style="width: 67.5mm;"><span class="nf-label">INSCRIÇÃO ESTADUAL DO SUBST. TRIB.</span><span class="info">[emit_IEST]</span></td>
-                    <td style="width: 64.3mm"><span class="nf-label">CNPJ</span><span class="info">[emit_CNPJ]</span></td>
-                </tr>
-            </tbody>
-        </table>
+// Canhoto de recebimento — só na folha 1
+const TPL_CANHOTO = `
+    <table class="canhoto" cellpadding="0" cellspacing="0">
+        <tbody>
+            <tr>
+                <td colspan="2" class="txt-upper">Recebemos de [emit_xNome] os produtos e serviços constantes na nota fiscal indicada ao lado</td>
+                <td rowspan="2" class="tserie">
+                    <span class="nfe-title">NF-e</span>
+                    <span>Nº [ide_nNF]</span>
+                    <span>Série [ide_serie]</span>
+                </td>
+            </tr>
+            <tr>
+                <td style="width: 34mm; height: 7mm;"><span class="nf-label">Data de recebimento</span></td>
+                <td><span class="nf-label">Identificação e assinatura do recebedor</span></td>
+            </tr>
+        </tbody>
+    </table>
+    <hr class="hr-dashed" />
 `;
 
-// Header simplificado para páginas 2+ (SEM CANHOTO)
-const TPL_HEADER_SIMPLE = `
-    <div class="boxFields" style="padding-top: 5px;">
-        <table cellpadding="0" cellspacing="0" border="1" style="table-layout: fixed; width: 100%;">
-            <tbody>
-                <tr>
-                    <td rowspan="3" style="width: 76mm; font-size: 7pt; vertical-align: top;" class="txt-center">
-                        <div style="height: 18mm; width: 76mm; display: flex; align-items: center; justify-content: center; overflow: hidden; margin: 0 auto 1mm auto;">[logo_image]</div>
-                        <div style="font-size: 7pt;">
-                            <span class="mb2 bold block" style="font-size: 8pt;">[emit_xNome]</span>
-                            <span class="block">[emit_xLgr], [emit_nro]</span>
-                            <span class="block">[emit_xBairro] - [emit_CEP]</span>
-                            <span class="block">[emit_xMun] - [emit_UF] - Fone: [emit_fone]</span>
-                        </div>
-                    </td>
-                    <td rowspan="3" class="txtc txt-upper" style="width: 34mm; height: 29.5mm; font-size: 7pt;">
-                        <h3 class="title">Danfe</h3>
-                        <p class="mb2">Documento auxiliar da Nota Fiscal Eletrônica </p>
-                        <p class="entradaSaida mb2">
-                            <span class="identificacao"><span>[ide_tpNF]</span></span>
-                            <span class="legenda"><span>0 - Entrada</span><span>1 - Saída</span></span>
-                        </p>
-                        <p>
-                            <span class="block bold"><span>Nº</span> <span>[ide_nNF]</span></span>
-                            <span class="block bold"><span>SÉRIE:</span> <span>[ide_serie]</span></span>
-                            <span class="block"><span>Página [current_page] de [total_pages]</span></span>
-                        </p>
-                    </td>
-                    <td class="txt-upper">
-                        <span class="nf-label">Controle do Fisco</span>
-                        <span class="codigo"><span style='font-size:7pt'>{BarCode}</span></span>
-                    </td>
-                </tr>
-                <tr>
-                    <td><span class="nf-label">CHAVE DE ACESSO</span><span class="bold block txt-center info">[chave_acesso]</span></td>
-                </tr>
-                <tr>
-                    <td class="txt-center valign-middle"><span class="block">Consulta de autenticidade no portal nacional da NF-e </span> www.nfe.fazenda.gov.br/portal ou no site da Sefaz Autorizada.</td>
-                </tr>
-            </tbody>
-        </table>
-        <table cellpadding="0" cellspacing="0" class="boxNaturezaOperacao no-top" border="1">
-            <tbody>
-                <tr>
-                    <td><span class="nf-label">NATUREZA DA OPERAÇÃO</span><span class="info">[ide_natOp]</span></td>
-                    <td><span class="nf-label">PROTOCOLO DE AUTORIZAÇÃO DE USO</span><span class="info">[protocolo]</span></td>
-                </tr>
-            </tbody>
-        </table>
-        <table cellpadding="0" cellspacing="0" class="boxInscricao no-top" border="1">
-            <tbody>
-                <tr>
-                    <td><span class="nf-label">INSCRIÇÃO ESTADUAL</span><span class="info">[emit_IE]</span></td>
-                    <td style="width: 67.5mm;"><span class="nf-label">INSCRIÇÃO ESTADUAL DO SUBST. TRIB.</span><span class="info">[emit_IEST]</span></td>
-                    <td style="width: 64.3mm"><span class="nf-label">CNPJ</span><span class="info">[emit_CNPJ]</span></td>
-                </tr>
-            </tbody>
-        </table>
+// Cabeçalho do DANFE — repetido em TODAS as folhas (padrão oficial)
+const TPL_HEADER = `
+    <table cellpadding="0" cellspacing="0" style="table-layout: fixed;">
+        <tbody>
+            <tr>
+                <td rowspan="3" style="width: 74mm; vertical-align: middle;" class="txt-center">
+                    <div style="height: 16mm; display: flex; align-items: center; justify-content: center; overflow: hidden; margin-bottom: 1mm;">[logo_image]</div>
+                    <div class="emit-addr">
+                        <span class="emit-name">[emit_xNome]</span>
+                        <span class="block">[emit_xLgr], [emit_nro]</span>
+                        <span class="block">[emit_xBairro] - [emit_CEP]</span>
+                        <span class="block">[emit_xMun] - [emit_UF] - Fone: [emit_fone]</span>
+                    </div>
+                </td>
+                <td rowspan="3" class="txt-center" style="width: 36mm; vertical-align: middle;">
+                    <span class="danfe-title">DANFE</span>
+                    <p class="danfe-sub">Documento Auxiliar da<br/>Nota Fiscal Eletrônica</p>
+                    <p class="entradaSaida">
+                        <span class="legenda"><span>0 - ENTRADA</span><span>1 - SAÍDA</span></span>
+                        <span class="identificacao">[ide_tpNF]</span>
+                    </p>
+                    <span class="danfe-nf block">Nº [ide_nNF]</span>
+                    <span class="danfe-nf block">SÉRIE [ide_serie]</span>
+                    <span class="danfe-folha block">FOLHA [current_page] de [total_pages]</span>
+                </td>
+                <td class="barcode-cell txt-center" style="height: 15mm; vertical-align: middle;">{BarCode}</td>
+            </tr>
+            <tr>
+                <td><span class="nf-label">Chave de acesso</span><span class="chave block txt-center">[chave_acesso]</span></td>
+            </tr>
+            <tr>
+                <td class="txt-center consulta" style="vertical-align: middle;">Consulta de autenticidade no portal nacional da NF-e<br/>www.nfe.fazenda.gov.br/portal ou no site da Sefaz Autorizadora</td>
+            </tr>
+        </tbody>
+    </table>
+    <table cellpadding="0" cellspacing="0" class="no-top">
+        <tbody>
+            <tr>
+                <td><span class="nf-label">Natureza da operação</span><span class="info">[ide_natOp]</span></td>
+                <td style="width: 90mm;"><span class="nf-label">Protocolo de autorização de uso</span><span class="info">[protocolo]</span></td>
+            </tr>
+        </tbody>
+    </table>
+    <table cellpadding="0" cellspacing="0" class="no-top">
+        <tbody>
+            <tr>
+                <td><span class="nf-label">Inscrição estadual</span><span class="info">[emit_IE]</span></td>
+                <td style="width: 66mm;"><span class="nf-label">Inscrição estadual do subst. trib.</span><span class="info">[emit_IEST]</span></td>
+                <td style="width: 62mm;"><span class="nf-label">CNPJ</span><span class="info">[emit_CNPJ]</span></td>
+            </tr>
+        </tbody>
+    </table>
 `;
 
+// Destinatário + Fatura + Impostos + Transportadora — só na folha 1
 const TPL_DESTINATARIO_BLOCK = `
-        <p class="area-name">Destinatário/Emitente</p>
-        <table cellpadding="0" cellspacing="0" class="boxDestinatario" border="1">
-            <tbody>
-                <tr>
-                    <td class="pd-0 no-border">
-                        <table cellpadding="0" cellspacing="0" border="1">
-                            <tbody><tr><td class="no-border"><span class="nf-label">NOME/RAZÃO SOCIAL</span><span class="info">[dest_xNome]</span></td><td style="width: 40mm; border-left: 1px solid black;" class="no-border"><span class="nf-label">CNPJ/CPF</span><span class="info">[dest_CNPJ_CPF]</span></td></tr></tbody>
-                        </table>
-                    </td>
-                    <td><span class="nf-label">DATA DE EMISSÃO</span><span class="info">[ide_dhEmi_data]</span></td>
-                </tr>
-                <tr>
-                    <td class="pd-0 no-border">
-                        <table cellpadding="0" cellspacing="0" border="1">
-                            <tbody><tr><td><span class="nf-label">ENDEREÇO</span><span class="info">[dest_xLgr], [dest_nro]</span></td><td style="width: 47mm;"><span class="nf-label">BAIRRO/DISTRITO</span><span class="info">[dest_xBairro]</span></td><td style="width: 37.2 mm"><span class="nf-label">CEP</span><span class="info">[dest_CEP]</span></td></tr></tbody>
-                        </table>
-                    </td>
-                    <td><span class="nf-label">DATA DE ENTR./SAÍDA</span><span class="info">[ide_dhSaiEnt_data]</span></td>
-                </tr>
-                <tr>
-                    <td class="pd-0 no-border">
-                        <table cellpadding="0" cellspacing="0" style="margin-bottom: -1px;" border="1">
-                            <tbody><tr><td><span class="nf-label">MUNICÍPIO</span><span class="info">[dest_xMun]</span></td><td style="width: 34mm"><span class="nf-label">FONE/FAX</span><span class="info">[dest_fone]</span></td><td style="width: 28mm"><span class="nf-label">UF</span><span class="info">[dest_UF]</span></td><td style="width: 51mm"><span class="nf-label">INSCRIÇÃO ESTADUAL</span><span class="info">[dest_IE]</span></td></tr></tbody>
-                        </table>
-                    </td>
-                    <td><span class="nf-label">HORA ENTR./SAÍDA</span><span class="info">[ide_dhSaiEnt_hora]</span></td>
-                </tr>
-            </tbody>
-        </table>
-        <div class="boxFatura"><p class="area-name">Fatura</p>[duplicatas]</div>
-        <p class="area-name">Calculo do imposto</p>
-        <div class="wrapper-table">
-            <table cellpadding="0" cellspacing="0" border="1" class="boxImposto">
-                <tbody>
-                    <tr>
-                        <td><span class="nf-label label-small">BASE DE CÁLC. DO ICMS</span><span class="info">[tot_vBC]</span></td>
-                        <td><span class="nf-label">VALOR DO ICMS</span><span class="info">[tot_vICMS]</span></td>
-                        <td><span class="nf-label label-small" style="font-size: 4pt;">BASE DE CÁLC. DO ICMS ST</span><span class="info">[tot_vBCST]</span></td>
-                        <td><span class="nf-label">VALOR DO ICMS ST</span><span class="info">[tot_vST]</span></td>
-                        <td><span class="nf-label label-small">V. IMP. IMPORTAÇÃO</span><span class="info">[tot_vII]</span></td>
-                        <td><span class="nf-label label-small">V. ICMS UF REMET.</span><span class="info">[tot_vICMSUFRemet]</span></td>
-                        <td><span class="nf-label">VALOR DO FCP</span><span class="info">[tot_vFCP]</span></td>
-                        <td><span class="nf-label">VALOR DO PIS</span><span class="info">[tot_vPIS]</span></td>
-                        <td><span class="nf-label label-small">V. TOTAL DE PRODUTOS</span><span class="info">[tot_vProd]</span></td>
-                    </tr>
-                    <tr>
-                        <td><span class="nf-label">VALOR DO FRETE</span><span class="info">[tot_vFrete]</span></td>
-                        <td><span class="nf-label">VALOR DO SEGURO</span><span class="info">[tot_vSeg]</span></td>
-                        <td><span class="nf-label">DESCONTO</span><span class="info">[tot_vDesc]</span></td>
-                        <td><span class="nf-label">OUTRAS DESP.</span><span class="info">[tot_vOutro]</span></td>
-                        <td><span class="nf-label">VALOR DO IPI</span><span class="info">[tot_vIPI]</span></td>
-                        <td><span class="nf-label">V. ICMS UF DEST.</span><span class="info">[tot_vICMSUFDest]</span></td>
-                        <td><span class="nf-label label-small">V. APROX. DO TRIBUTO</span><span class="info">{ApproximateTax}</span></td>
-                        <td><span class="nf-label label-small">VALOR DA COFINS</span><span class="info">[tot_vCOFINS]</span></td>
-                        <td><span class="nf-label label-small">V. TOTAL DA NOTA</span><span class="info">[tot_vNF]</span></td>
-                    </tr>
-                </tbody>
-            </table>
-        </div>
-        <p class="area-name">Transportador/volumes transportados</p>
-        <table cellpadding="0" cellspacing="0" border="1">
-            <tbody>
-                <tr>
-                    <td><span class="nf-label">RAZÃO SOCIAL</span><span class="info">[transp_xNome]</span></td>
-                    <td class="freteConta" style="width: 32mm"><span class="nf-label">FRETE POR CONTA</span><div class="border"><span class="info">[transp_modFrete]</span></div><p>0 - Emitente</p><p>1 - Destinatário</p></td>
-                    <td style="width: 17.3mm"><span class="nf-label">CÓDIGO ANTT</span><span class="info">[transp_RNTC]</span></td>
-                    <td style="width: 24.5mm"><span class="nf-label">PLACA</span><span class="info">[transp_placa]</span></td>
-                    <td style="width: 11.3mm"><span class="nf-label">UF</span><span class="info">[transp_UF]</span></td>
-                    <td style="width: 29.5mm"><span class="nf-label">CNPJ/CPF</span><span class="info">[transp_CNPJ_CPF]</span></td>
-                </tr>
-            </tbody>
-        </table>
-        <table cellpadding="0" cellspacing="0" border="1" class="no-top">
-            <tbody>
-                <tr>
-                    <td class="field endereco"><span class="nf-label">ENDEREÇO</span><span class="content-spacer info">[transp_xEnder]</span></td>
-                    <td style="width: 32mm"><span class="nf-label">MUNICÍPIO</span><span class="info">[transp_xMun]</span></td>
-                    <td style="width: 31mm"><span class="nf-label">UF</span><span class="info">[transp_UF2]</span></td>
-                    <td style="width: 51.4mm"><span class="nf-label">INSC. ESTADUAL</span><span class="info">[transp_IE]</span></td>
-                </tr>
-            </tbody>
-        </table>
-        <table cellpadding="0" cellspacing="0" border="1" class="no-top">
-            <tbody>
-                <tr>
-                    <td class="field quantidade"><span class="nf-label">QUANTIDADE</span><span class="content-spacer info">[vol_qVol]</span></td>
-                    <td style="width: 31.4mm"><span class="nf-label">ESPÉCIE</span><span class="info">[vol_esp]</span></td>
-                    <td style="width: 31mm"><span class="nf-label">MARCA</span><span class="info">[vol_marca]</span></td>
-                    <td style="width: 31.5mm"><span class="nf-label">NUMERAÇÃO</span><span class="info">[vol_nVol]</span></td>
-                    <td style="width: 31.5mm"><span class="nf-label">PESO BRUTO</span><span class="info">[vol_pesoB]</span></td>
-                    <td style="width: 32.5mm"><span class="nf-label">PESO LÍQUIDO</span><span class="info">[vol_pesoL]</span></td>
-                </tr>
-            </tbody>
-        </table>
+    <p class="area-name">Destinatário / Remetente</p>
+    <table cellpadding="0" cellspacing="0">
+        <tbody>
+            <tr>
+                <td><span class="nf-label">Nome/Razão social</span><span class="info">[dest_xNome]</span></td>
+                <td style="width: 38mm;"><span class="nf-label">CNPJ/CPF</span><span class="info">[dest_CNPJ_CPF]</span></td>
+                <td style="width: 30mm;"><span class="nf-label">Data de emissão</span><span class="info">[ide_dhEmi_data]</span></td>
+            </tr>
+        </tbody>
+    </table>
+    <table cellpadding="0" cellspacing="0" class="no-top">
+        <tbody>
+            <tr>
+                <td><span class="nf-label">Endereço</span><span class="info">[dest_xLgr], [dest_nro]</span></td>
+                <td style="width: 44mm;"><span class="nf-label">Bairro/Distrito</span><span class="info">[dest_xBairro]</span></td>
+                <td style="width: 24mm;"><span class="nf-label">CEP</span><span class="info">[dest_CEP]</span></td>
+                <td style="width: 30mm;"><span class="nf-label">Data de entr./saída</span><span class="info">[ide_dhSaiEnt_data]</span></td>
+            </tr>
+        </tbody>
+    </table>
+    <table cellpadding="0" cellspacing="0" class="no-top">
+        <tbody>
+            <tr>
+                <td><span class="nf-label">Município</span><span class="info">[dest_xMun]</span></td>
+                <td style="width: 34mm;"><span class="nf-label">Fone/Fax</span><span class="info">[dest_fone]</span></td>
+                <td style="width: 12mm;"><span class="nf-label">UF</span><span class="info">[dest_UF]</span></td>
+                <td style="width: 42mm;"><span class="nf-label">Inscrição estadual</span><span class="info">[dest_IE]</span></td>
+                <td style="width: 30mm;"><span class="nf-label">Hora entr./saída</span><span class="info">[ide_dhSaiEnt_hora]</span></td>
+            </tr>
+        </tbody>
+    </table>
+    <div class="boxFatura"><p class="area-name">Fatura / Duplicatas</p>[duplicatas]</div>
+    <p class="area-name">Cálculo do imposto</p>
+    <table cellpadding="0" cellspacing="0" class="boxImposto">
+        <tbody>
+            <tr>
+                <td><span class="nf-label">Base de cálc. do ICMS</span><span class="info">[tot_vBC]</span></td>
+                <td><span class="nf-label">Valor do ICMS</span><span class="info">[tot_vICMS]</span></td>
+                <td><span class="nf-label">Base de cálc. ICMS ST</span><span class="info">[tot_vBCST]</span></td>
+                <td><span class="nf-label">Valor do ICMS ST</span><span class="info">[tot_vST]</span></td>
+                <td><span class="nf-label">V. imp. importação</span><span class="info">[tot_vII]</span></td>
+                <td><span class="nf-label">V. ICMS UF remet.</span><span class="info">[tot_vICMSUFRemet]</span></td>
+                <td><span class="nf-label">Valor do FCP</span><span class="info">[tot_vFCP]</span></td>
+                <td><span class="nf-label">Valor do PIS</span><span class="info">[tot_vPIS]</span></td>
+                <td><span class="nf-label">V. total de produtos</span><span class="info">[tot_vProd]</span></td>
+            </tr>
+            <tr>
+                <td><span class="nf-label">Valor do frete</span><span class="info">[tot_vFrete]</span></td>
+                <td><span class="nf-label">Valor do seguro</span><span class="info">[tot_vSeg]</span></td>
+                <td><span class="nf-label">Desconto</span><span class="info">[tot_vDesc]</span></td>
+                <td><span class="nf-label">Outras despesas</span><span class="info">[tot_vOutro]</span></td>
+                <td><span class="nf-label">Valor do IPI</span><span class="info">[tot_vIPI]</span></td>
+                <td><span class="nf-label">V. ICMS UF dest.</span><span class="info">[tot_vICMSUFDest]</span></td>
+                <td><span class="nf-label">V. aprox. do tributo</span><span class="info">{ApproximateTax}</span></td>
+                <td><span class="nf-label">Valor da COFINS</span><span class="info">[tot_vCOFINS]</span></td>
+                <td><span class="nf-label">V. total da nota</span><span class="info">[tot_vNF]</span></td>
+            </tr>
+        </tbody>
+    </table>
+    <p class="area-name">Transportador / Volumes transportados</p>
+    <table cellpadding="0" cellspacing="0">
+        <tbody>
+            <tr>
+                <td><span class="nf-label">Razão social</span><span class="info">[transp_xNome]</span></td>
+                <td class="freteConta" style="width: 34mm;"><span class="nf-label">Frete por conta</span><span class="quadro">[transp_modFrete]</span><p>0 - Emitente</p><p>1 - Destinatário</p></td>
+                <td style="width: 20mm;"><span class="nf-label">Código ANTT</span><span class="info">[transp_RNTC]</span></td>
+                <td style="width: 24mm;"><span class="nf-label">Placa</span><span class="info">[transp_placa]</span></td>
+                <td style="width: 12mm;"><span class="nf-label">UF</span><span class="info">[transp_UF]</span></td>
+                <td style="width: 32mm;"><span class="nf-label">CNPJ/CPF</span><span class="info">[transp_CNPJ_CPF]</span></td>
+            </tr>
+        </tbody>
+    </table>
+    <table cellpadding="0" cellspacing="0" class="no-top">
+        <tbody>
+            <tr>
+                <td><span class="nf-label">Endereço</span><span class="info">[transp_xEnder]</span></td>
+                <td style="width: 54mm;"><span class="nf-label">Município</span><span class="info">[transp_xMun]</span></td>
+                <td style="width: 12mm;"><span class="nf-label">UF</span><span class="info">[transp_UF2]</span></td>
+                <td style="width: 42mm;"><span class="nf-label">Inscrição estadual</span><span class="info">[transp_IE]</span></td>
+            </tr>
+        </tbody>
+    </table>
+    <table cellpadding="0" cellspacing="0" class="no-top">
+        <tbody>
+            <tr>
+                <td><span class="nf-label">Quantidade</span><span class="info">[vol_qVol]</span></td>
+                <td style="width: 34mm;"><span class="nf-label">Espécie</span><span class="info">[vol_esp]</span></td>
+                <td style="width: 30mm;"><span class="nf-label">Marca</span><span class="info">[vol_marca]</span></td>
+                <td style="width: 30mm;"><span class="nf-label">Numeração</span><span class="info">[vol_nVol]</span></td>
+                <td style="width: 30mm;"><span class="nf-label">Peso bruto</span><span class="info txt-right">[vol_pesoB]</span></td>
+                <td style="width: 30mm;"><span class="nf-label">Peso líquido</span><span class="info txt-right">[vol_pesoL]</span></td>
+            </tr>
+        </tbody>
+    </table>
 `;
 
+// Cabeçalho da tabela de itens (colunas fixas; soma = 100%)
 const TPL_ITEMS_TABLE_START = `
-        <p class="area-name">Dados do produto/serviço</p>
-        <div class="wrapper-border [extra_class]">
-            <table cellpadding="0" cellspacing="0" border="1" class="boxProdutoServico">
-                <thead class="listProdutoServico" id="table">
-                    <tr class="titles">
-                        <th class="cod" style="width: 15.5mm">CÓDIGO</th>
-                        <th class="descrit" style="width: 66.1mm">DESCRIÇÃO DO PRODUTO/SERVIÇO</th>
-                        <th class="ncmsh">NCMSH</th><th class="cst">CST</th><th class="cfop">CFOP</th><th class="un">UN</th>
-                        <th class="amount">QTD.</th><th class="valUnit">VLR.UNIT</th><th class="valTotal">VLR.TOTAL</th>
-                        <th class="bcIcms">BC ICMS</th><th class="valIcms">VLR.ICMS</th><th class="valIpi">VLR.IPI</th>
-                        <th class="aliqIcms">ALIQ.ICMS</th><th class="aliqIpi">ALIQ.IPI</th>
+    <div class="items-area">
+        <p class="area-name">Dados do produto / serviço[continuacao]</p>
+        <div class="items-box">
+            <table cellpadding="0" cellspacing="0">
+                <thead>
+                    <tr>
+                        <th style="width: 7.2%;">Código</th>
+                        <th style="width: 27.6%;">Descrição do produto/serviço</th>
+                        <th style="width: 7.6%;">NCM/SH</th>
+                        <th style="width: 3.4%;">CST</th>
+                        <th style="width: 4.2%;">CFOP</th>
+                        <th style="width: 3.6%;">UN</th>
+                        <th style="width: 6%;">Qtd.</th>
+                        <th style="width: 6.8%;">Vlr. unit.</th>
+                        <th style="width: 6.8%;">Vlr. total</th>
+                        <th style="width: 6.6%;">BC ICMS</th>
+                        <th style="width: 6.2%;">Vlr. ICMS</th>
+                        <th style="width: 5.2%;">Vlr. IPI</th>
+                        <th style="width: 4.6%;">% ICMS</th>
+                        <th style="width: 4.2%;">% IPI</th>
                     </tr>
                 </thead>
                 <tbody>
 `;
 
-const TPL_FOOTER_BLOCK = `
-        <p class="area-name">Calculo do issqn</p>
-        <table cellpadding="0" cellspacing="0" border="1" class="boxIssqn">
-            <tbody>
-                <tr>
-                    <td class="field inscrMunicipal"><span class="nf-label">INSCRIÇÃO MUNICIPAL</span><span class="info txt-center">[emit_IM]</span></td>
-                    <td class="field valorTotal"><span class="nf-label">VALOR TOTAL DOS SERVIÇOS</span><span class="info txt-right">[issqn_vServ]</span></td>
-                    <td class="field baseCalculo"><span class="nf-label">BASE DE CÁLCULO DO ISSQN</span><span class="info txt-right">[issqn_vBC]</span></td>
-                    <td class="field valorIssqn"><span class="nf-label">VALOR DO ISSQN</span><span class="info txt-right">[issqn_vISSQN]</span></td>
-                </tr>
-            </tbody>
-        </table>
-        <p class="area-name">Dados adicionais</p>
-        <table cellpadding="0" cellspacing="0" border="1" class="boxDadosAdicionais">
-            <tbody>
-                <tr>
-                    <td class="field infoComplementar"><span class="nf-label">INFORMAÇÕES COMPLEMENTARES</span><span>[infCpl]</span></td>
-                    <td class="field reservaFisco" style="width: 85mm; height: 24mm"><span class="nf-label">RESERVA AO FISCO</span><span></span></td>
-                </tr>
-            </tbody>
-        </table>
+const TPL_ITEMS_TABLE_END = `
+                </tbody>
+            </table>
+        </div>
     </div>
-</div>
+`;
+
+// Rodapé — ISSQN + Dados adicionais (em todas as folhas, fecha o layout)
+const TPL_FOOTER_BLOCK = `
+    <p class="area-name">Cálculo do ISSQN</p>
+    <table cellpadding="0" cellspacing="0">
+        <tbody>
+            <tr>
+                <td><span class="nf-label">Inscrição municipal</span><span class="info">[emit_IM]</span></td>
+                <td><span class="nf-label">Valor total dos serviços</span><span class="info txt-right">[issqn_vServ]</span></td>
+                <td><span class="nf-label">Base de cálculo do ISSQN</span><span class="info txt-right">[issqn_vBC]</span></td>
+                <td><span class="nf-label">Valor do ISSQN</span><span class="info txt-right">[issqn_vISSQN]</span></td>
+            </tr>
+        </tbody>
+    </table>
+    <p class="area-name">Dados adicionais</p>
+    <table cellpadding="0" cellspacing="0" class="boxDadosAdicionais">
+        <tbody>
+            <tr>
+                <td><span class="nf-label">Informações complementares</span><span class="obs">[infCpl]</span></td>
+                <td style="width: 80mm;"><span class="nf-label">Reservado ao fisco</span></td>
+            </tr>
+        </tbody>
+    </table>
 `;
 
 
-// ================================================
 // ================================================
 // LÓGICA DE PAGINAÇÃO E PARSE
 // ================================================
@@ -379,6 +350,14 @@ function fillTemplate(template, replacements) {
         result = result.split(key).join(value);
     }
     return result;
+}
+
+function escapeHtml(value) {
+    return String(value ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
 }
 
 async function processXmlToHtml(xmlString, logoBase64) {
@@ -438,12 +417,12 @@ async function processXmlToHtml(xmlString, logoBase64) {
     // 1. Dados comuns (Replacements Base)
     const baseReplacements = {
         "[logo_image]": logoHtml,
-        "[emit_xNome]": emit.xNome || emit.xFant || "",
-        "[emit_xLgr]": enderEmit.xLgr || "",
-        "[emit_nro]": enderEmit.nro || "",
-        "[emit_xBairro]": enderEmit.xBairro || "",
+        "[emit_xNome]": escapeHtml(emit.xNome || emit.xFant || ""),
+        "[emit_xLgr]": escapeHtml(enderEmit.xLgr || ""),
+        "[emit_nro]": escapeHtml(enderEmit.nro || ""),
+        "[emit_xBairro]": escapeHtml(enderEmit.xBairro || ""),
         "[emit_CEP]": formatCep(enderEmit.CEP),
-        "[emit_xMun]": enderEmit.xMun || "",
+        "[emit_xMun]": escapeHtml(enderEmit.xMun || ""),
         "[emit_UF]": enderEmit.UF || "",
         "[emit_fone]": formatPhone(enderEmit.fone),
         "[emit_IE]": emit.IE || "",
@@ -453,20 +432,20 @@ async function processXmlToHtml(xmlString, logoBase64) {
         "[ide_nNF]": ide.nNF || "",
         "[ide_serie]": ide.serie || "",
         "[ide_tpNF]": ide.tpNF || "",
-        "[ide_natOp]": ide.natOp || "",
+        "[ide_natOp]": escapeHtml(ide.natOp || ""),
         "[chave_acesso]": chaveFormatada,
         "[protocolo]": protocoloFormatado,
         "{BarCode}": await generateBarcode(chave), // Async generation
         "[ide_dhEmi_data]": formatDate(ide.dhEmi),
         "[ide_dhSaiEnt_data]": formatDate(ide.dhSaiEnt || ide.dhEmi),
         "[ide_dhSaiEnt_hora]": formatTime(ide.dhSaiEnt || ide.dhEmi),
-        "[dest_xNome]": dest.xNome || "",
+        "[dest_xNome]": escapeHtml(dest.xNome || ""),
         "[dest_CNPJ_CPF]": formatCnpjCpf(dest.CNPJ || dest.CPF),
-        "[dest_xLgr]": enderDest.xLgr || "",
-        "[dest_nro]": enderDest.nro || "",
-        "[dest_xBairro]": enderDest.xBairro || "",
+        "[dest_xLgr]": escapeHtml(enderDest.xLgr || ""),
+        "[dest_nro]": escapeHtml(enderDest.nro || ""),
+        "[dest_xBairro]": escapeHtml(enderDest.xBairro || ""),
         "[dest_CEP]": formatCep(enderDest.CEP),
-        "[dest_xMun]": enderDest.xMun || "",
+        "[dest_xMun]": escapeHtml(enderDest.xMun || ""),
         "[dest_UF]": enderDest.UF || "",
         "[dest_fone]": formatPhone(enderDest.fone),
         "[dest_IE]": dest.IE || "",
@@ -491,85 +470,71 @@ async function processXmlToHtml(xmlString, logoBase64) {
         "[issqn_vServ]": formatCurrency(ISSQNtot.vServ),
         "[issqn_vBC]": formatCurrency(ISSQNtot.vBC),
         "[issqn_vISSQN]": formatCurrency(ISSQNtot.vISS),
-        "[transp_xNome]": transporta.xNome || "",
+        "[transp_xNome]": escapeHtml(transporta.xNome || ""),
         "[transp_modFrete]": transp.modFrete || "",
         "[transp_RNTC]": veicTransp.RNTC || "",
         "[transp_placa]": veicTransp.placa || "",
         "[transp_UF]": veicTransp.UF || "",
         "[transp_CNPJ_CPF]": formatCnpjCpf(transporta.CNPJ || transporta.CPF),
-        "[transp_xEnder]": transporta.xEnder || "",
-        "[transp_xMun]": transporta.xMun || "",
+        "[transp_xEnder]": escapeHtml(transporta.xEnder || ""),
+        "[transp_xMun]": escapeHtml(transporta.xMun || ""),
         "[transp_UF2]": transporta.UF || "",
         "[transp_IE]": transporta.IE || "",
         "[vol_qVol]": firstVol.qVol || "",
-        "[vol_esp]": firstVol.esp || "",
-        "[vol_marca]": firstVol.marca || "",
+        "[vol_esp]": escapeHtml(firstVol.esp || ""),
+        "[vol_marca]": escapeHtml(firstVol.marca || ""),
         "[vol_nVol]": firstVol.nVol || "",
         "[vol_pesoB]": formatWeight(firstVol.pesoB),
         "[vol_pesoL]": formatWeight(firstVol.pesoL),
-        "[infCpl]": infAdic.infCpl || "",
+        "[infCpl]": escapeHtml(infAdic.infCpl || ""),
     };
 
-    // Montar Duplicatas para o Replacements - Texto Corrido Simplificado
+    // Montar Duplicatas — texto corrido dentro da caixa
     let duplicatesHtml = "";
     if (duplicatas.length > 0) {
-        duplicatesHtml = '<div style="width:100%; border:1px solid black; padding: 2px; font-size: 7pt; min-height: 8mm; box-sizing: border-box;">';
-
         let dupTexts = [];
         for (const d of duplicatas) {
-            dupTexts.push(`${d.nDup || ""} &nbsp; ${formatDate(d.dVenc)} &nbsp; R$ ${formatCurrency(d.vDup)}`);
+            dupTexts.push(`<b>${d.nDup || ""}</b> ${formatDate(d.dVenc)} R$ ${formatCurrency(d.vDup)}`);
         }
-        duplicatesHtml += dupTexts.join(" - ");
-        duplicatesHtml += '</div>';
+        duplicatesHtml = '<div class="dup-list">' + dupTexts.join(" &nbsp;•&nbsp; ") + "</div>";
     } else {
-        // Empty box if no duplicates
-        duplicatesHtml = '<div style="width:100%; border:1px solid black; height: 8mm;"></div>';
+        duplicatesHtml = '<div class="dup-list"></div>';
     }
     baseReplacements["[duplicatas]"] = duplicatesHtml;
 
 
-    // 2. Paginação Inteligente (Baseada em Altura Estimada)
-    // Em vez de contar apenas "itens", contamos "linhas estimadas".
-    // 1 item pode ocupar 2 ou 3 linhas se a descrição for longa.
-    // Estimativa: ~60 caracteres por linha na descrição (fonte 6pt).
-
-    // Limites de linhas "visuais" (Ajustado para fonte 8pt e preencher melhor a página)
-    const linesPerPage1 = 16;
-    const linesPerPageN = 22;
+    // 2. Paginação por ALTURA (mm), conservadora.
+    // Cada página tem um orçamento em mm pra área de itens; cada item custa
+    // uma base + extra por linha de descrição (coluna ~62mm, fonte 7.5pt).
+    const CHARS_PER_LINE = 34;      // conservador: sobra espaço, nunca corta
+    const ROW_BASE_MM = 4.8;        // 1ª linha do item (com paddings)
+    const ROW_LINE_MM = 3.0;        // cada linha extra de descrição
+    const PAGE1_BUDGET_MM = 82;     // folha 1 (canhoto + cabeçalho + destinatário...)
+    const PAGEN_BUDGET_MM = 164;    // folhas 2+ (cabeçalho + rodapé apenas)
 
     let pages = [];
-    let currentPage = { items: [], isFirst: true, currentLines: 0 };
+    let currentPage = { items: [], isFirst: true, usedMm: 0 };
 
     for (let i = 0; i < items.length; i++) {
         let item = items[i];
 
-        // Calcular "custo" de altura do item
-        // Minimo 1 linha. A cada 45 caracteres na descrição (fonte 8pt), adiciona +1 linha.
-        let descLen = (item.prod && item.prod.xProd) ? item.prod.xProd.length : 0;
-        let itemHeightCost = Math.max(1, Math.ceil(descLen / 40));
+        let descLen = (item.prod && item.prod.xProd) ? String(item.prod.xProd).length : 0;
+        let descLines = Math.max(1, Math.ceil(descLen / CHARS_PER_LINE));
+        let itemCostMm = ROW_BASE_MM + (descLines - 1) * ROW_LINE_MM;
 
-        let limit = currentPage.isFirst ? linesPerPage1 : linesPerPageN;
+        let budget = currentPage.isFirst ? PAGE1_BUDGET_MM : PAGEN_BUDGET_MM;
 
-        // Verifica se cabe na página atual
-        if (currentPage.currentLines + itemHeightCost > limit && currentPage.items.length > 0) {
-            // Não cabe: Salva página atual e cria uma nova
+        if (currentPage.usedMm + itemCostMm > budget && currentPage.items.length > 0) {
             pages.push(currentPage);
-
-            // Nova página começa vazia (e não é mais a primeira)
-            currentPage = {
-                items: [],
-                isFirst: false,
-                currentLines: 0
-            };
+            currentPage = { items: [], isFirst: false, usedMm: 0 };
         }
 
-        // Adiciona item na página atual
         currentPage.items.push(item);
-        currentPage.currentLines += itemHeightCost;
+        currentPage.usedMm += itemCostMm;
     }
 
-    // Adiciona a última página se tiver sobrado algo
-    if (currentPage.items.length > 0) {
+    // Garante ao menos 1 página (mesmo sem itens) e fecha a última
+    if (currentPage.items.length > 0 || pages.length === 0) {
         pages.push(currentPage);
     }
 
@@ -579,52 +544,35 @@ async function processXmlToHtml(xmlString, logoBase64) {
     // 3. Montagem das Páginas
     pages.forEach((page, index) => {
         let pageNum = index + 1;
-        let isLastPage = (pageNum === totalPages);
 
-        // Prepara Replacements da Página
         let pageReplacements = {
             ...baseReplacements,
             "[current_page]": pageNum,
-            "[total_pages]": totalPages
+            "[total_pages]": totalPages,
+            "[continuacao]": page.isFirst ? "" : " — continuação",
         };
 
-        let pageHtml = "";
+        let pageHtml = '<div class="page">';
 
-        // Abre div Page
-        pageHtml += '<div class="page nfeArea">';
+        if (page.isFirst) pageHtml += fillTemplate(TPL_CANHOTO, pageReplacements);
+        pageHtml += fillTemplate(TPL_HEADER, pageReplacements);
+        if (page.isFirst) pageHtml += fillTemplate(TPL_DESTINATARIO_BLOCK, pageReplacements);
 
-        // Header: Página 1 usa o Completo (com Canhoto), Demais usam Simples
-        let headerTpl = page.isFirst ? TPL_HEADER_REPEATED : TPL_HEADER_SIMPLE;
-        pageHtml += fillTemplate(headerTpl, pageReplacements);
+        pageHtml += fillTemplate(TPL_ITEMS_TABLE_START, pageReplacements);
 
-        // Se for Página 1: Inserir Destinatário + Impostos + Transportadora
-        // OBS: No meu template TPL_DESTINATARIO_BLOCK já tem tudo isso.
-        if (page.isFirst) {
-            pageHtml += fillTemplate(TPL_DESTINATARIO_BLOCK, pageReplacements);
-        }
-
-        // Tabela de Itens (Inicio)
-        // Se for pagina 2+, a classe full-page aumenta a altura minima da borda
-        let extraClass = page.isFirst ? "" : "full-page";
-
-        // Hack: replace no template da tabela
-        let tableHeader = TPL_ITEMS_TABLE_START.replace("[extra_class]", extraClass);
-        pageHtml += tableHeader;
-
-        // Linhas dos itens
         for (let det of page.items) {
             const prod = det.prod || {};
             const imposto = det.imposto || {};
             const icmsData = extractICMSData(imposto);
             const ipiData = extractIPIData(imposto);
 
-            let row = '<tr>' +
-                '<td class="txt-center">' + (prod.cProd || "") + '</td>' +
-                '<td>' + (prod.xProd || "") + '</td>' +
+            pageHtml += '<tr>' +
+                '<td class="txt-center">' + escapeHtml(prod.cProd || "") + '</td>' +
+                '<td>' + escapeHtml(prod.xProd || "") + '</td>' +
                 '<td class="txt-center">' + (prod.NCM || "") + '</td>' +
                 '<td class="txt-center">' + icmsData.CST + '</td>' +
                 '<td class="txt-center">' + (prod.CFOP || "") + '</td>' +
-                '<td class="txt-center">' + (prod.uCom || "") + '</td>' +
+                '<td class="txt-center">' + escapeHtml(prod.uCom || "") + '</td>' +
                 '<td class="txt-right">' + formatQuantity(prod.qCom) + '</td>' +
                 '<td class="txt-right">' + formatCurrency(prod.vUnCom) + '</td>' +
                 '<td class="txt-right">' + formatCurrency(prod.vProd) + '</td>' +
@@ -634,25 +582,11 @@ async function processXmlToHtml(xmlString, logoBase64) {
                 '<td class="txt-right">' + (icmsData.pICMS ? formatCurrency(icmsData.pICMS) : "") + '</td>' +
                 '<td class="txt-right">' + (ipiData.pIPI ? formatCurrency(ipiData.pIPI) : "") + '</td>' +
                 '</tr>';
-            pageHtml += row;
         }
 
-        pageHtml += "</tbody></table></div>"; // Fecha tabela e wrapper
-
-        // Rodapé (ISSQN + Dados Adicionais)
-        // Antes era apenas na última página (if (isLastPage)).
-        // Agora incluímos em TODAS as páginas para fechar o layout.
-
-        // Se quisermos que nas páginas intermediárias os valores venham zerados ou diferentes,
-        // podemos clonar o 'pageReplacements' e alterar aqui. 
-        // Por enquanto, vou manter igual para garantir o fechamento visual.
-
+        pageHtml += TPL_ITEMS_TABLE_END;
         pageHtml += fillTemplate(TPL_FOOTER_BLOCK, pageReplacements);
-
-        // Fecha div da página
         pageHtml += "</div>";
-
-        // Quebra de pagina na impressao (o CSS page-break-after handle isso na classe .page)
 
         finalHtmlBody += pageHtml;
     });
@@ -742,7 +676,9 @@ function formatCep(value) {
 
 function formatPhone(value) {
     if (!value) return "";
-    // Exemplo simples
+    const clean = String(value).replace(/\D/g, "");
+    if (clean.length === 11) return clean.replace(/(\d{2})(\d{5})(\d{4})/, "($1) $2-$3");
+    if (clean.length === 10) return clean.replace(/(\d{2})(\d{4})(\d{4})/, "($1) $2-$3");
     return value;
 }
 
@@ -786,7 +722,7 @@ async function generateBarcode(text) {
             includetext: false,    // Show human-readable text
             textxalign: 'center',  // Always good to set this
         });
-        return '<div style="padding: 0 10px; box-sizing: border-box;"><img style="width: 100%; max-height: 13mm;" src="data:image/png;base64,' + png.toString('base64') + '" /></div>';
+        return '<img style="width: 96%; max-height: 12mm;" src="data:image/png;base64,' + png.toString('base64') + '" />';
     } catch (e) {
         console.error("Erro ao gerar barcode:", e);
         return ""; // Fallback sem barcode
