@@ -41,6 +41,15 @@ export default async function handler(req: any, res: any) {
     ? gotenbergBase
     : `${gotenbergBase}/forms/chromium/convert/html`
 
+  // Gotenberg do VPS fica atrás de Basic Auth (usuário/senha). Se as variáveis
+  // estiverem configuradas, manda o header Authorization; senão vai sem (Gotenberg aberto).
+  const gUser = (process.env.GOTENBERG_USER || '').trim()
+  const gPass = (process.env.GOTENBERG_PASSWORD || '').trim()
+  const gotenbergHeaders: Record<string, string> = {}
+  if (gUser && gPass) {
+    gotenbergHeaders.Authorization = 'Basic ' + Buffer.from(`${gUser}:${gPass}`).toString('base64')
+  }
+
   try {
     // Logo: do corpo (se veio) ou da Configuração de NF (app_settings).
     const logo = await resolveLogoBase64(logoBase64)
@@ -54,7 +63,7 @@ export default async function handler(req: any, res: any) {
     form.append('printBackground', 'true')
     form.append('preferCssPageSize', 'true')
 
-    const g = await fetch(gotenbergUrl, { method: 'POST', body: form })
+    const g = await fetch(gotenbergUrl, { method: 'POST', headers: gotenbergHeaders, body: form })
     if (!g.ok) {
       const detail = await g.text().catch(() => '')
       console.error('[danfe] Gotenberg retornou erro:', g.status, detail.slice(0, 300))
