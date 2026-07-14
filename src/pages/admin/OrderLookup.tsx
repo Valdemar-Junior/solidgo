@@ -16,6 +16,7 @@ import type {
 } from '../../types/database';
 import { pickupHoldMatchesItem } from '../../utils/pickup/pickupCore';
 import { buildPickupReceiptPdf } from '../../utils/pickup/pickupReceipt';
+import { generateDanfeBase64 } from '../../utils/danfe/generateDanfe';
 import { toast } from 'sonner';
 import { AssemblyPhotosViewer, DeliveryPhotosViewer } from '../../components/photos';
 import { DeliveryProofPdfGenerator } from '../../utils/pdf/deliveryProofPdfGenerator';
@@ -623,66 +624,20 @@ export default function OrderLookup() {
           return;
         }
 
-        const webhookUrl = await resolveDanfeWebhookUrl();
-        const response = await fetch(webhookUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            route_id: returnEvent.pickup_route?.route_code
-              || returnEvent.pickup_route?.name
-              || `DEVOLUCAO-${returnEvent.id}`,
-            documentos: [{
-              order_id: documentOrderId,
-              numero: returnNfeNumber || orderData?.return_nfe_number || documentOrderId,
-              xml,
-            }],
-            count: 1,
-            tipo: 'devolucao',
-          }),
-        });
-
-        if (!response.ok) {
-          throw new Error(`Erro ao gerar DANFE de devolução: ${response.status}`);
-        }
-
-        // Alguns webhooks devolvem o PDF imediatamente. Isso permite imprimir
-        // eventos sem coleta sem depender do campo consolidado do pedido.
-        try {
-          const payload = await response.clone().json();
-          const payloadItems = Array.isArray(payload) ? payload : [payload];
-          const matchingDocument = Array.isArray(payload?.documentos)
-            ? payload.documentos.find((entry: any) => String(entry?.order_id) === documentOrderId)
-            : null;
-          const responseBase64 = String(
-            payloadItems[0]?.pdf_base64
-            || payload?.data
-            || matchingDocument?.data
-            || matchingDocument?.pdf_base64
-            || ''
-          );
-          if (responseBase64.startsWith('JVBER')) {
-            base64 = responseBase64;
-          }
-        } catch { }
-
-        // O webhook persiste o PDF no banco. Após a chamada, reconsulta o pedido
-        // em pequenas tentativas para abrir a versão gravada, sem depender do body HTTP.
-        for (let attempt = 0; attempt < 3 && !base64.startsWith('JVBER'); attempt += 1) {
-          if (attempt > 0) {
-            await new Promise((resolve) => setTimeout(resolve, 500));
-          }
-
-          orderData = await fetchReturnDanfeState();
-          base64 = String(orderData?.return_danfe_base64 || '');
-          if (base64.startsWith('JVBER')) {
-            break;
-          }
-        }
-
-        if (!base64.startsWith('JVBER')) {
-          toast.error('Não foi possível gerar a nota de devolução.');
+        // Gera a DANFE de devolução pelo endpoint novo (/api/danfe), a partir do
+        // XML de devolução (return_nfe_xml). INDEPENDE de coleta — funciona pra
+        // qualquer pedido devolvido (já entregue ou não). Salva em
+        // return_danfe_base64 pra reaproveitar nas próximas impressões.
+        const generated = await generateDanfeBase64(xml);
+        if (!generated.startsWith('JVBER')) {
+          toast.error('Não foi possível gerar a nota de devolução (verifique o XML / Gotenberg).');
           return;
         }
+        await supabase
+          .from('orders')
+          .update({ return_danfe_base64: generated, danfe_gerada_em: new Date().toISOString() })
+          .eq('id', documentOrderId);
+        base64 = generated;
       }
 
       await openBase64Pdf(base64);
