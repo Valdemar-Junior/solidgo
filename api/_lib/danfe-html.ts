@@ -99,6 +99,7 @@ const PAGE_CSS = `
     }
     .items-box td:first-child { border-left: none; }
     .items-box tbody tr:first-child td { padding-top: 1mm; }
+    .items-box tbody tr:last-child td { border-bottom: 1px solid #000; }
     .item-infad { display: block; font-size: 7pt; margin-top: 0.3mm; }
 
     /* Rodapé (ISSQN + dados adicionais) */
