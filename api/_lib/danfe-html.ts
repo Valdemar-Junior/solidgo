@@ -93,7 +93,7 @@ const PAGE_CSS = `
     }
     .items-box td {
         font-size: 7.5pt; line-height: 1.25; padding: 0.7mm 0.8mm;
-        border: none; border-left: 1px solid #000; vertical-align: top;
+        border: none; border-top: 1px solid #000; border-left: 1px solid #000; vertical-align: top;
         word-break: break-word;
     }
     .items-box td:first-child { border-left: none; }
