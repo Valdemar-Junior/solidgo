@@ -199,7 +199,7 @@ const TPL_DESTINATARIO_BLOCK = `
     <table cellpadding="0" cellspacing="0" class="no-top">
         <tbody>
             <tr>
-                <td><span class="nf-label">Endereço</span><span class="info">[dest_xLgr], [dest_nro]</span></td>
+                <td><span class="nf-label">Endereço</span><span class="info">[dest_xLgr], [dest_nro][dest_cpl]</span></td>
                 <td style="width: 44mm;"><span class="nf-label">Bairro/Distrito</span><span class="info">[dest_xBairro]</span></td>
                 <td style="width: 24mm;"><span class="nf-label">CEP</span><span class="info">[dest_CEP]</span></td>
                 <td style="width: 30mm;"><span class="nf-label">Data de entr./saída</span><span class="info">[ide_dhSaiEnt_data]</span></td>
@@ -444,6 +444,7 @@ async function processXmlToHtml(xmlString, logoBase64) {
         "[dest_CNPJ_CPF]": formatCnpjCpf(dest.CNPJ || dest.CPF),
         "[dest_xLgr]": escapeHtml(enderDest.xLgr || ""),
         "[dest_nro]": escapeHtml(enderDest.nro || ""),
+        "[dest_cpl]": enderDest.xCpl ? " - " + escapeHtml(enderDest.xCpl) : "",
         "[dest_xBairro]": escapeHtml(enderDest.xBairro || ""),
         "[dest_CEP]": formatCep(enderDest.CEP),
         "[dest_xMun]": escapeHtml(enderDest.xMun || ""),
