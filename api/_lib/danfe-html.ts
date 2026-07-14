@@ -24,7 +24,7 @@ const PAGE_CSS = `
     .page {
         width: 210mm;
         height: 296mm;                 /* levemente < 297 pra não estourar folha em branco */
-        padding: 4mm 6mm;
+        padding: 4mm 3mm;
         margin: 0 auto;
         display: flex;
         flex-direction: column;
@@ -39,7 +39,8 @@ const PAGE_CSS = `
     .page td, .page th { border: 1px solid #000; vertical-align: top; padding: 0.6mm 1mm; overflow: hidden; }
 
     .nf-label { display: block; font-size: 5pt; text-transform: uppercase; line-height: 1.25; letter-spacing: 0.1px; }
-    .info { display: block; font-size: 8pt; font-weight: bold; line-height: 1.2; word-break: break-word; }
+    .info { display: block; font-size: 8pt; font-weight: normal; line-height: 1.2; word-break: break-word; }
+    .info.bold { font-weight: bold; }
     .area-name { font-size: 6.5pt; font-weight: bold; text-transform: uppercase; margin: 1.2mm 0 0.5mm; }
     .txt-center { text-align: center; }
     .txt-right { text-align: right; }
@@ -241,7 +242,7 @@ const TPL_DESTINATARIO_BLOCK = `
                 <td><span class="nf-label">V. ICMS UF dest.</span><span class="info">[tot_vICMSUFDest]</span></td>
                 <td><span class="nf-label">V. aprox. do tributo</span><span class="info">{ApproximateTax}</span></td>
                 <td><span class="nf-label">Valor da COFINS</span><span class="info">[tot_vCOFINS]</span></td>
-                <td><span class="nf-label">V. total da nota</span><span class="info">[tot_vNF]</span></td>
+                <td><span class="nf-label">V. total da nota</span><span class="info bold">[tot_vNF]</span></td>
             </tr>
         </tbody>
     </table>
