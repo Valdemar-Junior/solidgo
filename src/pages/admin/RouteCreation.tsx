@@ -3321,66 +3321,80 @@ function RouteCreationContent() {
         let withdrawnOrderIds = new Set<string>();
         let releasedNotesMap: Record<string, string> = {};
         if (rawOrders.length > 0) {
+          // O filtro .in() viaja DENTRO da URL. Com muitos pedidos (600+) a URL
+          // estoura o limite e o servidor devolve 400 — os saldos vinham vazios e,
+          // pelo fallback abaixo (`balances.length === 0 -> !return_flag`), TODO
+          // pedido devolvido sumia da fila. Por isso buscamos em lotes.
+          const orderIds = rawOrders.map((order) => String(order.id));
+          const ID_CHUNK = 100;
+          const idChunks: string[][] = [];
+          for (let i = 0; i < orderIds.length; i += ID_CHUNK) {
+            idChunks.push(orderIds.slice(i, i + ID_CHUNK));
+          }
+          const fetchInChunks = async (run: (ids: string[]) => any): Promise<any[]> => {
+            const out: any[] = [];
+            for (const ids of idChunks) {
+              const { data, error } = await run(ids);
+              if (error) throw error;
+              if (data) out.push(...data);
+            }
+            return out;
+          };
+
           try {
-            const { data: balancesData, error: balancesError } = await supabase
+            const balancesData = await fetchInChunks((ids) => supabase
               .from('order_item_shadow_balances')
               .select('order_id, order_item_id, source_line_key, sku, product_name, storage_location, source_present, purchased_quantity, returned_quantity, shadow_deliverable_quantity, delivered_quantity, remaining_deliverable_quantity, has_over_return')
-              .in('order_id', rawOrders.map((order) => String(order.id)));
+              .in('order_id', ids));
 
-            if (!balancesError) {
-              balancesByOrderIdMap = (balancesData || []).reduce((acc: Record<string, OrderItemShadowBalance[]>, row: any) => {
-                const orderId = String(row.order_id || '');
-                if (!orderId) return acc;
-                if (!acc[orderId]) acc[orderId] = [];
-                acc[orderId].push(row as OrderItemShadowBalance);
-                return acc;
-              }, {});
-            }
+            balancesByOrderIdMap = balancesData.reduce((acc: Record<string, OrderItemShadowBalance[]>, row: any) => {
+              const orderId = String(row.order_id || '');
+              if (!orderId) return acc;
+              if (!acc[orderId]) acc[orderId] = [];
+              acc[orderId].push(row as OrderItemShadowBalance);
+              return acc;
+            }, {});
 
-            const { data: carrierFlagsData, error: carrierFlagsError } = await supabase
+            const carrierFlagsData = await fetchInChunks((ids) => supabase
               .from('orders')
               .select('id, is_carrier_delivery')
-              .in('id', rawOrders.map((order) => String(order.id)));
+              .in('id', ids));
 
-            if (!carrierFlagsError) {
-              carrierDeliveryMap = new Map(
-                (carrierFlagsData || []).map((row: any) => [String(row.id), Boolean(row.is_carrier_delivery)])
-              );
-            }
+            carrierDeliveryMap = new Map(
+              carrierFlagsData.map((row: any) => [String(row.id), Boolean(row.is_carrier_delivery)])
+            );
 
-            const { data: withdrawalsData, error: withdrawalsError } = await supabase
+            const withdrawalsData = await fetchInChunks((ids) => supabase
               .from('order_withdrawals')
               .select('order_id, items')
-              .in('order_id', rawOrders.map((order) => String(order.id)));
+              .in('order_id', ids));
 
-            if (!withdrawalsError) {
-              // Só exclui da fila quem foi retirado POR INTEIRO (items null/vazio).
-              // Retirada PARCIAL mantém o pedido na fila; os itens retirados são
-              // escondidos por item via order_item_holds (picked_up).
-              withdrawnOrderIds = new Set(
-                (withdrawalsData || [])
-                  .filter((row: any) => !Array.isArray(row.items) || row.items.length === 0)
-                  .map((row: any) => String(row.order_id))
-              );
-            }
+            // Só exclui da fila quem foi retirado POR INTEIRO (items null/vazio).
+            // Retirada PARCIAL mantém o pedido na fila; os itens retirados são
+            // escondidos por item via order_item_holds (picked_up).
+            withdrawnOrderIds = new Set(
+              withdrawalsData
+                .filter((row: any) => !Array.isArray(row.items) || row.items.length === 0)
+                .map((row: any) => String(row.order_id))
+            );
 
-            const { data: releaseAssignmentsData, error: releaseAssignmentsError } = await supabase
+            const releaseAssignmentsData = await fetchInChunks((ids) => supabase
               .from('store_release_assignments')
               .select('order_id, status, release_notes, updated_at')
-              .in('order_id', rawOrders.map((order) => String(order.id)))
+              .in('order_id', ids)
               .eq('status', 'released')
-              .order('updated_at', { ascending: false });
+              .order('updated_at', { ascending: false }));
 
-            if (!releaseAssignmentsError) {
-              for (const row of releaseAssignmentsData || []) {
-                const orderId = String((row as any).order_id || '');
-                if (!orderId || releasedNotesMap[orderId]) continue;
-                const notes = String((row as any).release_notes || '').trim();
-                if (notes) releasedNotesMap[orderId] = notes;
-              }
+            for (const row of releaseAssignmentsData) {
+              const orderId = String((row as any).order_id || '');
+              if (!orderId || releasedNotesMap[orderId]) continue;
+              const notes = String((row as any).release_notes || '').trim();
+              if (notes) releasedNotesMap[orderId] = notes;
             }
           } catch (error) {
-            console.warn('Carrier delivery flag or withdrawals not available yet:', error);
+            // Falhar aqui esconde pedidos devolvidos da fila — não pode passar batido.
+            console.error('[RouteCreation] Falha ao carregar saldos/retiradas/liberações:', error);
+            toast.error('Falha ao carregar os saldos dos itens. Recarregue a página — a fila pode estar incompleta.');
           }
         }
         setOrderBalancesByOrderId(balancesByOrderIdMap);
