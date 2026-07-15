@@ -100,7 +100,6 @@ const PAGE_CSS = `
     .items-box td:first-child { border-left: none; }
     .items-box tbody tr:first-child td { padding-top: 1mm; }
     .items-box tbody tr:last-child td { border-bottom: 1px solid #000; }
-    .item-infad { display: block; font-size: 7pt; margin-top: 0.3mm; }
 
     /* Rodapé (ISSQN + dados adicionais) */
     .boxDadosAdicionais td { height: 25mm; }
@@ -522,9 +521,12 @@ async function processXmlToHtml(xmlString, logoBase64) {
     for (let i = 0; i < items.length; i++) {
         let item = items[i];
 
+        // A cor/variação (infAdProd) entra emendada na descrição, então conta no
+        // mesmo texto (não reserva mais uma linha inteira só pra ela).
         let descLen = (item.prod && item.prod.xProd) ? String(item.prod.xProd).length : 0;
+        const infAdLen = item.infAdProd ? String(item.infAdProd).trim().length : 0;
+        if (infAdLen > 0) descLen += infAdLen + 1; // +1 = o espaço que separa
         let descLines = Math.max(1, Math.ceil(descLen / CHARS_PER_LINE));
-        if (item.infAdProd && String(item.infAdProd).trim()) descLines += 1; // linha da cor/variação
         let itemCostMm = ROW_BASE_MM + (descLines - 1) * ROW_LINE_MM;
 
         let budget = currentPage.isFirst ? PAGE1_BUDGET_MM : PAGEN_BUDGET_MM;
@@ -572,10 +574,10 @@ async function processXmlToHtml(xmlString, logoBase64) {
             const ipiData = extractIPIData(imposto);
 
             // Descrição = xProd + infAdProd (cor/variação, ex.: "CARVALHO/TITANIO"),
-            // igual o DANFE oficial: a info adicional do item entra no fim da descrição.
+            // igual o DANFE oficial. Emenda no fim da descrição (não força linha
+            // própria) — só quebra se não couber, economizando altura na tabela.
             const infAd = det.infAdProd ? String(det.infAdProd).trim() : "";
-            const descCell = escapeHtml(prod.xProd || "") +
-                (infAd ? '<span class="item-infad">' + escapeHtml(infAd) + '</span>' : "");
+            const descCell = escapeHtml(prod.xProd || "") + (infAd ? " " + escapeHtml(infAd) : "");
 
             pageHtml += '<tr>' +
                 '<td class="txt-center">' + escapeHtml(prod.cProd || "") + '</td>' +
