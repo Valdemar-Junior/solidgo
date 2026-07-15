@@ -78,6 +78,39 @@ registerLocale('pt-BR', ptBR);
 const FULL_URGENT_ALERT_STORAGE_KEY = 'rc_fullUrgentAlertDismissedAt';
 const FULL_URGENT_ALERT_SNOOZE_MS = 2 * 60 * 60 * 1000;
 
+// Colunas ancoradas na esquerda da fila de pedidos: nao somem na rolagem horizontal.
+// Ficam sempre visiveis e fora do reordenamento da engrenagem (senao o sticky desalinha,
+// porque so da pra congelar colunas coladas na borda esquerda).
+const PINNED_COLUMN_IDS = ['pedido', 'cliente'];
+
+// O `left` de cada coluna congelada e a soma das larguras das anteriores, entao as
+// larguras precisam ser fixas e casar com os offsets abaixo: 0 / 48 / 172 / 268 (total 452px).
+const FROZEN_COL = {
+  check: 'sticky left-0 w-[48px] min-w-[48px] max-w-[48px]',
+  acoes: 'sticky left-[48px] w-[124px] min-w-[124px] max-w-[124px]',
+  pedido: 'sticky left-[172px] w-[96px] min-w-[96px] max-w-[96px]',
+  cliente: 'sticky left-[268px] w-[184px] min-w-[184px] max-w-[184px]',
+} as const;
+
+// Sombra que marca onde termina o bloco congelado e comeca a area que rola.
+const FROZEN_EDGE_SHADOW = 'shadow-[2px_0_5px_-2px_rgba(0,0,0,0.18)]';
+
+// Numa tabela, a coluna nasce da linha mais larga: um unico "JOSE CARLOS SEVERO JUNIOR"
+// estica Vendedor pra todas as 800+ linhas e abre aquele vazio enorme. Teto por coluna
+// dimensionado pra maioria dos valores; quem passar disso quebra pra baixo em vez de
+// cortar. Custa pouco porque a linha ja e alta por causa do cliente e das observacoes.
+const COLUMN_WIDTH_CAP: Record<string, string> = {
+  produto: 'min-w-[200px] max-w-[260px]',
+  operacao: 'min-w-[120px] max-w-[160px]',
+  vendedor: 'min-w-[120px] max-w-[160px]',
+  bairro: 'min-w-[110px] max-w-[150px]',
+  cidade: 'min-w-[110px] max-w-[140px]',
+  localEstocagem: 'min-w-[100px] max-w-[130px]',
+  filialVenda: 'min-w-[90px] max-w-[120px]',
+  department: 'min-w-[90px] max-w-[120px]',
+  brand: 'min-w-[90px] max-w-[110px]',
+};
+
 type PickupPendingReturn = OrderReturn & {
   order: Order;
 };
@@ -575,6 +608,28 @@ function RouteCreationContent() {
       return true;
     });
 
+    // DIAGNOSTICO TEMPORARIO (remover depois): por que o pedido nao vira linha?
+    try {
+      const alvo = '140394';
+      const noEstado: any = (orders as any[]).find((x: any) => String(x.order_id_erp) === alvo);
+      const passouTela: any = (filteredOrders as any[]).find((x: any) => String(x.order_id_erp) === alvo);
+      if (noEstado) {
+        const semCtx = getOperationalItemsForOrder(noEstado, orderBalancesByOrderId);
+        const comCtx = getOperationalItemsForOrder(noEstado, orderBalancesByOrderId, holdCtx);
+        console.log(`[DIAG ${alvo}] EXIBICAO`, {
+          esta_no_estado: true,
+          passou_filtros_tela: !!passouTela,
+          itens_sem_holds: semCtx.length,
+          itens_com_holds: comCtx.length,
+          holds_do_pedido: holdsByOrderId[String(noEstado.id)],
+          autoMatch: orderMatchesAutoWaiting(noEstado, waitingAutoRules),
+          detalhe_itens: comCtx.map((i: any) => ({ sku: i.sku, qtd: i.quantity })),
+        });
+      } else {
+        console.log(`[DIAG ${alvo}] EXIBICAO: NAO esta no estado 'orders' (caiu no carregamento)`);
+      }
+    } catch (e) { console.warn('[DIAG] falhou', e); }
+
     // 2. Expand to Rows (Order + Item)
     for (const o of filteredOrders) {
       const items = getOperationalItemsForOrder(o, orderBalancesByOrderId, holdCtx);
@@ -660,7 +715,6 @@ function RouteCreationContent() {
         v['filialVenda'] = o.filial_venda || raw?.filial_venda || '-';
         v['operacao'] = raw?.operacoes || '-';
         v['vendedor'] = (o as any).vendedor_nome || raw?.vendedor || '-';
-        v['situacao'] = o.status || '-';
         v['obsPublicas'] = (o as any).observacoes_publicas || raw?.observacoes || '-';
         v['obsInternas'] = o.observacoes_internas || raw?.observacoes_internas || '-';
 
@@ -671,13 +725,6 @@ function RouteCreationContent() {
         const str = (addr as any)?.street || raw?.destinatario_endereco || '';
         const num = (addr as any)?.number || raw?.destinatario_numero || '';
         v['endereco'] = `${str}, ${num}`;
-
-        // Other locations
-        // Logic for otherLocs 
-        // (Assuming simple logic or empty if not easily replicated here without more context)
-        // Original logic was doing a complex mapping. 
-        // For sorting purposes, we might just store a string representation if needed.
-        // For rendering, we will access 'items' again.
 
         rows.push({ order: o, item: it, values: v });
       }
@@ -935,6 +982,9 @@ function RouteCreationContent() {
   const [pickupItems, setPickupItems] = useState<any[]>([]);
   const [pickupSelectedKeys, setPickupSelectedKeys] = useState<Set<string>>(new Set());
   const [openOrderActionsId, setOpenOrderActionsId] = useState<string | null>(null);
+  // A caixa da fila tem altura limitada e corta o que passa da borda: nas linhas de baixo
+  // o menu precisa abrir pra cima, senao as ultimas opcoes ficam inalcancaveis.
+  const [orderActionsOpenUpward, setOrderActionsOpenUpward] = useState(false);
 
   // Itens ainda disponiveis pra retirada de um pedido (exclui os ja retirados).
   const availableItemsForPickup = (orderId: string): any[] => {
@@ -1579,8 +1629,6 @@ function RouteCreationContent() {
   };
 
   // Table Config
-
-  // Table Config
   const [columnsConf, setColumnsConf] = useState<Array<{ id: string, label: string, visible: boolean }>>([
     { id: 'data', label: 'Data', visible: true },
     { id: 'pedido', label: 'Pedido', visible: true },
@@ -1600,12 +1648,21 @@ function RouteCreationContent() {
     { id: 'filialVenda', label: 'Filial', visible: true },
     { id: 'operacao', label: 'Operação', visible: true },
     { id: 'vendedor', label: 'Vendedor', visible: true },
-    { id: 'situacao', label: 'Situação', visible: true },
     { id: 'obsPublicas', label: 'Obs.', visible: true },
     { id: 'obsInternas', label: 'Obs. Int.', visible: true },
     { id: 'endereco', label: 'Endereço', visible: true },
-    { id: 'outrosLocs', label: 'Outros Locais', visible: true },
   ]);
+
+  // Pedido e Cliente vao na frente e sempre visiveis: sao a ancora da linha quando
+  // se rola pro lado. O resto segue a ordem/visibilidade escolhida na engrenagem.
+  const orderedColumns = useMemo(() => {
+    const pinned = PINNED_COLUMN_IDS
+      .map(id => columnsConf.find(c => c.id === id))
+      .filter((c): c is { id: string; label: string; visible: boolean } => Boolean(c))
+      .map(c => ({ ...c, visible: true }));
+    const rest = columnsConf.filter(c => c.visible && !PINNED_COLUMN_IDS.includes(c.id));
+    return [...pinned, ...rest];
+  }, [columnsConf]);
 
   const [viewMode, setViewMode] = useState<'products' | 'orders'>('products');
   const ordersSectionRef = useRef<HTMLDivElement>(null);
@@ -1762,7 +1819,7 @@ function RouteCreationContent() {
         { id: 'pedido', label: 'Pedido', visible: true },
         { id: 'previsaoEntrega', label: 'Prev. Entrega', visible: true },
         { id: 'cliente', label: 'Cliente', visible: true },
-        { id: 'cpf', label: 'CPF', visible: true },
+        { id: 'cpf', label: 'CPF', visible: false },
         { id: 'telefone', label: 'Telefone', visible: true },
         { id: 'sku', label: 'SKU', visible: true },
         { id: 'flags', label: 'Sinais', visible: true },
@@ -1776,11 +1833,9 @@ function RouteCreationContent() {
         { id: 'filialVenda', label: 'Filial', visible: true },
         { id: 'operacao', label: 'Operação', visible: true },
         { id: 'vendedor', label: 'Vendedor', visible: true },
-        { id: 'situacao', label: 'Situação', visible: true },
         { id: 'obsPublicas', label: 'Obs.', visible: true },
         { id: 'obsInternas', label: 'Obs. Int.', visible: true },
         { id: 'endereco', label: 'Endereço', visible: true },
-        { id: 'outrosLocs', label: 'Outros Locais', visible: true },
       ];
 
       try {
@@ -3367,6 +3422,25 @@ function RouteCreationContent() {
             // }
             return updated;
           });
+        // DIAGNOSTICO TEMPORARIO (remover depois): rastreia um pedido pela fila.
+        try {
+          const alvo = '140394';
+          const bruto: any = (rawOrders as any[]).find((x: any) => String(x.order_id_erp) === alvo);
+          const passou: any = (processedOrders as any[]).find((x: any) => String(x.order_id_erp) === alvo);
+          console.log(`[DIAG ${alvo}] CARREGAMENTO`, {
+            veio_do_banco: !!bruto,
+            passou_filtros_carga: !!passou,
+            status: bruto?.status,
+            blocked_at: bruto?.blocked_at,
+            return_flag: bruto?.return_flag,
+            requires_pickup: bruto?.requires_pickup,
+            trancado_em_rota: bruto ? lockedOrderIds.has(bruto.id) : null,
+            retirado: bruto ? withdrawnOrderIds.has(String(bruto.id)) : null,
+            qtd_saldos: bruto ? (balancesByOrderIdMap[String(bruto.id)] || []).length : null,
+            saldos: bruto ? balancesByOrderIdMap[String(bruto.id)] : null,
+          });
+        } catch (e) { console.warn('[DIAG] falhou', e); }
+
         // DEBUG: Log orders with return data
         const withReturnData = processedOrders.filter((o: any) => o.return_flag || o.last_return_reason);
         if (withReturnData.length > 0) {
@@ -4921,7 +4995,7 @@ function RouteCreationContent() {
             onMouseMove={onProductsMouseMove}
             onMouseUp={endProductsDrag}
             onMouseLeave={endProductsDrag}
-            className={`overflow-auto max-h[500px] ${draggingProducts ? 'cursor-grabbing select-none' : 'cursor-grab'}`}
+            className={`overflow-auto max-h-[60vh] ${draggingProducts ? 'cursor-grabbing select-none' : 'cursor-grab'}`}
           >
             {showWaitingTab ? (
               waitingRows.length === 0 ? (
@@ -5036,13 +5110,13 @@ function RouteCreationContent() {
               </div>
             ) : (
               <table className="min-w-max w-full text-sm divide-y divide-gray-100">
-                <thead className="bg-gray-50 sticky top-0 z-10 shadow-sm">
+                <thead className="bg-gray-50 sticky top-0 z-30 shadow-sm">
                   <tr>
-                    <th className="px-4 py-3 w-10 text-left"></th>
-                    <th className="px-4 py-3 text-left font-semibold text-gray-600 uppercase text-xs tracking-wider whitespace-nowrap">
+                    <th className={`${FROZEN_COL.check} z-10 bg-gray-50 px-3 py-3 text-left`}></th>
+                    <th className={`${FROZEN_COL.acoes} z-10 bg-gray-50 px-4 py-3 text-left font-semibold text-gray-600 uppercase text-xs tracking-wider whitespace-nowrap`}>
                       Ações
                     </th>
-                    {columnsConf.filter(c => c.visible).map(c => (
+                    {orderedColumns.map(c => (
                       <th
                         key={c.id}
                         onClick={() => {
@@ -5055,7 +5129,10 @@ function RouteCreationContent() {
                             setSortDirection(isDate ? 'desc' : 'asc');
                           }
                         }}
-                        className="px-4 py-3 text-left font-semibold text-gray-600 uppercase text-xs tracking-wider cursor-pointer hover:bg-gray-100 transition-colors select-none"
+                        className={`py-3 text-left font-semibold text-gray-600 uppercase text-xs tracking-wider cursor-pointer hover:bg-gray-100 transition-colors select-none ${c.id === 'pedido' ? `${FROZEN_COL.pedido} z-10 bg-gray-50 px-3`
+                          : c.id === 'cliente' ? `${FROZEN_COL.cliente} ${FROZEN_EDGE_SHADOW} z-10 bg-gray-50 px-3`
+                            : `px-4 ${COLUMN_WIDTH_CAP[c.id] || ''}`
+                          }`}
                       >
                         <div className="flex items-center gap-1">
                           {c.label}
@@ -5117,47 +5194,51 @@ function RouteCreationContent() {
                       } catch { return 'none'; }
                     };
 
+                    // As colunas congeladas precisam de fundo opaco proprio: o conteudo das
+                    // outras passa por baixo delas na rolagem lateral. E o fundo tem que
+                    // acompanhar o estado da linha, senao fica um retangulo branco na
+                    // linha azul quando o pedido esta selecionado.
+                    const frozenBg = isSelected
+                      ? 'bg-blue-50 group-hover:bg-blue-100'
+                      : 'bg-white group-hover:bg-gray-50';
+
                     return (
                       <tr
                         key={`${o.id}-${it.sku}-${idx}`}
-                        className={`group hover:bg-gray-50 transition-colors ${isSelected ? 'bg-blue-50/60 hover:bg-blue-100/50' : ''}`}
+                        className={`group transition-colors ${isSelected ? 'bg-blue-50 hover:bg-blue-100' : 'hover:bg-gray-50'}`}
                       >
                         <td
-                          className="px-4 py-3 cursor-pointer"
+                          className={`${FROZEN_COL.check} ${frozenBg} z-20 px-3 py-3 cursor-pointer`}
                           onClick={() => toggleOrderSelection(o.id)}
                         >
                           <div className={`w-5 h-5 rounded border flex items-center justify-center transition-colors ${awaitingStoreRelease ? 'border-amber-300 bg-amber-50' : isSelected ? 'bg-blue-600 border-blue-600' : 'border-gray-300 bg-white'}`}>
                             {isSelected && <CheckCircle2 className="h-3.5 w-3.5 text-white" />}
                           </div>
                         </td>
-                        <td className="px-4 py-3 whitespace-nowrap">
+                        {/* z-40 com o menu aberto pra ele passar por cima das colunas congeladas vizinhas */}
+                        <td className={`${FROZEN_COL.acoes} ${frozenBg} ${openOrderActionsId === rowActionsKey ? 'z-40' : 'z-20'} px-4 py-3 whitespace-nowrap`}>
                           <div className="relative inline-block text-left">
                             <button
                               type="button"
                               onClick={(event) => {
                                 event.stopPropagation();
+                                const btn = event.currentTarget.getBoundingClientRect();
+                                const box = productsScrollRef.current?.getBoundingClientRect();
+                                // ~150px e a altura do menu com as 3 opcoes.
+                                setOrderActionsOpenUpward(Boolean(box && box.bottom - btn.bottom < 150));
                                 setOpenOrderActionsId((current) => current === rowActionsKey ? null : rowActionsKey);
                               }}
                               className="inline-flex items-center rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-semibold text-gray-700 transition-colors hover:bg-gray-50"
                               title="Ações do pedido"
+                              aria-label="Ações do pedido"
                             >
                               Ações
                               <ChevronDown className="ml-1.5 h-3.5 w-3.5" />
                             </button>
-                            {showStoreReleaseBadge && (
-                              <div className="mt-2">
-                                <span
-                                  className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-semibold ${isStoreReleaseReleased ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'}`}
-                                  title={storeReleaseTooltip}
-                                >
-                                  {getStoreReleaseStatusLabel(o.store_release_status)}
-                                </span>
-                              </div>
-                            )}
 
                             {openOrderActionsId === rowActionsKey && (
                               <div
-                                className="absolute left-0 z-30 mt-2 min-w-[180px] overflow-hidden rounded-xl border border-gray-200 bg-white shadow-lg"
+                                className={`absolute left-0 z-30 min-w-[180px] overflow-hidden rounded-xl border border-gray-200 bg-white shadow-lg ${orderActionsOpenUpward ? 'bottom-full mb-2' : 'mt-2'}`}
                                 onClick={(event) => event.stopPropagation()}
                               >
                                 {(rowsCountByOrderId[String(o.id)] || 1) > 1 ? (
@@ -5216,12 +5297,19 @@ function RouteCreationContent() {
                             )}
                           </div>
                         </td>
-                        {columnsConf.filter(c => c.visible).map(c => (
+                        {orderedColumns.map(c => (
                           <td
                             key={c.id}
-                            className={`px-4 py-3 text-gray-700 ${['obsPublicas', 'obsInternas', 'endereco', 'outrosLocs'].includes(c.id)
-                              ? 'min-w-[200px] max-w-[300px] whitespace-normal leading-relaxed text-xs'
-                              : 'whitespace-nowrap'
+                            className={`py-3 text-gray-700 ${c.id === 'pedido' ? `${FROZEN_COL.pedido} ${frozenBg} z-20 px-3 whitespace-nowrap font-semibold text-gray-900`
+                              : c.id === 'cliente' ? `${FROZEN_COL.cliente} ${frozenBg} ${FROZEN_EDGE_SHADOW} z-20 px-3 whitespace-normal leading-snug font-medium text-gray-900`
+                                : ['obsPublicas', 'obsInternas', 'endereco'].includes(c.id)
+                                  ? 'px-4 min-w-[200px] max-w-[300px] whitespace-normal leading-relaxed text-xs'
+                                  // Sem teto, os selos ficam numa linha so e esticam a coluna a perder de vista.
+                                  : c.id === 'flags'
+                                    ? 'px-4 min-w-[240px] max-w-[300px] whitespace-normal'
+                                    : COLUMN_WIDTH_CAP[c.id]
+                                      ? `px-4 ${COLUMN_WIDTH_CAP[c.id]} whitespace-normal leading-snug break-words`
+                                      : 'px-4 whitespace-nowrap'
                               }`}
                           >
                             {c.id === 'telefone' ? (
@@ -5235,6 +5323,14 @@ function RouteCreationContent() {
                               </div>
                             ) : c.id === 'flags' ? (
                               <div className="flex flex-wrap items-center gap-2">
+                                {showStoreReleaseBadge && (
+                                  <span
+                                    className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold border ${isStoreReleaseReleased ? 'bg-emerald-100 text-emerald-800 border-emerald-200' : 'bg-amber-100 text-amber-800 border-amber-200'}`}
+                                    title={storeReleaseTooltip}
+                                  >
+                                    {getStoreReleaseStatusLabel(o.store_release_status)}
+                                  </span>
+                                )}
                                 {isPartialReturnedWithRemainingBalance ? (
                                   <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-50 text-amber-800 border border-amber-200" title={returnTitle || 'Pedido com devolução parcial e saldo ainda entregável'}>
                                     <AlertTriangle className="h-3.5 w-3.5" />
@@ -5309,9 +5405,7 @@ function RouteCreationContent() {
                                 </button>
                               </div>
                             ) : c.id === 'produto' ? (
-                              <div className="flex items-center gap-2">
-                                <span className="truncate max-w-[420px]">{values?.[c.id]}</span>
-                              </div>
+                              <span>{values?.[c.id]}</span>
                             ) : (
                               values?.[c.id] || '-'
                             )}
@@ -6535,43 +6629,50 @@ function RouteCreationContent() {
                 <button onClick={() => setShowColumnsModal(false)}><X className="h-5 w-5 text-gray-400" /></button>
               </div>
               <div className="p-2 overflow-y-auto max-h-[60vh]">
-                {columnsConf.map((c, idx) => (
-                  <div key={c.id} className="flex items-center justify-between p-3 hover:bg-gray-50 rounded-lg group">
-                    <label className="flex items-center gap-3 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={c.visible}
-                        onChange={() => {
-                          const newCols = [...columnsConf];
-                          newCols[idx].visible = !newCols[idx].visible;
-                          setColumnsConf(newCols);
-                        }}
-                        className="h-4 w-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
-                      />
-                      <span className="text-gray-700">{c.label}</span>
-                    </label>
-                    <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <button
-                        onClick={() => {
-                          if (idx === 0) return;
-                          const newCols = [...columnsConf];
-                          [newCols[idx - 1], newCols[idx]] = [newCols[idx], newCols[idx - 1]];
-                          setColumnsConf(newCols);
-                        }}
-                        className="p-1 hover:bg-gray-200 rounded"
-                      ><ChevronUp className="h-4 w-4" /></button>
-                      <button
-                        onClick={() => {
-                          if (idx === columnsConf.length - 1) return;
-                          const newCols = [...columnsConf];
-                          [newCols[idx + 1], newCols[idx]] = [newCols[idx], newCols[idx + 1]];
-                          setColumnsConf(newCols);
-                        }}
-                        className="p-1 hover:bg-gray-200 rounded"
-                      ><ChevronDown className="h-4 w-4" /></button>
+                <p className="px-3 pt-1 pb-2 text-xs text-gray-500">
+                  <b>Pedido</b> e <b>Cliente</b> ficam sempre fixos na esquerda e não aparecem aqui.
+                </p>
+                {columnsConf.map((c, idx) => {
+                  if (PINNED_COLUMN_IDS.includes(c.id)) return null;
+                  // Setas trocam de lugar com o vizinho reordenavel mais proximo (pulando os fixos).
+                  const prevIdx = columnsConf.slice(0, idx).map((x, i) => ({ x, i })).filter(({ x }) => !PINNED_COLUMN_IDS.includes(x.id)).pop()?.i;
+                  const nextIdx = columnsConf.slice(idx + 1).map((x, i) => ({ x, i: idx + 1 + i })).find(({ x }) => !PINNED_COLUMN_IDS.includes(x.id))?.i;
+                  const swap = (target?: number) => {
+                    if (target === undefined) return;
+                    const newCols = [...columnsConf];
+                    [newCols[target], newCols[idx]] = [newCols[idx], newCols[target]];
+                    setColumnsConf(newCols);
+                  };
+                  return (
+                    <div key={c.id} className="flex items-center justify-between p-3 hover:bg-gray-50 rounded-lg group">
+                      <label className="flex items-center gap-3 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={c.visible}
+                          onChange={() => {
+                            const newCols = [...columnsConf];
+                            newCols[idx] = { ...newCols[idx], visible: !newCols[idx].visible };
+                            setColumnsConf(newCols);
+                          }}
+                          className="h-4 w-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
+                        />
+                        <span className="text-gray-700">{c.label}</span>
+                      </label>
+                      <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button
+                          onClick={() => swap(prevIdx)}
+                          disabled={prevIdx === undefined}
+                          className="p-1 hover:bg-gray-200 rounded disabled:opacity-30 disabled:hover:bg-transparent"
+                        ><ChevronUp className="h-4 w-4" /></button>
+                        <button
+                          onClick={() => swap(nextIdx)}
+                          disabled={nextIdx === undefined}
+                          className="p-1 hover:bg-gray-200 rounded disabled:opacity-30 disabled:hover:bg-transparent"
+                        ><ChevronDown className="h-4 w-4" /></button>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
               <div className="p-4 border-t border-gray-100 bg-gray-50 text-right">
                 <button
