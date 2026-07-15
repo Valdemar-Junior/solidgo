@@ -608,28 +608,6 @@ function RouteCreationContent() {
       return true;
     });
 
-    // DIAGNOSTICO TEMPORARIO (remover depois): por que o pedido nao vira linha?
-    try {
-      const alvo = '140394';
-      const noEstado: any = (orders as any[]).find((x: any) => String(x.order_id_erp) === alvo);
-      const passouTela: any = (filteredOrders as any[]).find((x: any) => String(x.order_id_erp) === alvo);
-      if (noEstado) {
-        const semCtx = getOperationalItemsForOrder(noEstado, orderBalancesByOrderId);
-        const comCtx = getOperationalItemsForOrder(noEstado, orderBalancesByOrderId, holdCtx);
-        console.log(`[DIAG ${alvo}] EXIBICAO`, {
-          esta_no_estado: true,
-          passou_filtros_tela: !!passouTela,
-          itens_sem_holds: semCtx.length,
-          itens_com_holds: comCtx.length,
-          holds_do_pedido: holdsByOrderId[String(noEstado.id)],
-          autoMatch: orderMatchesAutoWaiting(noEstado, waitingAutoRules),
-          detalhe_itens: comCtx.map((i: any) => ({ sku: i.sku, qtd: i.quantity })),
-        });
-      } else {
-        console.log(`[DIAG ${alvo}] EXIBICAO: NAO esta no estado 'orders' (caiu no carregamento)`);
-      }
-    } catch (e) { console.warn('[DIAG] falhou', e); }
-
     // 2. Expand to Rows (Order + Item)
     for (const o of filteredOrders) {
       const items = getOperationalItemsForOrder(o, orderBalancesByOrderId, holdCtx);
@@ -3436,25 +3414,6 @@ function RouteCreationContent() {
             // }
             return updated;
           });
-        // DIAGNOSTICO TEMPORARIO (remover depois): rastreia um pedido pela fila.
-        try {
-          const alvo = '140394';
-          const bruto: any = (rawOrders as any[]).find((x: any) => String(x.order_id_erp) === alvo);
-          const passou: any = (processedOrders as any[]).find((x: any) => String(x.order_id_erp) === alvo);
-          console.log(`[DIAG ${alvo}] CARREGAMENTO`, {
-            veio_do_banco: !!bruto,
-            passou_filtros_carga: !!passou,
-            status: bruto?.status,
-            blocked_at: bruto?.blocked_at,
-            return_flag: bruto?.return_flag,
-            requires_pickup: bruto?.requires_pickup,
-            trancado_em_rota: bruto ? lockedOrderIds.has(bruto.id) : null,
-            retirado: bruto ? withdrawnOrderIds.has(String(bruto.id)) : null,
-            qtd_saldos: bruto ? (balancesByOrderIdMap[String(bruto.id)] || []).length : null,
-            saldos: bruto ? balancesByOrderIdMap[String(bruto.id)] : null,
-          });
-        } catch (e) { console.warn('[DIAG] falhou', e); }
-
         // DEBUG: Log orders with return data
         const withReturnData = processedOrders.filter((o: any) => o.return_flag || o.last_return_reason);
         if (withReturnData.length > 0) {
