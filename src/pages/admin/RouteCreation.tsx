@@ -55,6 +55,7 @@ import { SeparationSheetGenerator } from '../../utils/pdf/separationSheetGenerat
 import { PDFDocument } from 'pdf-lib';
 import { useAuthStore } from '../../stores/authStore';
 import { fetchInChunks, fetchAllPages, chunkArray } from '../../utils/supabase/batch';
+import { createPickupFromReturn } from '../../utils/pickup/createPickupFromReturn';
 import { saveUserPreference, loadUserPreference, mergeColumnsConfig, type ColumnConfig } from '../../utils/userPreferences';
 import MdfeIssueModal from '../../components/mdfe/MdfeIssueModal';
 import DatePicker, { registerLocale } from 'react-datepicker';
@@ -4052,7 +4053,9 @@ function RouteCreationContent() {
     }
   };
 
-  // FunÃ§Ã£o para criar ordem de coleta de devoluÃ§Ã£o
+  // Cria a ordem de coleta da devolução — o fluxo completo vive em
+  // utils/pickup/createPickupFromReturn (compartilhado com a Central de
+  // Devoluções). Aqui só fica a casca de UI (modal, toasts, recarregar).
   const createPickupOrder = async () => {
     if (!selectedPickupReturn) return;
     if (!pickupTeam) {
@@ -4060,344 +4063,39 @@ function RouteCreationContent() {
       return;
     }
 
-    let createdPickupOrderId: string | null = null;
-    let createdPickupRouteId: string | null = null;
-    let pickupLinkRegistered = false;
-
     setPickupOrderLoading(true);
     try {
       const returnRecord = selectedPickupReturn as PickupPendingReturn;
-      const order = returnRecord.order as any;
-      const returnId = String(returnRecord.id);
-      const pickupCreatedAt = returnRecord.pickup_created_at ? String(returnRecord.pickup_created_at) : '';
-      const pickupOrderId = returnRecord.pickup_order_id ? String(returnRecord.pickup_order_id) : '';
-      const pickupRouteId = returnRecord.pickup_route_id ? String(returnRecord.pickup_route_id) : '';
-
-      if (pickupCreatedAt || pickupOrderId || pickupRouteId) {
-        toast.info('Essa coleta já foi criada. Atualizando a tela...');
-        await loadData(false);
-        setActiveRoutesTab('pickupRoutes');
-        return;
-      }
-
-      // Buscar dados da equipe selecionada
-      let teamData = teams.find(t => t.id === pickupTeam);
-
-      // Se nÃ£o achou na lista local (raro), busca no banco
-      if (!teamData) {
-        const { data: t } = await supabase.from('teams_user').select('*').eq('id', pickupTeam).single();
-        if (t) teamData = t;
-      }
-
-      // DefiniÃ§Ã£o de Motorista e Ajudante baseado na equipe
-      let driverIdToUse = null;
-      let helperIdToUse = null;
       let conferenteName = 'Conferente';
-
-      // Se a equipe tem driver_user_id, precisamos achar o driver correspondente na tabela drivers
-      if (teamData?.driver_user_id) {
-        // Tenta achar driver com esse user_id na lista
-        const drv = drivers.find(d => d.user_id === teamData.driver_user_id);
-        if (drv) driverIdToUse = drv.id;
-        else {
-          // Fallback: se nÃ£o achar na lista, pode ser que drivers nÃ£o esteja carregado full, ou o user_id nÃ£o bata. 
-          // Tenta buscar driver pelo user_id
-          const { data: dDB } = await supabase.from('drivers').select('id').eq('user_id', teamData.driver_user_id).single();
-          if (dDB) driverIdToUse = dDB.id;
-        }
-      }
-
-      helperIdToUse = teamData?.helper_user_id || null;
-
-      // Se nÃ£o achou motorista na equipe, usa o placeholder OU avisa (decisÃ£o: avisar/falhar Ã© mais seguro, mas vou manter fallback para placeholder se crÃ­tico)
-      if (!driverIdToUse) {
-        console.warn('Motorista da equipe não encontrado na tabela drivers. Usando placeholder.');
-        driverIdToUse = PICKUP_PLACEHOLDER_DRIVER_ID;
-      }
-
-      // Conferente Name (apenas visual para observaÃ§Ã£o)
       if (pickupOrderConferente) {
         const c = conferentes.find(x => x.id === pickupOrderConferente);
         if (c) conferenteName = c.name;
       }
 
-      // 1. Gerar DANFE da nota de devoluÃ§Ã£o via webhook
-      toast.info('Gerando nota fiscal de devolução...');
-
-      const nfWebhook = await resolveDanfeWebhookUrl(true);
-
-      // Usar o XML de devoluÃ§Ã£o que veio do ERP
-      const xmlDevolucao = String(returnRecord.return_xml || order.return_nfe_xml || '');
-      if (!xmlDevolucao) {
-        toast.warning('XML de devolução não encontrado. Continuando sem DANFE.');
-      }
-
-      let danfeBase64 = String(order.return_danfe_base64 || '');
-      const shouldGenerateDanfeOnPickupCreation = false;
-      if (shouldGenerateDanfeOnPickupCreation && xmlDevolucao && !danfeBase64.startsWith('JVBER')) {
-        try {
-          const resp = await fetch(nfWebhook, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              route_id: `COLETA-${order.order_id_erp}`,
-              documentos: [{ order_id: order.id, numero: returnRecord.return_nfe_number || order.order_id_erp, xml: xmlDevolucao }],
-              count: 1,
-              tipo: 'devolucao'
-            })
-          });
-          if (resp.ok) {
-            const payload = await resp.json();
-            const items = Array.isArray(payload) ? payload : [payload];
-            if (items[0]?.pdf_base64) {
-              danfeBase64 = items[0].pdf_base64;
-            } else if (typeof payload?.data === 'string' && payload.data.startsWith('JVBER')) {
-              danfeBase64 = payload.data;
-            } else if (Array.isArray(payload?.documentos)) {
-              const item = payload.documentos.find((entry: any) => String(entry?.order_id) === String(order.id));
-              if (item?.data?.startsWith('JVBER')) danfeBase64 = item.data;
-            }
-          }
-        } catch (e) {
-          console.warn('Falha ao gerar DANFE de devoluÃ§Ã£o:', e);
-        }
-      }
-
-      // 2. CRIAR NOVO PEDIDO DE COLETA (Prefixo C-)
-      // Isso Ã© necessÃ¡rio para evitar conflito com o pedido original que jÃ¡ estÃ¡ Entregue
-      // e para ter um ciclo de vida independente na rota de coleta.
-
-      const newOrderErpId = `C-${order.order_id_erp}-RET-${returnId.slice(0, 8).toUpperCase()}`;
-
-      const { data: existingPickupOrder } = await supabase
-        .from('orders')
-        .select('id, order_id_erp, created_at, raw_json')
-        .eq('order_id_erp', newOrderErpId)
-        .maybeSingle();
-
-      if (existingPickupOrder?.id) {
-        const { data: existingRouteOrder, error: existingRouteOrderError } = await supabase
-          .from('route_orders')
-          .select('route_id')
-          .eq('order_id', existingPickupOrder.id)
-          .limit(1)
-          .maybeSingle();
-
-        if (existingRouteOrderError) throw existingRouteOrderError;
-
-        if (existingRouteOrder?.route_id) {
-          const { error: registerExistingPickupError } = await supabase.rpc('register_order_return_pickup', {
-            p_return_id: returnId,
-            p_pickup_order_id: existingPickupOrder.id,
-            p_pickup_route_id: existingRouteOrder.route_id,
-          });
-
-          if (registerExistingPickupError) throw registerExistingPickupError;
-
-          toast.success(`A coleta já existia e foi sincronizada com o evento de devolução.`);
-          setShowPickupOrderModal(false);
-          setSelectedPickupReturn(null);
-          setPickupOrderConferente('');
-          setPickupTeam('');
-          setPickupOrderObservations('');
-          await loadData(false);
-          setActiveRoutesTab('pickupRoutes');
-          return;
-        }
-
-        const existingSourceReturnId = String(existingPickupOrder.raw_json?.pickup_context?.source_return_id || '');
-        if (existingSourceReturnId !== returnId) {
-          throw new Error('Já existe um pedido com o mesmo identificador, mas ele não pertence a esta devolução.');
-        }
-
-        const existingCreatedAt = new Date(existingPickupOrder.created_at || 0).getTime();
-        const isRecentCreation = Number.isFinite(existingCreatedAt)
-          && Date.now() - existingCreatedAt < 2 * 60 * 1000;
-
-        if (isRecentCreation) {
-          throw new Error('Esta coleta parece estar sendo criada em outra tela. Aguarde alguns segundos e atualize.');
-        }
-
-        // Recupera uma tentativa antiga interrompida entre a criação do
-        // pedido C- e a criação da rota. Depois disso o fluxo recomeça limpo.
-        const { error: deleteOrphanPickupOrderError } = await supabase
-          .from('orders')
-          .delete()
-          .eq('id', existingPickupOrder.id);
-        if (deleteOrphanPickupOrderError) throw deleteOrphanPickupOrderError;
-      }
-
-      const structuredPickupItems = returnId
-        ? await fetchStructuredReturnItemsForPickup(returnId)
-        : [];
-      const isReturnMarkedAsTotal = ['total', 'devolucao_total', 'devolução total'].includes(
-        String(returnRecord.return_type || '').trim().toLowerCase()
-      );
-      const pickupItems = structuredPickupItems.length > 0
-        ? structuredPickupItems
-        : isReturnMarkedAsTotal
-          ? buildPickupItemsForDeliverySheet(order)
-          : [];
-
-      if (!pickupItems.length) {
-        throw new Error('Não foi possível identificar os itens desta devolução para montar a coleta.');
-      }
-
-      // Preparar objeto do novo pedido copiando dados do original
-      const newOrderPayload = {
-        order_id_erp: newOrderErpId,
-        customer_name: order.customer_name,
-        phone: order.phone,
-        customer_cpf: order.customer_cpf,
-        address_json: order.address_json,
-        items_json: (pickupItems || []).map((item: any) => ({
-          ...item,
-          // Importante: remover flags de montagem para que um pedido de coleta nao gere tarefas de montagem
-          tem_montagem: false,
-          has_assembly: false,
-          assembly_status: null
-        })),
-        status: 'pending', // Nasce pendente para poder ser roteirizado
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-        raw_json: {
-          ...(order.raw_json && typeof order.raw_json === 'object' ? order.raw_json : {}),
-          pickup_context: {
-            source_order_id: order.id,
-            source_order_id_erp: order.order_id_erp,
-            source_return_id: returnId,
-          },
-        },
-
-        // Campos especÃ­ficos da coleta
-        xml_documento: null, // Limpa XML de venda para evitar confusÃ£o
-        return_nfe_xml: returnRecord.return_xml || order.return_nfe_xml || null, // XML da devoluÃ§Ã£o no campo correto
-        return_nfe_number: returnRecord.return_nfe_number || order.return_nfe_number,
-        return_nfe_key: returnRecord.return_nfe_key || order.return_nfe_key || null,
-        return_date: returnRecord.return_date || order.return_date || null,
-        return_type: returnRecord.return_type || order.return_type || null,
-
-        danfe_base64: null,
-        return_danfe_base64: danfeBase64 || null, // Salva DANFE gerada no campo de retorno
-        danfe_gerada_em: danfeBase64 ? new Date().toISOString() : null,
-
-        filial_venda: order.filial_venda,
-        data_venda: order.data_venda,
-
-        observacoes_internas: `PEDIDO DE COLETA GERADO AUTOMATICAMENTE.\nOrigem: ${order.order_id_erp}\nEvento de devolução: ${returnId}\nMotivo: ${order.blocked_reason || returnRecord.reason || 'Devolução'}`.slice(0, 1000),
-
-        // Limpar flags de controle anteriores
-        return_flag: false,
-        requires_pickup: false, // Este pedido JÃ Ã‰ a execuÃ§Ã£o da pickup
-        pickup_created_at: null,
-        blocked_at: null
-      };
-
-
-
-      // Inserir novo pedido
-      const { data: newOrderData, error: newOrderError } = await supabase
-        .from('orders')
-        .insert(newOrderPayload)
-        .select()
-        .single();
-
-      if (newOrderError) throw newOrderError;
-      createdPickupOrderId = String(newOrderData.id);
-
-      // 3. Criar rota de coleta
-      const routeName = `COLETA-${returnRecord.return_nfe_number || order.order_id_erp}-${new Date().toLocaleDateString('pt-BR').replace(/\//g, '')}`;
-
-      const { data: routeData, error: routeError } = await supabase
-        .from('routes')
-        .insert({
-          name: routeName,
-          team_id: pickupTeam, // ID da equipe
-          driver_id: driverIdToUse, // ID do motorista da equipe
-          helper_id: helperIdToUse, // ID do ajudante (user_id)
-          vehicle_id: null,
-          status: 'pending',
-          observations: `Coleta de devolução. NF: ${returnRecord.return_nfe_number || '-'}. Resp: ${conferenteName}. ${pickupOrderObservations}`.trim()
-        })
-        .select()
-        .single();
-
-      if (routeError) throw routeError;
-      createdPickupRouteId = String(routeData.id);
-
-      // 4. Criar route_order vinculada ao NOVO pedido de coleta
-      const { error: roError } = await supabase.from('route_orders').insert({
-        route_id: routeData.id,
-        order_id: newOrderData.id, // ID do novo pedido C-
-        sequence: 1,
-        status: 'pending',
-        delivery_observations: `Coleta de devolução. NF: ${returnRecord.return_nfe_number || '-'}. Motivo: ${order.blocked_reason || returnRecord.reason || '-'}`
+      const result = await createPickupFromReturn({
+        returnId: String(returnRecord.id),
+        teamId: pickupTeam,
+        observations: pickupOrderObservations,
+        conferenteName,
       });
-      if (roError) throw roError;
 
-      // 5. Atualizar o evento de devolução marcando que a coleta foi criada
-      // Opcional: Salvar DANFE no pedido original tambÃ©m para histÃ³rico
-      if (danfeBase64) {
-        const { error: originalDanfeError } = await supabase
-          .from('orders')
-          .update({ return_danfe_base64: danfeBase64 })
-          .eq('id', order.id);
-
-        if (originalDanfeError) {
-          console.warn('Falha ao salvar DANFE de devolução no pedido original:', originalDanfeError);
-        }
+      if (result.status === 'already_created') {
+        toast.info('Essa coleta já foi criada. Atualizando a tela...');
+      } else if (result.status === 'synced_existing') {
+        toast.success('A coleta já existia e foi sincronizada com o evento de devolução.');
+      } else {
+        toast.success(`Coleta criada! Pedido gerado: ${result.pickupOrderErp}`);
       }
 
-      const { error: returnUpdateError } = await supabase.rpc('register_order_return_pickup', {
-        p_return_id: returnId,
-        p_pickup_order_id: newOrderData.id,
-        p_pickup_route_id: routeData.id,
-      });
-      if (returnUpdateError) throw returnUpdateError;
-      pickupLinkRegistered = true;
-
-      toast.success(`Coleta criada! Pedido gerado: ${newOrderErpId}`);
-
-      // Limpar e fechar modal
       setShowPickupOrderModal(false);
       setSelectedPickupReturn(null);
       setPickupOrderConferente('');
-      setPickupTeam(''); // Limpar equipe
+      setPickupTeam('');
       setPickupOrderObservations('');
-
-      // Recarregar dados
       await loadData(false);
-
-      // Mudar para aba das rotas de coleta
       setActiveRoutesTab('pickupRoutes');
-
     } catch (error: any) {
       console.error('Error creating pickup order:', error);
-
-      // Compensa falhas intermediárias: se o vínculo oficial ainda não
-      // foi registrado, remove somente os artefatos criados nesta tentativa.
-      if (!pickupLinkRegistered) {
-        if (createdPickupRouteId) {
-          const { error: cleanupRouteError } = await supabase
-            .from('routes')
-            .delete()
-            .eq('id', createdPickupRouteId);
-          if (cleanupRouteError) {
-            console.warn('Falha ao limpar rota de coleta incompleta:', cleanupRouteError);
-          }
-        }
-
-        if (createdPickupOrderId) {
-          const { error: cleanupOrderError } = await supabase
-            .from('orders')
-            .delete()
-            .eq('id', createdPickupOrderId);
-          if (cleanupOrderError) {
-            console.warn('Falha ao limpar pedido de coleta incompleto:', cleanupOrderError);
-          }
-        }
-      }
-
       toast.error('Erro ao criar coleta: ' + error.message);
     } finally {
       setPickupOrderLoading(false);

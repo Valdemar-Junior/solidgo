@@ -16,6 +16,7 @@ import { toast } from 'sonner';
 import { supabase } from '../../supabase/client';
 import { fetchAllPages, fetchInChunks } from '../../utils/supabase/batch';
 import { generateDanfeBase64 } from '../../utils/danfe/generateDanfe';
+import { createPickupFromReturn } from '../../utils/pickup/createPickupFromReturn';
 
 // Central de Devoluções: uma tela só com o filme completo de cada devolução
 // que chegou do ERP — tipo (parcial/total), origem (cancelado/devolvido),
@@ -347,9 +348,64 @@ export default function ReturnsManagement() {
     }
   };
 
-  // Gerar coleta: o fluxo fiscal completo vive na Gestão de Entregas
-  // (aba Coletas Pendentes) — este botão leva direto pra lá.
-  const goToPickups = () => navigate('/admin/routes?tab=coletas');
+  // Gerar coleta DIRETO da central: mesmo fluxo da Gestão de Entregas
+  // (módulo compartilhado createPickupFromReturn) — só escolhe a equipe.
+  const [pickupModalRow, setPickupModalRow] = useState<ReturnRow | null>(null);
+  const [pickupTeamId, setPickupTeamId] = useState('');
+  const [pickupObservations, setPickupObservations] = useState('');
+  const [pickupSaving, setPickupSaving] = useState(false);
+  const [teams, setTeams] = useState<Array<{ id: string; name: string }>>([]);
+
+  const openPickupModal = async (row: ReturnRow) => {
+    setPickupModalRow(row);
+    setPickupTeamId('');
+    setPickupObservations('');
+    if (teams.length === 0) {
+      const { data, error } = await supabase
+        .from('teams_user')
+        .select('id, name, active')
+        .order('name');
+      if (error) {
+        console.error('[Devolucoes] Falha ao carregar equipes:', error);
+        toast.error('Não foi possível carregar as equipes.');
+        setPickupModalRow(null);
+        return;
+      }
+      setTeams(((data || []) as any[])
+        .filter((t) => t.active !== false)
+        .map((t) => ({ id: String(t.id), name: String(t.name || 'Equipe') })));
+    }
+  };
+
+  const confirmCreatePickup = async () => {
+    if (!pickupModalRow) return;
+    if (!pickupTeamId) {
+      toast.error('Selecione uma equipe.');
+      return;
+    }
+    setPickupSaving(true);
+    try {
+      const result = await createPickupFromReturn({
+        returnId: pickupModalRow.id,
+        teamId: pickupTeamId,
+        observations: pickupObservations,
+      });
+      if (result.status === 'already_created') {
+        toast.info('Essa coleta já foi criada. Atualizando a tela...');
+      } else if (result.status === 'synced_existing') {
+        toast.success('A coleta já existia e foi sincronizada com a devolução.');
+      } else {
+        toast.success(`Coleta criada! Pedido ${result.pickupOrderErp} na rota ${result.routeName}.`);
+      }
+      setPickupModalRow(null);
+      await loadData();
+    } catch (error: any) {
+      console.error('[Devolucoes] Erro ao criar coleta:', error);
+      toast.error('Erro ao criar coleta: ' + (error?.message || ''));
+    } finally {
+      setPickupSaving(false);
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -526,8 +582,8 @@ export default function ReturnsManagement() {
                       {row.requires_pickup && !row.pickup_created_at && (
                         <button
                           type="button"
-                          title="Gerar coleta (abre a aba Coletas Pendentes)"
-                          onClick={goToPickups}
+                          title="Gerar coleta"
+                          onClick={() => void openPickupModal(row)}
                           className="rounded-lg p-1.5 text-blue-600 transition-colors hover:bg-blue-50 hover:text-blue-800"
                         >
                           <Truck className="h-4 w-4" />
@@ -558,6 +614,68 @@ export default function ReturnsManagement() {
           </table>
         )}
       </div>
+
+      {pickupModalRow && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
+            <h2 className="text-lg font-bold text-gray-900">Gerar coleta</h2>
+            <p className="mt-1 text-sm text-gray-600">
+              Pedido <span className="font-semibold">{pickupModalRow.order?.order_id_erp}</span> — {pickupModalRow.order?.customer_name}
+            </p>
+            {pickupModalRow.items.length > 0 && (
+              <div className="mt-3 rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">
+                <p className="mb-1 text-xs font-semibold uppercase text-gray-500">Itens da coleta</p>
+                <ul className="space-y-0.5">
+                  {pickupModalRow.items.map((item, idx) => (
+                    <li key={idx}>
+                      <span className="text-gray-400">{Number(item.returned_quantity)}x</span>{' '}
+                      {item.product_name_snapshot || item.sku_snapshot}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            <label className="mt-4 block text-sm font-medium text-gray-700">Equipe da coleta</label>
+            <select
+              value={pickupTeamId}
+              onChange={(e) => setPickupTeamId(e.target.value)}
+              className="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+            >
+              <option value="">Selecione a equipe...</option>
+              {teams.map((team) => (
+                <option key={team.id} value={team.id}>{team.name}</option>
+              ))}
+            </select>
+            <label className="mt-3 block text-sm font-medium text-gray-700">Observações (opcional)</label>
+            <textarea
+              value={pickupObservations}
+              onChange={(e) => setPickupObservations(e.target.value)}
+              rows={2}
+              className="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+              placeholder="Ex.: combinar horário com o cliente"
+            />
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setPickupModalRow(null)}
+                disabled={pickupSaving}
+                className="rounded-xl border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={() => void confirmCreatePickup()}
+                disabled={pickupSaving || !pickupTeamId}
+                className="flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+              >
+                {pickupSaving && <Loader2 className="h-4 w-4 animate-spin" />}
+                Criar coleta
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {!loading && totalPages > 1 && (
         <div className="flex items-center justify-between text-sm text-gray-600">
