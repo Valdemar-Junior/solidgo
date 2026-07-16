@@ -3,6 +3,7 @@ import { ArrowLeft, CalendarRange, Eye, FileSpreadsheet, Loader2, Package, Rotat
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { supabase } from '../../supabase/client';
+import { fetchInChunks } from '../../utils/supabase/batch';
 import { isAssemblyRequired } from '../../utils/assembly/syncAssemblyProducts';
 import { DeliverySheetGenerator } from '../../utils/pdf/deliverySheetGenerator';
 import {
@@ -614,12 +615,11 @@ async function fetchWithdrawalPreview(filters: FiltersState): Promise<PreviewRow
 
   const assemblyOrdersSet = new Set<string>();
   if (orderIds.length > 0) {
-    const { data: assemblyData, error: assemblyError } = await supabase
+    // Em lotes: período longo pode trazer centenas de pedidos e o .in() estoura a URL.
+    const assemblyData = await fetchInChunks<string, any>(orderIds, (ids) => supabase
       .from('assembly_products')
       .select('order_id')
-      .in('order_id', orderIds);
-
-    if (assemblyError) throw assemblyError;
+      .in('order_id', ids));
 
     (assemblyData || []).forEach((row: any) => {
       if (row?.order_id) {

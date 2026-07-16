@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { CheckCircle2, Loader2, LogOut, RefreshCw, Search, Store, Undo2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../../supabase/client';
+import { fetchInChunks } from '../../utils/supabase/batch';
 import { useAuthStore } from '../../stores/authStore';
 import type { OrderItem, OrderItemHold, StoreReleaseAssignment, UserStoreReleaseLocation } from '../../types/database';
 import { getStoreReleaseStatusLabel, normalizeStoreReleaseLocation } from '../../utils/storeRelease';
@@ -164,11 +165,15 @@ export default function StoreReleaseManagement() {
       // Carrega os itens já retirados (picked_up) desses pedidos, pra esconder da lista.
       const orderIds = Array.from(new Set(rows.map((r) => String(r.order_id)).filter(Boolean)));
       if (orderIds.length > 0) {
-        const { data: holdsData } = await supabase
+        // Em lotes: .in() com lista grande estoura a URL (400 silencioso).
+        const holdsData = await fetchInChunks<string, any>(orderIds, (ids) => supabase
           .from('order_item_holds')
           .select('*')
-          .in('order_id', orderIds)
-          .eq('status', 'picked_up');
+          .in('order_id', ids)
+          .eq('status', 'picked_up')).catch((holdsError) => {
+            console.error('[StoreReleaseManagement] Falha ao carregar itens retirados:', holdsError);
+            return [] as any[];
+          });
         const map: Record<string, OrderItemHold[]> = {};
         (holdsData || []).forEach((h: any) => {
           const key = String(h.order_id);

@@ -21,6 +21,7 @@ import {
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { supabase } from '../../supabase/client';
+import { fetchInChunks } from '../../utils/supabase/batch';
 
 const syncOrderItemsShadowForImport = async (orderIds: string[]) => {
   const normalizedIds = Array.from(new Set(orderIds.map((value) => String(value || '').trim()).filter(Boolean)));
@@ -523,11 +524,12 @@ export default function OrdersImport() {
       let existentes: any[] = [];
 
       if (numerosLancamento.length > 0) {
-        const { data: existentesPorLancamento } = await supabase
+        // Em lotes: importação grande (centenas de lançamentos) estoura a URL do .in().
+        // Se essa checagem falhar, PARAR a importação — seguir sem ela duplicaria pedidos.
+        existentes = await fetchInChunks<string, any>(numerosLancamento, (nums) => supabase
           .from('orders')
           .select('id, order_id_erp')
-          .in('order_id_erp', numerosLancamento);
-        existentes = existentesPorLancamento || [];
+          .in('order_id_erp', nums));
       }
 
       const existentesLancamentoSet = new Set<string>((existentes || []).map((e: any) => String(e.order_id_erp)).filter(Boolean));

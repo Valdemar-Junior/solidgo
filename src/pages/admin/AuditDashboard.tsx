@@ -1,6 +1,7 @@
 ﻿
 import React, { useEffect, useState } from 'react';
 import { supabase } from '../../supabase/client';
+import { fetchInChunks } from '../../utils/supabase/batch';
 import { toast } from 'sonner';
 import { CheckCircle2, AlertTriangle, AlertOctagon, RefreshCw, ArrowLeft, Search, Save, Truck, Hammer, History, ClipboardList, ShoppingBag, Route } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
@@ -284,15 +285,12 @@ export default function AuditDashboard() {
         });
 
         const orderIdsArray = Array.from(orderIds);
-        const { data: allAssemblyRows, error: cloneErr } = await supabase
+        // Em lotes: auditoria varre TODO o histórico de devoluções — o .in()
+        // com a lista inteira estoura a URL (400).
+        const allAssemblyRows = await fetchInChunks<string, any>(orderIdsArray, (ids) => supabase
             .from('assembly_products')
             .select('order_id, product_sku, created_at')
-            .in('order_id', orderIdsArray)
-            .limit(20000);
-
-        if (cloneErr) {
-            throw cloneErr;
-        }
+            .in('order_id', ids));
 
         const gaps: any[] = [];
         groupedReturns.forEach((group: any) => {

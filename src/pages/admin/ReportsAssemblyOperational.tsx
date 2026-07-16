@@ -3,6 +3,7 @@ import { ArrowLeft, CalendarRange, FileSpreadsheet, Hammer, Loader2, MapPin, Rot
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { supabase } from '../../supabase/client';
+import { fetchInChunks } from '../../utils/supabase/batch';
 import { MultiSelect } from '../../components/ui/MultiSelect';
 import { DeliverySheetGenerator } from '../../utils/pdf/deliverySheetGenerator';
 import {
@@ -668,12 +669,11 @@ async function fetchCompletedRows(filters: FiltersState): Promise<AssemblyOperat
 
   if (completedOrderIds.length === 0) return [];
 
-  const { data: siblingsData, error: siblingsError } = await supabase
+  // Em lotes: período longo pode trazer centenas de pedidos e o .in() estoura a URL.
+  const siblingsData = await fetchInChunks<string, any>(completedOrderIds, (ids) => supabase
     .from('assembly_products')
     .select('order_id, status')
-    .in('order_id', completedOrderIds);
-
-  if (siblingsError) throw siblingsError;
+    .in('order_id', ids));
 
   const statusesByOrder = new Map<string, string[]>();
   ((siblingsData || []) as Array<{ order_id: string; status: string }>).forEach((row) => {

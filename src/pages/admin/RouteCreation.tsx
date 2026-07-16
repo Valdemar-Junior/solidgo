@@ -54,7 +54,7 @@ import { RouteReportGenerator } from '../../utils/pdf/routeReportGenerator';
 import { SeparationSheetGenerator } from '../../utils/pdf/separationSheetGenerator';
 import { PDFDocument } from 'pdf-lib';
 import { useAuthStore } from '../../stores/authStore';
-import { useRouteDataStore } from '../../stores/routeDataStore';
+import { fetchInChunks, fetchAllPages, chunkArray } from '../../utils/supabase/batch';
 import { saveUserPreference, loadUserPreference, mergeColumnsConfig, type ColumnConfig } from '../../utils/userPreferences';
 import MdfeIssueModal from '../../components/mdfe/MdfeIssueModal';
 import DatePicker, { registerLocale } from 'react-datepicker';
@@ -3195,11 +3195,21 @@ function RouteCreationContent() {
       ] = await Promise.all([
         // Orders (pending or returned OR assigned) - EXCLUINDO BLOQUEADOS
         // OTIMIZAÃ‡ÃƒO: Excluindo colunas pesadas (danfe_base64=88MB, xml_documento, raw_json, return_nfe_xml, return_danfe_base64)
-        supabase
-          .from('orders')
-          .select('id, order_id_erp, customer_name, phone, address_json, items_json, status, created_at, updated_at, filial_venda, data_venda, previsao_entrega, tem_frete_full, observacoes_publicas, observacoes_internas, customer_cpf, vendedor_nome, return_flag, last_return_reason, last_return_notes, brand, department, service_type, erp_status, blocked_at, blocked_reason, requires_pickup, pickup_created_at, return_nfe_number, return_nfe_key, return_date, return_type, import_source, previsao_montagem, product_group, product_subgroup, danfe_gerada_em, requires_store_release, store_release_status, raw_operacoes:raw_json->>operacoes, raw_lancamento_venda:raw_json->>lancamento_venda')
-          .in('status', ['pending', 'returned', 'assigned'])
-          .order('created_at', { ascending: false }),
+        // Paginado (fetchAllPages): o PostgREST corta em 1000 linhas em silêncio —
+        // sem isso, com a fila acima de 1000 pedidos os mais antigos SUMIRIAM.
+        (async () => {
+          try {
+            const data = await fetchAllPages<any>((from, to) => supabase
+              .from('orders')
+              .select('id, order_id_erp, customer_name, phone, address_json, items_json, status, created_at, updated_at, filial_venda, data_venda, previsao_entrega, tem_frete_full, observacoes_publicas, observacoes_internas, customer_cpf, vendedor_nome, return_flag, last_return_reason, last_return_notes, brand, department, service_type, erp_status, blocked_at, blocked_reason, requires_pickup, pickup_created_at, return_nfe_number, return_nfe_key, return_date, return_type, import_source, previsao_montagem, product_group, product_subgroup, danfe_gerada_em, requires_store_release, store_release_status, raw_operacoes:raw_json->>operacoes, raw_lancamento_venda:raw_json->>lancamento_venda')
+              .in('status', ['pending', 'returned', 'assigned'])
+              .order('created_at', { ascending: false })
+              .range(from, to));
+            return { data, error: null };
+          } catch (error) {
+            return { data: null, error };
+          }
+        })(),
 
         // Vehicles
         supabase
@@ -3291,6 +3301,11 @@ function RouteCreationContent() {
         });
       }
 
+      if (ordersRes.error) {
+        console.error('[RouteCreation] Falha ao carregar a fila de pedidos:', ordersRes.error);
+        toast.error('Falha ao carregar a fila de pedidos. Recarregue a página.');
+      }
+
       let processedOrders: Order[] = [];
       if (ordersRes.data) {
         const rawOrders = ordersRes.data as Order[];
@@ -3302,25 +3317,12 @@ function RouteCreationContent() {
           // O filtro .in() viaja DENTRO da URL. Com muitos pedidos (600+) a URL
           // estoura o limite e o servidor devolve 400 — os saldos vinham vazios e,
           // pelo fallback abaixo (`balances.length === 0 -> !return_flag`), TODO
-          // pedido devolvido sumia da fila. Por isso buscamos em lotes.
+          // pedido devolvido sumia da fila. Por isso buscamos em lotes (helper
+          // compartilhado em utils/supabase/batch, coberto por teste).
           const orderIds = rawOrders.map((order) => String(order.id));
-          const ID_CHUNK = 100;
-          const idChunks: string[][] = [];
-          for (let i = 0; i < orderIds.length; i += ID_CHUNK) {
-            idChunks.push(orderIds.slice(i, i + ID_CHUNK));
-          }
-          const fetchInChunks = async (run: (ids: string[]) => any): Promise<any[]> => {
-            const out: any[] = [];
-            for (const ids of idChunks) {
-              const { data, error } = await run(ids);
-              if (error) throw error;
-              if (data) out.push(...data);
-            }
-            return out;
-          };
 
           try {
-            const balancesData = await fetchInChunks((ids) => supabase
+            const balancesData = await fetchInChunks<string, any>(orderIds, (ids) => supabase
               .from('order_item_shadow_balances')
               .select('order_id, order_item_id, source_line_key, sku, product_name, storage_location, source_present, purchased_quantity, returned_quantity, shadow_deliverable_quantity, delivered_quantity, remaining_deliverable_quantity, has_over_return')
               .in('order_id', ids));
@@ -3331,9 +3333,9 @@ function RouteCreationContent() {
               if (!acc[orderId]) acc[orderId] = [];
               acc[orderId].push(row as OrderItemShadowBalance);
               return acc;
-            }, {});
+            }, {} as Record<string, OrderItemShadowBalance[]>);
 
-            const carrierFlagsData = await fetchInChunks((ids) => supabase
+            const carrierFlagsData = await fetchInChunks(orderIds, (ids) => supabase
               .from('orders')
               .select('id, is_carrier_delivery')
               .in('id', ids));
@@ -3342,7 +3344,7 @@ function RouteCreationContent() {
               carrierFlagsData.map((row: any) => [String(row.id), Boolean(row.is_carrier_delivery)])
             );
 
-            const withdrawalsData = await fetchInChunks((ids) => supabase
+            const withdrawalsData = await fetchInChunks(orderIds, (ids) => supabase
               .from('order_withdrawals')
               .select('order_id, items')
               .in('order_id', ids));
@@ -3356,7 +3358,7 @@ function RouteCreationContent() {
                 .map((row: any) => String(row.order_id))
             );
 
-            const releaseAssignmentsData = await fetchInChunks((ids) => supabase
+            const releaseAssignmentsData = await fetchInChunks(orderIds, (ids) => supabase
               .from('store_release_assignments')
               .select('order_id, status, release_notes, updated_at')
               .in('order_id', ids)
@@ -3746,12 +3748,14 @@ function RouteCreationContent() {
     if (!window.confirm(confirmMessage)) return;
 
     try {
-      const { error } = await supabase
-        .from('orders')
-        .update({ is_carrier_delivery: nextValue })
-        .in('id', orderIds);
-
-      if (error) throw error;
+      // Em lotes: com "selecionar todos" (600+ ids) o .in() estoura a URL (400).
+      for (const ids of chunkArray(orderIds, 100)) {
+        const { error } = await supabase
+          .from('orders')
+          .update({ is_carrier_delivery: nextValue })
+          .in('id', ids);
+        if (error) throw error;
+      }
 
       setOrders((prev) => prev.map((order) => (
         orderIds.includes(String(order.id))

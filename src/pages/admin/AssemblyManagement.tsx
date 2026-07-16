@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../../supabase/client';
+import { fetchInChunks, fetchAllPages } from '../../utils/supabase/batch';
 import type { AssemblyRoute, AssemblyProductWithDetails, DeliveryRouteCatalog, User, Vehicle } from '../../types/database';
 import DatePicker, { registerLocale } from 'react-datepicker';
 import { ptBR } from 'date-fns/locale';
@@ -858,14 +859,13 @@ function AssemblyManagementContent() {
   const fetchAllPendingRoutes = async () => {
     setLoadingAllPending(true);
     try {
-      const { data, error } = await supabase
+      const data = await fetchAllPages<any>((from, to) => supabase
         .from('assembly_routes')
         .select('*')
-        .select('*')
         .in('status', ['pending', 'in_progress'])
-        .order('created_at', { ascending: false });
+        .order('created_at', { ascending: false })
+        .range(from, to));
 
-      if (error) throw error;
       setAllPendingRoutes(data || []);
     } catch (err) {
       console.error('Error fetching all pending routes:', err);
@@ -911,26 +911,42 @@ function AssemblyManagementContent() {
       }
 
       // Load assembly products (split queries for performance)
-      const { data: productsPending } = await supabase
-        .from('assembly_products')
-        .select(`
-          id, order_id, product_name, product_sku, mount_priority, status, assembly_route_id, created_at, updated_at, was_returned, observations, returned_at,
-          order:order_id!inner (id, order_id_erp, customer_name, customer_cpf, phone, address_json, raw_json, data_venda, previsao_entrega, previsao_montagem, observacoes_publicas, observacoes_internas, status, service_type, tem_frete_full, return_flag, last_return_reason, last_return_notes, department, product_group, product_subgroup),
-          installer:installer_id (id, name)
-        `)
-        .is('assembly_route_id', null)
-        .eq('status', 'pending');
+      // Paginado: o PostgREST corta em 1000 linhas em silêncio — com a fila de
+      // montagem acima disso, produtos pendentes sumiriam da tela.
+      let productsPending: any[] = [];
+      try {
+        productsPending = await fetchAllPages<any>((from, to) => supabase
+          .from('assembly_products')
+          .select(`
+            id, order_id, product_name, product_sku, mount_priority, status, assembly_route_id, created_at, updated_at, was_returned, observations, returned_at,
+            order:order_id!inner (id, order_id_erp, customer_name, customer_cpf, phone, address_json, raw_json, data_venda, previsao_entrega, previsao_montagem, observacoes_publicas, observacoes_internas, status, service_type, tem_frete_full, return_flag, last_return_reason, last_return_notes, department, product_group, product_subgroup),
+            installer:installer_id (id, name)
+          `)
+          .is('assembly_route_id', null)
+          .eq('status', 'pending')
+          .order('created_at', { ascending: true })
+          .range(from, to));
+      } catch (pendingError) {
+        console.error('[AssemblyManagement] Falha ao carregar montagens pendentes:', pendingError);
+        toast.error('Falha ao carregar montagens pendentes. Recarregue a página.');
+      }
 
       // Trace removed
 
       const pendingOrderIds = Array.from(new Set((productsPending || []).map((p: any) => String(p.order_id || '')).filter(Boolean)));
       const returnedInfoByOrder: Record<string, { observations?: string | null; returned_at?: string | null; updated_at?: string | null }> = {};
       if (pendingOrderIds.length > 0) {
-        const { data: returnedProducts } = await supabase
-          .from('assembly_products')
-          .select('order_id, observations, returned_at, updated_at, status, was_returned')
-          .in('order_id', pendingOrderIds)
-          .or('status.eq.cancelled,was_returned.eq.true');
+        // Em lotes: .in() com lista grande estoura a URL (400 silencioso).
+        let returnedProducts: any[] = [];
+        try {
+          returnedProducts = await fetchInChunks<string, any>(pendingOrderIds, (ids) => supabase
+            .from('assembly_products')
+            .select('order_id, observations, returned_at, updated_at, status, was_returned')
+            .in('order_id', ids)
+            .or('status.eq.cancelled,was_returned.eq.true'));
+        } catch (returnedError) {
+          console.error('[AssemblyManagement] Falha ao carregar devoluções das montagens:', returnedError);
+        }
 
         const hasMeaningfulReturnedText = (value: unknown) => {
           const text = String(value || '').trim();
@@ -1022,11 +1038,11 @@ function AssemblyManagementContent() {
       try {
         const orderIds = Array.from(new Set(((productsPending || []) as any[]).map((ap: any) => String(ap.order_id)).filter(Boolean)));
         if (orderIds.length > 0) {
-          const { data: roDelivered } = await supabase
+          const roDelivered = await fetchInChunks<string, any>(orderIds, (ids) => supabase
             .from('route_orders')
             .select('order_id, delivered_at, status')
-            .in('order_id', orderIds)
-            .eq('status', 'delivered');
+            .in('order_id', ids)
+            .eq('status', 'delivered'));
           const map: Record<string, string> = {};
           (roDelivered || []).forEach((r: any) => { if (r.delivered_at) map[String(r.order_id)] = String(r.delivered_at); });
           console.log('[AssemblyManagement] deliveryInfo map:', Object.keys(map).length, 'items, orderIds searched:', orderIds.length);
