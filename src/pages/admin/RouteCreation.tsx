@@ -446,7 +446,11 @@ function RouteCreationContent() {
   const loadDataRef = useRef<any>(null);
 
   // Tabs State - expandido para incluir bloqueados e coletas
-  const [activeRoutesTab, setActiveRoutesTab] = useState<'deliveries' | 'blocked' | 'pickupOrders' | 'pickupRoutes'>('deliveries');
+  // Deep-link: a Central de Devoluções abre direto a aba de coletas
+  // via /admin/routes?tab=coletas.
+  const [activeRoutesTab, setActiveRoutesTab] = useState<'deliveries' | 'blocked' | 'pickupOrders' | 'pickupRoutes'>(() => (
+    new URLSearchParams(window.location.search).get('tab') === 'coletas' ? 'pickupOrders' : 'deliveries'
+  ));
   const [showWaitingTab, setShowWaitingTab] = useState(false);
   const [waitingSearch, setWaitingSearch] = useState('');
 

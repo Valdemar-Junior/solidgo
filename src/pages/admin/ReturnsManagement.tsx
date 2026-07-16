@@ -4,6 +4,7 @@ import {
   AlertTriangle,
   Loader2,
   PackageOpen,
+  PackageX,
   Printer,
   RefreshCw,
   Search,
@@ -30,7 +31,7 @@ type ReturnItemRow = {
   returned_quantity: number;
 };
 
-type ActiveRouteInfo = { name: string; status: string };
+type ActiveRouteInfo = { id: string; name: string; status: string };
 
 type ReturnRow = {
   id: string;
@@ -126,7 +127,7 @@ export default function ReturnsManagement() {
       const routeRows = orderIds.length > 0
         ? await fetchInChunks<string, any>(orderIds, (ids) => supabase
           .from('route_orders')
-          .select('order_id, route:routes!route_id(name, status)')
+          .select('order_id, route:routes!route_id(id, name, status)')
           .in('order_id', ids))
         : [];
       const activeRouteByOrder: Record<string, ActiveRouteInfo> = {};
@@ -139,7 +140,7 @@ export default function ReturnsManagement() {
         // Rota iniciada (com motorista) tem prioridade sobre rota em separação.
         const current = activeRouteByOrder[String(rr.order_id)];
         if (!current || route.status === 'in_progress') {
-          activeRouteByOrder[String(rr.order_id)] = { name, status: String(route.status || '') };
+          activeRouteByOrder[String(rr.order_id)] = { id: String(route.id), name, status: String(route.status || '') };
         }
       }
 
@@ -304,6 +305,52 @@ export default function ReturnsManagement() {
     navigate('/admin/order-lookup');
   };
 
+  // Remove o pedido de uma rota EM SEPARAÇÃO (mesma receita da conferência:
+  // apaga o vínculo — os snapshots por item caem em cascata —, devolve o
+  // pedido pra pending e re-sincroniza a liberação de loja).
+  // Rota INICIADA não permite: o móvel está fisicamente no caminhão; remover
+  // no sistema seria mentira operacional — o caminho é falar com o motorista.
+  const [removingId, setRemovingId] = useState<string | null>(null);
+  const removeFromRoute = async (row: ReturnRow) => {
+    const route = row.activeRoute;
+    if (!route || route.status === 'in_progress') return;
+    const erp = String(row.order?.order_id_erp || '');
+    if (!window.confirm(`Remover o pedido ${erp} da rota "${route.name}"?\nEle volta pra fila de roteirização (só os itens não devolvidos).`)) return;
+
+    setRemovingId(row.id);
+    try {
+      const { error: delError } = await supabase
+        .from('route_orders')
+        .delete()
+        .eq('route_id', route.id)
+        .eq('order_id', row.order_id);
+      if (delError) throw delError;
+
+      const { error: updError } = await supabase
+        .from('orders')
+        .update({ status: 'pending' })
+        .eq('id', row.order_id);
+      if (updError) throw updError;
+
+      const { error: syncError } = await supabase.rpc('sync_store_release_for_orders', {
+        p_order_ids: [row.order_id],
+      });
+      if (syncError) console.warn('[Devolucoes] Falha ao re-sincronizar liberação de loja:', syncError);
+
+      toast.success(`Pedido ${erp} removido da rota "${route.name}".`);
+      await loadData();
+    } catch (error) {
+      console.error('[Devolucoes] Erro ao remover da rota:', error);
+      toast.error('Erro ao remover o pedido da rota.');
+    } finally {
+      setRemovingId(null);
+    }
+  };
+
+  // Gerar coleta: o fluxo fiscal completo vive na Gestão de Entregas
+  // (aba Coletas Pendentes) — este botão leva direto pra lá.
+  const goToPickups = () => navigate('/admin/routes?tab=coletas');
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -465,6 +512,27 @@ export default function ReturnsManagement() {
                       <span className={`inline-block rounded-lg border px-2 py-1 text-xs ${sit.cls}`}>{sit.label}</span>
                     </td>
                     <td className="whitespace-nowrap px-4 py-3 text-right">
+                      {row.activeRoute && row.activeRoute.status !== 'in_progress' && (
+                        <button
+                          type="button"
+                          title={`Remover da rota "${row.activeRoute.name}" (em separação)`}
+                          onClick={() => void removeFromRoute(row)}
+                          disabled={removingId === row.id}
+                          className="rounded-lg p-1.5 text-orange-600 transition-colors hover:bg-orange-50 hover:text-orange-800 disabled:opacity-50"
+                        >
+                          {removingId === row.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <PackageX className="h-4 w-4" />}
+                        </button>
+                      )}
+                      {row.requires_pickup && !row.pickup_created_at && (
+                        <button
+                          type="button"
+                          title="Gerar coleta (abre a aba Coletas Pendentes)"
+                          onClick={goToPickups}
+                          className="rounded-lg p-1.5 text-blue-600 transition-colors hover:bg-blue-50 hover:text-blue-800"
+                        >
+                          <Truck className="h-4 w-4" />
+                        </button>
+                      )}
                       <button
                         type="button"
                         title="Imprimir nota de devolução"
