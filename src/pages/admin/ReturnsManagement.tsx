@@ -34,7 +34,7 @@ type ReturnItemRow = {
   returned_quantity: number;
 };
 
-type ActiveRouteInfo = { id: string; name: string; status: string };
+type ActiveRouteInfo = { id: string; name: string; status: string; driverId: string | null; driverName: string | null };
 
 type ReturnRow = {
   id: string;
@@ -60,6 +60,10 @@ type ReturnRow = {
   // ou seja: o motorista SAIU com o produto e trouxe de volta. Só esse caso
   // precisa de conferência de retorno à loja.
   wentOutBlocked: boolean;
+  // A rota de entrega JÁ FINALIZADA em que o produto saiu (contexto do "voltou
+  // com o motorista"): nome da rota + nome do motorista, pra logística
+  // entender POR QUE o item retornou.
+  outboundRoute: { name: string; driverName: string | null } | null;
 };
 
 type XmlInfo = { motivo: string; nfOrigem: string; rawXml: string };
@@ -135,28 +139,60 @@ export default function ReturnsManagement() {
       const routeRows = orderIds.length > 0
         ? await fetchInChunks<string, any>(orderIds, (ids) => supabase
           .from('route_orders')
-          .select('id, order_id, route:routes!route_id(id, name, status)')
+          .select('id, order_id, route:routes!route_id(id, name, status, driver_id)')
           .in('order_id', ids))
         : [];
       const activeRouteByOrder: Record<string, ActiveRouteInfo> = {};
+      const outboundRouteByOrder: Record<string, { name: string; driverId: string | null }> = {};
       const completedRouteOrderIds: string[] = [];
+      const driverIds = new Set<string>();
       for (const rr of routeRows) {
         const route = rr?.route;
         if (!route) continue;
         const name = String(route.name || '');
         const isColeta = name.trim().toUpperCase().startsWith('COLETA-');
+        const driverId = route.driver_id ? String(route.driver_id) : null;
         if (route.status === 'completed') {
           // Rota de ENTREGA já finalizada = o motorista saiu com estes itens.
           // (Rota de COLETA não conta — é o fluxo inverso, buscar na casa do cliente.)
-          if (!isColeta) completedRouteOrderIds.push(String(rr.id));
+          if (!isColeta) {
+            completedRouteOrderIds.push(String(rr.id));
+            outboundRouteByOrder[String(rr.order_id)] = { name, driverId };
+            if (driverId) driverIds.add(driverId);
+          }
           continue;
         }
         if (isColeta) continue;
         // Rota iniciada (com motorista) tem prioridade sobre rota em separação.
         const current = activeRouteByOrder[String(rr.order_id)];
         if (!current || route.status === 'in_progress') {
-          activeRouteByOrder[String(rr.order_id)] = { id: String(route.id), name, status: String(route.status || '') };
+          activeRouteByOrder[String(rr.order_id)] = { id: String(route.id), name, status: String(route.status || ''), driverId, driverName: null };
+          if (driverId) driverIds.add(driverId);
         }
+      }
+
+      // Nome do motorista: routes.driver_id → drivers.user_id → users.name.
+      const driverNameById: Record<string, string> = {};
+      if (driverIds.size > 0) {
+        const driverRows = await fetchInChunks<string, any>(Array.from(driverIds), (ids) => supabase
+          .from('drivers').select('id, user_id').in('id', ids));
+        const userIdByDriver: Record<string, string> = {};
+        const userIds = new Set<string>();
+        for (const d of driverRows) {
+          if (d?.user_id) { userIdByDriver[String(d.id)] = String(d.user_id); userIds.add(String(d.user_id)); }
+        }
+        if (userIds.size > 0) {
+          const userRows = await fetchInChunks<string, any>(Array.from(userIds), (ids) => supabase
+            .from('users').select('id, name').in('id', ids));
+          const nameByUser: Record<string, string> = {};
+          for (const u of userRows) nameByUser[String(u.id)] = String(u.name || '');
+          for (const [drvId, usrId] of Object.entries(userIdByDriver)) {
+            if (nameByUser[usrId]) driverNameById[drvId] = nameByUser[usrId];
+          }
+        }
+      }
+      for (const info of Object.values(activeRouteByOrder)) {
+        info.driverName = info.driverId ? (driverNameById[info.driverId] || null) : null;
       }
 
       // "Motorista saiu com o produto e trouxe de volta": item BLOQUEADO
@@ -177,12 +213,19 @@ export default function ReturnsManagement() {
         }
       }
 
-      setRows(returns.map((r: any) => ({
-        ...r,
-        items: itemsByReturn[String(r.id)] || [],
-        activeRoute: activeRouteByOrder[String(r.order_id)] || null,
-        wentOutBlocked: wentOutBlockedByOrder[String(r.order_id)] || false,
-      })));
+      setRows(returns.map((r: any) => {
+        const oid = String(r.order_id);
+        const outb = outboundRouteByOrder[oid];
+        return {
+          ...r,
+          items: itemsByReturn[oid] || [],
+          activeRoute: activeRouteByOrder[oid] || null,
+          wentOutBlocked: wentOutBlockedByOrder[oid] || false,
+          outboundRoute: outb
+            ? { name: outb.name, driverName: outb.driverId ? (driverNameById[outb.driverId] || null) : null }
+            : null,
+        };
+      }));
       setPage(0);
     } catch (error) {
       console.error('[Devolucoes] Falha ao carregar devoluções:', error);
@@ -303,6 +346,20 @@ export default function ReturnsManagement() {
       return { label: 'Parcial — itens restantes seguem na fila', cls: 'bg-yellow-100 text-yellow-800 border-yellow-200' };
     }
     return { label: 'Processada', cls: 'bg-gray-100 text-gray-700 border-gray-200' };
+  };
+
+  // Linha de contexto embaixo da situação: conta POR QUE o item está nesse
+  // estado — em qual rota e com qual motorista. Ajuda a logística a entender
+  // a história (ex.: "voltou da rota X com Fulano") sem precisar caçar.
+  const routeInfoLine = (row: ReturnRow): string | null => {
+    if (row.activeRoute) {
+      return row.activeRoute.driverName ? `Motorista: ${row.activeRoute.driverName}` : null;
+    }
+    if (row.outboundRoute && (isStoreReturnConfirmed(row) || canConfirmStoreReturn(row))) {
+      const drv = row.outboundRoute.driverName ? ` com ${row.outboundRoute.driverName}` : '';
+      return `Voltou da rota "${row.outboundRoute.name}"${drv}`;
+    }
+    return null;
   };
 
   const origem = (row: ReturnRow) => {
@@ -659,6 +716,9 @@ export default function ReturnsManagement() {
                     </td>
                     <td className="px-4 py-3">
                       <span className={`inline-block rounded-lg border px-2 py-1 text-xs ${sit.cls}`}>{sit.label}</span>
+                      {routeInfoLine(row) && (
+                        <span className="mt-1 block text-xs text-gray-500">{routeInfoLine(row)}</span>
+                      )}
                     </td>
                     <td className="whitespace-nowrap px-4 py-3 text-right">
                       {row.activeRoute && row.activeRoute.status !== 'in_progress' && (
