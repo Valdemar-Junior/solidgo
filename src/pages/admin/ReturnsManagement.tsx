@@ -3,10 +3,12 @@ import { useNavigate } from 'react-router-dom';
 import {
   AlertTriangle,
   Loader2,
+  PackageCheck,
   PackageOpen,
   PackageX,
   Printer,
   RefreshCw,
+  RotateCcw,
   Search,
   Truck,
   Undo2,
@@ -44,6 +46,7 @@ type ReturnRow = {
   reason: string | null;
   requires_pickup: boolean;
   pickup_created_at: string | null;
+  store_return_confirmed_at: string | null;
   order: {
     id: string;
     order_id_erp: string;
@@ -102,7 +105,7 @@ export default function ReturnsManagement() {
         .from('order_returns')
         .select(`
           id, order_id, return_nfe_number, return_date, return_type, reason,
-          requires_pickup, pickup_created_at, created_at,
+          requires_pickup, pickup_created_at, store_return_confirmed_at, created_at,
           order:orders!order_id(id, order_id_erp, customer_name, filial_venda, blocked_at)
         `)
         .eq('processing_status', 'processed')
@@ -221,6 +224,19 @@ export default function ReturnsManagement() {
     [filteredRows],
   );
 
+  // O produto devolvido/bloqueado ("não entregar") já voltou fisicamente pra
+  // loja e a logística confirmou a conferência.
+  const isStoreReturnConfirmed = (row: ReturnRow) => Boolean(row.store_return_confirmed_at);
+
+  // O botão "Confirmar retorno à loja" só faz sentido quando o produto DE FATO
+  // já voltou (ou nunca saiu): fora de rota ativa (rota finalizada ou nunca
+  // roteirizado) e sem coleta pendente/gerada — coleta tem o fluxo próprio dela.
+  const canConfirmStoreReturn = (row: ReturnRow) =>
+    !row.activeRoute
+    && !row.requires_pickup
+    && !row.pickup_created_at
+    && !isStoreReturnConfirmed(row);
+
   const situacao = (row: ReturnRow): { label: string; cls: string } => {
     if (row.activeRoute) {
       if (row.activeRoute.status === 'in_progress') {
@@ -233,6 +249,9 @@ export default function ReturnsManagement() {
         label: `Em separação — ${row.activeRoute.name}`,
         cls: 'bg-orange-100 text-orange-800 border-orange-200',
       };
+    }
+    if (isStoreReturnConfirmed(row)) {
+      return { label: '✓ Retornou à loja', cls: 'bg-green-100 text-green-800 border-green-300 font-medium' };
     }
     if (row.requires_pickup && !row.pickup_created_at) {
       return { label: 'Entregue — precisa de coleta', cls: 'bg-blue-100 text-blue-800 border-blue-200' };
@@ -345,6 +364,42 @@ export default function ReturnsManagement() {
       toast.error('Erro ao remover o pedido da rota.');
     } finally {
       setRemovingId(null);
+    }
+  };
+
+  // Confirmar retorno à loja: carimbo de conferência de que o produto
+  // devolvido/bloqueado ("não entregar") voltou fisicamente pro depósito.
+  // Reversível — o mesmo botão desfaz (limpa o carimbo).
+  const [confirmingReturnId, setConfirmingReturnId] = useState<string | null>(null);
+  const toggleStoreReturn = async (row: ReturnRow, confirm: boolean) => {
+    const erp = String(row.order?.order_id_erp || '');
+    if (confirm && !window.confirm(`Confirmar que o produto devolvido do pedido ${erp} voltou pra loja?\nA devolução passa pra "Retornou à loja".`)) return;
+
+    setConfirmingReturnId(row.id);
+    try {
+      let confirmedBy: string | null = null;
+      if (confirm) {
+        const { data: auth } = await supabase.auth.getUser();
+        confirmedBy = auth?.user?.id || null;
+      }
+      const { error } = await supabase
+        .from('order_returns')
+        .update({
+          store_return_confirmed_at: confirm ? new Date().toISOString() : null,
+          store_return_confirmed_by: confirmedBy,
+        })
+        .eq('id', row.id);
+      if (error) throw error;
+
+      toast.success(confirm
+        ? `Retorno do pedido ${erp} confirmado.`
+        : `Confirmação do pedido ${erp} desfeita.`);
+      await loadData();
+    } catch (error) {
+      console.error('[Devolucoes] Erro ao confirmar retorno à loja:', error);
+      toast.error('Erro ao registrar o retorno à loja.');
+    } finally {
+      setConfirmingReturnId(null);
     }
   };
 
@@ -587,6 +642,28 @@ export default function ReturnsManagement() {
                           className="rounded-lg p-1.5 text-blue-600 transition-colors hover:bg-blue-50 hover:text-blue-800"
                         >
                           <Truck className="h-4 w-4" />
+                        </button>
+                      )}
+                      {canConfirmStoreReturn(row) && (
+                        <button
+                          type="button"
+                          title="Confirmar que o produto voltou pra loja"
+                          onClick={() => void toggleStoreReturn(row, true)}
+                          disabled={confirmingReturnId === row.id}
+                          className="rounded-lg p-1.5 text-green-600 transition-colors hover:bg-green-50 hover:text-green-800 disabled:opacity-50"
+                        >
+                          {confirmingReturnId === row.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <PackageCheck className="h-4 w-4" />}
+                        </button>
+                      )}
+                      {isStoreReturnConfirmed(row) && !row.activeRoute && (
+                        <button
+                          type="button"
+                          title="Desfazer confirmação de retorno"
+                          onClick={() => void toggleStoreReturn(row, false)}
+                          disabled={confirmingReturnId === row.id}
+                          className="rounded-lg p-1.5 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600 disabled:opacity-50"
+                        >
+                          {confirmingReturnId === row.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
                         </button>
                       )}
                       <button
