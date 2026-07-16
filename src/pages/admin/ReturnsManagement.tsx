@@ -417,19 +417,17 @@ export default function ReturnsManagement() {
 
     setConfirmingReturnId(row.id);
     try {
-      let confirmedBy: string | null = null;
-      if (confirm) {
-        const { data: auth } = await supabase.auth.getUser();
-        confirmedBy = auth?.user?.id || null;
-      }
-      const { error } = await supabase
-        .from('order_returns')
-        .update({
-          store_return_confirmed_at: confirm ? new Date().toISOString() : null,
-          store_return_confirmed_by: confirmedBy,
-        })
-        .eq('id', row.id);
+      // Escreve via função (SECURITY DEFINER) — o UPDATE direto é barrado pela
+      // RLS de order_returns. A função devolve TRUE só se achou a devolução.
+      const { data: ok, error } = await supabase.rpc('set_store_return_confirmed', {
+        p_return_id: row.id,
+        p_confirmed: confirm,
+      });
       if (error) throw error;
+      if (!ok) {
+        toast.error('Não encontrei essa devolução para atualizar. Recarregue a tela.');
+        return;
+      }
 
       toast.success(confirm
         ? `Retorno do pedido ${erp} confirmado.`
