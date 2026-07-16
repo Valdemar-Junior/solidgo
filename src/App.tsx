@@ -15,6 +15,7 @@ import ConferenteDashboard from './pages/conferente/Dashboard';
 import ConferenteRouteConference from './pages/conferente/RouteConference';
 import OrdersImport from './pages/admin/OrdersImport';
 import RouteCreation from './pages/admin/RouteCreation';
+import ReturnsManagement from './pages/admin/ReturnsManagement';
 import AssemblyManagement from './pages/admin/AssemblyManagement';
 import OrderLookup from './pages/admin/OrderLookup';
 import Reports from './pages/admin/Reports';
@@ -107,6 +108,16 @@ function App() {
               <ProtectedRoute allowedRoles={['admin']}>
                 <AdminLayout>
                   <RouteCreation />
+                </AdminLayout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/returns"
+            element={
+              <ProtectedRoute allowedRoles={['admin']}>
+                <AdminLayout>
+                  <ReturnsManagement />
                 </AdminLayout>
               </ProtectedRoute>
             }

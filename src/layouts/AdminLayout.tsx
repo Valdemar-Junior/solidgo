@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../stores/authStore';
+import { supabase } from '../supabase/client';
+import { fetchInChunks } from '../utils/supabase/batch';
 import {
     LayoutDashboard,
     PackageSearch,
@@ -18,7 +20,8 @@ import {
     UserCircle,
     Bell,
     Box,
-    CarFront
+    CarFront,
+    Undo2
 } from 'lucide-react';
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
@@ -36,12 +39,64 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         navigate('/login');
     };
 
+    // Badge do menu Devoluções: conta só o que PRECISA de ação humana
+    // (devolução de pedido em rota ativa + coletas pendentes). O que o sistema
+    // já resolveu sozinho aparece na central mas não acende a bolinha.
+    const [returnsAttention, setReturnsAttention] = useState(0);
+    useEffect(() => {
+        let alive = true;
+        const loadReturnsAttention = async () => {
+            try {
+                const { count: pickupPending } = await supabase
+                    .from('order_returns')
+                    .select('id', { count: 'exact', head: true })
+                    .eq('processing_status', 'processed')
+                    .eq('requires_pickup', true)
+                    .is('pickup_created_at', null);
+
+                const sinceIso = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+                const { data: recentReturns } = await supabase
+                    .from('order_returns')
+                    .select('order_id')
+                    .eq('processing_status', 'processed')
+                    .gte('created_at', sinceIso)
+                    .limit(500);
+                const orderIds: string[] = Array.from(new Set(
+                    ((recentReturns || []) as any[]).map((r) => String(r.order_id || '')).filter((id) => id.length > 0)
+                ));
+                let inActiveRoute = 0;
+                if (orderIds.length > 0) {
+                    const routeRows = await fetchInChunks<string, any>(orderIds, (ids) => supabase
+                        .from('route_orders')
+                        .select('order_id, route:routes!route_id(name, status)')
+                        .in('order_id', ids));
+                    const critical = new Set(
+                        routeRows
+                            .filter((rr: any) => rr?.route
+                                && rr.route.status !== 'completed'
+                                && !String(rr.route.name || '').trim().toUpperCase().startsWith('COLETA-'))
+                            .map((rr: any) => String(rr.order_id))
+                    );
+                    inActiveRoute = critical.size;
+                }
+
+                if (alive) setReturnsAttention((pickupPending || 0) + inActiveRoute);
+            } catch {
+                // Badge é informativo: falha aqui não pode quebrar o layout.
+            }
+        };
+        void loadReturnsAttention();
+        const timer = setInterval(loadReturnsAttention, 120000);
+        return () => { alive = false; clearInterval(timer); };
+    }, []);
+
     const navigationItems = [
         { name: 'Dashboard', href: '/admin', icon: LayoutDashboard },
         { name: 'Pedidos (Importar)', href: '/admin/orders', icon: Box },
         { name: 'Consulta de Pedido', href: '/admin/order-lookup', icon: PackageSearch },
         { name: 'Gestao de Entregas', href: '/admin/routes', icon: Truck },
         { name: 'Gestao de Montagem', href: '/admin/assembly', icon: Hammer },
+        { name: 'Devoluções', href: '/admin/returns', icon: Undo2, badge: returnsAttention },
         { name: 'Controle de Frota', href: '/admin/fleet', icon: CarFront },
         { name: 'MDF-e', href: '/admin/mdfe', icon: FileBadge2 },
         { name: 'Relatorios', href: '/admin/reports', icon: FileSpreadsheet },
@@ -99,6 +154,11 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
                                             }`}
                                     />
                                     {item.name}
+                                    {Boolean((item as any).badge) && (
+                                        <span className="ml-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-red-500 px-1.5 text-xs font-bold text-white">
+                                            {(item as any).badge}
+                                        </span>
+                                    )}
                                 </Link>
                             );
                         })}
