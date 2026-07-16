@@ -56,6 +56,10 @@ type ReturnRow = {
   } | null;
   items: ReturnItemRow[];
   activeRoute: ActiveRouteInfo | null;
+  // O item ficou BLOQUEADO ("não entregar") numa rota de entrega já finalizada,
+  // ou seja: o motorista SAIU com o produto e trouxe de volta. Só esse caso
+  // precisa de conferência de retorno à loja.
+  wentOutBlocked: boolean;
 };
 
 type XmlInfo = { motivo: string; nfOrigem: string; rawXml: string };
@@ -131,16 +135,23 @@ export default function ReturnsManagement() {
       const routeRows = orderIds.length > 0
         ? await fetchInChunks<string, any>(orderIds, (ids) => supabase
           .from('route_orders')
-          .select('order_id, route:routes!route_id(id, name, status)')
+          .select('id, order_id, route:routes!route_id(id, name, status)')
           .in('order_id', ids))
         : [];
       const activeRouteByOrder: Record<string, ActiveRouteInfo> = {};
+      const completedRouteOrderIds: string[] = [];
       for (const rr of routeRows) {
         const route = rr?.route;
         if (!route) continue;
         const name = String(route.name || '');
-        if (route.status === 'completed') continue;
-        if (name.trim().toUpperCase().startsWith('COLETA-')) continue;
+        const isColeta = name.trim().toUpperCase().startsWith('COLETA-');
+        if (route.status === 'completed') {
+          // Rota de ENTREGA já finalizada = o motorista saiu com estes itens.
+          // (Rota de COLETA não conta — é o fluxo inverso, buscar na casa do cliente.)
+          if (!isColeta) completedRouteOrderIds.push(String(rr.id));
+          continue;
+        }
+        if (isColeta) continue;
         // Rota iniciada (com motorista) tem prioridade sobre rota em separação.
         const current = activeRouteByOrder[String(rr.order_id)];
         if (!current || route.status === 'in_progress') {
@@ -148,10 +159,29 @@ export default function ReturnsManagement() {
         }
       }
 
+      // "Motorista saiu com o produto e trouxe de volta": item BLOQUEADO
+      // (devolvido, nada a entregar) numa rota de entrega JÁ FINALIZADA. Só
+      // esse caso precisa de conferência de retorno à loja — item bloqueado
+      // ANTES de sair (nunca roteirizado, ou em rota que não começou) jamais
+      // deixou o depósito, então não tem "retorno" a confirmar.
+      const wentOutBlockedByOrder: Record<string, boolean> = {};
+      if (completedRouteOrderIds.length > 0) {
+        const blockedItems = await fetchInChunks<string, any>(completedRouteOrderIds, (ids) => supabase
+          .from('route_order_items')
+          .select('order_id, returned_quantity_snapshot, deliverable_quantity_snapshot')
+          .in('route_order_id', ids));
+        for (const it of blockedItems) {
+          const ret = Number(it.returned_quantity_snapshot || 0);
+          const deliv = Number(it.deliverable_quantity_snapshot || 0);
+          if (ret > 0 && deliv <= 0) wentOutBlockedByOrder[String(it.order_id)] = true;
+        }
+      }
+
       setRows(returns.map((r: any) => ({
         ...r,
         items: itemsByReturn[String(r.id)] || [],
         activeRoute: activeRouteByOrder[String(r.order_id)] || null,
+        wentOutBlocked: wentOutBlockedByOrder[String(r.order_id)] || false,
       })));
       setPage(0);
     } catch (error) {
@@ -228,11 +258,13 @@ export default function ReturnsManagement() {
   // loja e a logística confirmou a conferência.
   const isStoreReturnConfirmed = (row: ReturnRow) => Boolean(row.store_return_confirmed_at);
 
-  // O botão "Confirmar retorno à loja" só faz sentido quando o produto DE FATO
-  // já voltou (ou nunca saiu): fora de rota ativa (rota finalizada ou nunca
-  // roteirizado) e sem coleta pendente/gerada — coleta tem o fluxo próprio dela.
+  // O botão "Confirmar retorno à loja" só aparece quando o motorista DE FATO
+  // saiu com o produto e trouxe de volta (item bloqueado numa rota de entrega
+  // já finalizada) — e ainda não foi conferido. Não aparece pra bloqueio antes
+  // de sair (nunca saiu do depósito) nem pra coleta (fluxo próprio dela).
   const canConfirmStoreReturn = (row: ReturnRow) =>
-    !row.activeRoute
+    row.wentOutBlocked
+    && !row.activeRoute
     && !row.requires_pickup
     && !row.pickup_created_at
     && !isStoreReturnConfirmed(row);
@@ -373,7 +405,10 @@ export default function ReturnsManagement() {
   const [confirmingReturnId, setConfirmingReturnId] = useState<string | null>(null);
   const toggleStoreReturn = async (row: ReturnRow, confirm: boolean) => {
     const erp = String(row.order?.order_id_erp || '');
-    if (confirm && !window.confirm(`Confirmar que o produto devolvido do pedido ${erp} voltou pra loja?\nA devolução passa pra "Retornou à loja".`)) return;
+    const question = confirm
+      ? `Confirmar que o produto devolvido do pedido ${erp} voltou pra loja?\nA devolução passa pra "Retornou à loja".`
+      : `Desfazer a confirmação de retorno do pedido ${erp}?`;
+    if (!window.confirm(question)) return;
 
     setConfirmingReturnId(row.id);
     try {
