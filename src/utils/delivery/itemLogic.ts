@@ -12,8 +12,14 @@ export const isDeliverableRouteOrderItem = (item: RouteOrderItem) =>
   item.deliverable_quantity_snapshot > 0;
 
 // Item que deve aparecer na tela do motorista.
+// IMPORTANTE: item devolvido no ERP NO MEIO da rota fica com alocado=0 e
+// entregável=0 (resync do gatilho) — ele precisa continuar VISÍVEL, senão o
+// motorista não vê o alerta "não entregar" e o item some em silêncio
+// (o móvel está fisicamente no caminhão!).
 export const isVisibleRouteOrderItem = (item: RouteOrderItem) =>
-  Number(item.allocated_quantity || 0) > 0 || Number(item.deliverable_quantity_snapshot || 0) > 0;
+  Number(item.allocated_quantity || 0) > 0
+  || Number(item.deliverable_quantity_snapshot || 0) > 0
+  || isBlockedRouteOrderItem(item);
 
 export const getRouteOrderItemStatusLabel = (item: RouteOrderItem) => {
   if (isBlockedRouteOrderItem(item)) {

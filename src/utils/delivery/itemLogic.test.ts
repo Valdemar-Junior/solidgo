@@ -41,6 +41,16 @@ describe('predicados de item de rota', () => {
     expect(isVisibleRouteOrderItem(roi({ allocated_quantity: 1, deliverable_quantity_snapshot: 0 }))).toBe(true);
     expect(isVisibleRouteOrderItem(roi({ allocated_quantity: 0, deliverable_quantity_snapshot: 1 }))).toBe(true);
   });
+
+  it('devolvido NO MEIO da rota (alocado 0, devolvido 1) continua VISIVEL — o motorista precisa ver o "nao entregar" (bug do cenario 4)', () => {
+    const devolvidoMeioDaRota = roi({
+      allocated_quantity: 0,
+      deliverable_quantity_snapshot: 0,
+      returned_quantity_snapshot: 1,
+      status: 'returned',
+    });
+    expect(isVisibleRouteOrderItem(devolvidoMeioDaRota)).toBe(true);
+  });
 });
 
 describe('getRouteOrderItemStatusLabel — o rotulo certo pra cada caso (bug que o dono achou)', () => {
