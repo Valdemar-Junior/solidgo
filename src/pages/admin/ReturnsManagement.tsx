@@ -285,6 +285,11 @@ export default function ReturnsManagement() {
     if (isStoreReturnConfirmed(row)) {
       return { label: '✓ Retornou à loja', cls: 'bg-green-100 text-green-800 border-green-300 font-medium' };
     }
+    // Saiu com o motorista, voltou bloqueado, rota finalizada: falta só a
+    // logística conferir o retorno (é o caso com botão verde ao lado).
+    if (canConfirmStoreReturn(row)) {
+      return { label: 'Voltou com o motorista — confirme o retorno', cls: 'bg-amber-100 text-amber-800 border-amber-300 font-medium' };
+    }
     if (row.requires_pickup && !row.pickup_created_at) {
       return { label: 'Entregue — precisa de coleta', cls: 'bg-blue-100 text-blue-800 border-blue-200' };
     }
