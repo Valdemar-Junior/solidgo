@@ -446,12 +446,10 @@ function RouteCreationContent() {
   const fetchRoutesRef = useRef<any>(null);
   const loadDataRef = useRef<any>(null);
 
-  // Tabs State - expandido para incluir bloqueados e coletas
-  // Deep-link: a Central de Devoluções abre direto a aba de coletas
-  // via /admin/routes?tab=coletas.
-  const [activeRoutesTab, setActiveRoutesTab] = useState<'deliveries' | 'blocked' | 'pickupOrders' | 'pickupRoutes'>(() => (
-    new URLSearchParams(window.location.search).get('tab') === 'coletas' ? 'pickupOrders' : 'deliveries'
-  ));
+  // Tabs State. "Bloqueados" e "Coletas Pendentes" foram aposentadas: tudo
+  // isso agora vive na Central de Devoluções (/admin/returns), com mais
+  // contexto (motivo, rota, motorista). Aqui ficam só as rotas de fato.
+  const [activeRoutesTab, setActiveRoutesTab] = useState<'deliveries' | 'blocked' | 'pickupOrders' | 'pickupRoutes'>('deliveries');
   const [showWaitingTab, setShowWaitingTab] = useState(false);
   const [waitingSearch, setWaitingSearch] = useState('');
 
@@ -5185,26 +5183,6 @@ function RouteCreationContent() {
                 Rotas de Entrega
               </button>
               <button
-                onClick={() => setActiveRoutesTab('blocked')}
-                className={`px-4 py-2 rounded-lg text-sm font-bold transition-all flex items-center gap-2 ${activeRoutesTab === 'blocked' ? 'bg-white shadow-sm text-red-700' : 'text-gray-500 hover:text-gray-700'}`}
-              >
-                <Ban className="h-4 w-4" />
-                Bloqueados
-                {blockedOrdersTotal > 0 && (
-                  <span className="bg-red-500 text-white text-xs px-1.5 py-0.5 rounded-full">{blockedOrdersTotal}</span>
-                )}
-              </button>
-              <button
-                onClick={() => setActiveRoutesTab('pickupOrders')}
-                className={`px-4 py-2 rounded-lg text-sm font-bold transition-all flex items-center gap-2 ${activeRoutesTab === 'pickupOrders' ? 'bg-white shadow-sm text-orange-700' : 'text-gray-500 hover:text-gray-700'}`}
-              >
-                <PackageX className="h-4 w-4" />
-                Coletas Pendentes
-                {pickupPendingReturns.length > 0 && (
-                  <span className="bg-orange-500 text-white text-xs px-1.5 py-0.5 rounded-full">{pickupPendingReturns.length}</span>
-                )}
-              </button>
-              <button
                 onClick={() => setActiveRoutesTab('pickupRoutes')}
                 className={`px-4 py-2 rounded-lg text-sm font-bold transition-all flex items-center gap-2 ${activeRoutesTab === 'pickupRoutes' ? 'bg-white shadow-sm text-teal-700' : 'text-gray-500 hover:text-gray-700'}`}
               >
@@ -5225,10 +5203,6 @@ function RouteCreationContent() {
                   return !isRetirada && !isColeta;
                 });
                 count = filtered.length;
-              } else if (activeRoutesTab === 'blocked') {
-                count = blockedOrdersTotal;
-              } else if (activeRoutesTab === 'pickupOrders') {
-                count = pickupPendingReturns.length;
               }
               return (
                 <span className="bg-gray-100 text-gray-600 px-3 py-1 rounded-full text-xs font-bold self-start sm:self-center">
@@ -5439,147 +5413,6 @@ function RouteCreationContent() {
                     {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ChevronDown className="h-4 w-4" />}
                     Carregar Mais Rotas
                   </button>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Aba: Pedidos Bloqueados */}
-          {activeRoutesTab === 'blocked' && (
-            <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-              {blockedOrdersLoading ? (
-                <div className="p-12 text-center text-gray-500">
-                  Carregando pedidos bloqueados...
-                </div>
-              ) : blockedOrdersTotal === 0 ? (
-                <div className="p-12 text-center">
-                  <div className="mx-auto w-16 h-16 bg-green-50 rounded-full flex items-center justify-center mb-4">
-                    <CheckCircle2 className="h-8 w-8 text-green-500" />
-                  </div>
-                  <h3 className="text-lg font-medium text-gray-900">Nenhum pedido bloqueado</h3>
-                  <p className="text-gray-500">Não há bloqueios aguardando tratamento nesta fila.</p>
-                </div>
-              ) : (
-                <div>
-                  <div className="overflow-x-auto">
-                    <table className="w-full">
-                      <thead className="bg-gray-50 border-b border-gray-200">
-                        <tr>
-                          <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">Pedido</th>
-                          <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">Cliente</th>
-                          <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">Status ERP</th>
-                          <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">Motivo</th>
-                          <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">Data Bloqueio</th>
-                          <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">NF Devolução</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-gray-100">
-                        {blockedOrders.map((order) => (
-                          <tr key={order.id} className="hover:bg-gray-50">
-                            <td className="px-4 py-3 font-medium text-gray-900">{order.order_id_erp}</td>
-                            <td className="px-4 py-3 text-gray-600">{order.customer_name}</td>
-                            <td className="px-4 py-3">
-                              <span className={`px-2 py-1 rounded-full text-xs font-bold ${order.erp_status === 'devolvido' ? 'bg-red-100 text-red-700' : 'bg-orange-100 text-orange-700'
-                                }`}>
-                                {order.erp_status?.toUpperCase() || '-'}
-                              </span>
-                            </td>
-                            <td className="px-4 py-3 text-gray-600 text-sm">{order.blocked_reason || '-'}</td>
-                            <td className="px-4 py-3 text-gray-500 text-sm">
-                              {order.blocked_at ? new Date(order.blocked_at).toLocaleString('pt-BR') : '-'}
-                            </td>
-                            <td className="px-4 py-3 text-gray-600">{order.return_nfe_number || '-'}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                  <div className="flex flex-col gap-3 border-t border-gray-200 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-                    <p className="text-sm text-gray-500">
-                      Página {blockedOrdersPage} de {Math.max(1, Math.ceil(blockedOrdersTotal / BLOCKED_ORDERS_PAGE_SIZE))}
-                    </p>
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setBlockedOrdersPage((prev) => Math.max(1, prev - 1))}
-                        disabled={blockedOrdersPage <= 1 || blockedOrdersLoading}
-                        className="rounded-lg border border-gray-300 px-3 py-2 text-sm font-medium text-gray-600 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        Anterior
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setBlockedOrdersPage((prev) => prev + 1)}
-                        disabled={blockedOrdersPage >= Math.max(1, Math.ceil(blockedOrdersTotal / BLOCKED_ORDERS_PAGE_SIZE)) || blockedOrdersLoading}
-                        className="rounded-lg border border-gray-300 px-3 py-2 text-sm font-medium text-gray-600 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        Próxima
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Aba: Coletas Pendentes */}
-          {activeRoutesTab === 'pickupOrders' && (
-            <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-              {pickupPendingReturns.length === 0 ? (
-                <div className="p-12 text-center">
-                  <div className="mx-auto w-16 h-16 bg-green-50 rounded-full flex items-center justify-center mb-4">
-                    <CheckCircle2 className="h-8 w-8 text-green-500" />
-                  </div>
-                  <h3 className="text-lg font-medium text-gray-900">Nenhuma coleta pendente</h3>
-                  <p className="text-gray-500">Não há pedidos aguardando coleta no momento.</p>
-                </div>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full">
-                    <thead className="bg-gray-50 border-b border-gray-200">
-                      <tr>
-                        <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">Pedido</th>
-                        <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">Cliente</th>
-                        <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">Endereço</th>
-                        <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">NF Devolução</th>
-                        <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">Data Devolução</th>
-                        <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">Ações</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-100">
-                      {pickupPendingReturns.map((returnEvent) => (
-                        <tr key={returnEvent.id} className="hover:bg-gray-50">
-                          <td className="px-4 py-3 font-medium text-gray-900">{returnEvent.order.order_id_erp}</td>
-                          <td className="px-4 py-3 text-gray-600">{returnEvent.order.customer_name}</td>
-                          <td className="px-4 py-3 text-gray-600 text-sm">
-                            {returnEvent.order.address_json?.street}, {returnEvent.order.address_json?.neighborhood} - {returnEvent.order.address_json?.city}
-                          </td>
-                          <td className="px-4 py-3">
-                            <span className="bg-blue-100 text-blue-700 px-2 py-1 rounded-full text-xs font-bold">
-                              NF {returnEvent.return_nfe_number || '-'}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3 text-gray-500 text-sm">
-                            {returnEvent.return_date ? new Date(returnEvent.return_date).toLocaleDateString('pt-BR') : '-'}
-                          </td>
-                          <td className="px-4 py-3">
-                            <button
-                              onClick={() => {
-                                setSelectedPickupReturn(returnEvent);
-                                setPickupOrderConferente('');
-                                setPickupOrderObservations('');
-                                setShowPickupOrderModal(true);
-                              }}
-                              className="inline-flex items-center px-3 py-1.5 bg-orange-500 text-white text-xs font-bold rounded-lg hover:bg-orange-600 transition-colors"
-                            >
-                              <PackageX className="h-3 w-3 mr-1" />
-                              Criar Coleta
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
                 </div>
               )}
             </div>
