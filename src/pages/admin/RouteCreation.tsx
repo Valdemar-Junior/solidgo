@@ -46,7 +46,8 @@ import {
   ArrowUp,
   ArrowDown,
   ArrowUpDown,
-  Replace
+  Replace,
+  Lock
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { DeliverySheetGenerator } from '../../utils/pdf/deliverySheetGenerator';
@@ -4897,18 +4898,25 @@ function RouteCreationContent() {
                           <div className="relative inline-block text-left">
                             <button
                               type="button"
+                              disabled={awaitingStoreRelease}
                               onClick={(event) => {
                                 event.stopPropagation();
+                                if (awaitingStoreRelease) return;
                                 const btn = event.currentTarget.getBoundingClientRect();
                                 const box = productsScrollRef.current?.getBoundingClientRect();
                                 // ~150px e a altura do menu com as 3 opcoes.
                                 setOrderActionsOpenUpward(Boolean(box && box.bottom - btn.bottom < 150));
                                 setOpenOrderActionsId((current) => current === rowActionsKey ? null : rowActionsKey);
                               }}
-                              className="inline-flex items-center rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-semibold text-gray-700 transition-colors hover:bg-gray-50"
-                              title="Ações do pedido"
+                              className={`inline-flex items-center rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors ${awaitingStoreRelease
+                                ? 'border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed'
+                                : 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50'}`}
+                              title={awaitingStoreRelease
+                                ? 'Aguardando liberação do estoque — o gerente responsável precisa liberar antes de qualquer ação.'
+                                : 'Ações do pedido'}
                               aria-label="Ações do pedido"
                             >
+                              {awaitingStoreRelease && <Lock className="mr-1 h-3 w-3" />}
                               Ações
                               <ChevronDown className="ml-1.5 h-3.5 w-3.5" />
                             </button>
