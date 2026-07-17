@@ -3,7 +3,7 @@ import { supabase } from '../supabase/client';
 import { OfflineStorage, SyncQueue, NetworkStatus } from '../utils/offline/storage';
 import { backgroundSync } from '../utils/offline/backgroundSync';
 import type { RouteOrderItem, RouteOrderWithDetails, Order, ReturnReason } from '../types/database';
-import { Package, CheckCircle, XCircle, MapPin, Users, Search } from 'lucide-react';
+import { Package, CheckCircle, XCircle, MapPin, Users, Search, Camera } from 'lucide-react';
 import { buildFullAddress, geocodeAddress, openWazeWithLL } from '../utils/maps';
 import { toast } from 'sonner';
 import { useDeliveryPhotos } from '../hooks/useDeliveryPhotos';
@@ -76,7 +76,14 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
   const [recipientRelationByOrder, setRecipientRelationByOrder] = useState<Record<string, string>>({});
   const [recipientNotesByOrder, setRecipientNotesByOrder] = useState<Record<string, string>>({});
   // Entrega parcial: itens que o motorista marcou para RETORNAR (nao coube). Chave: routeOrderId -> { itemId: true }.
-  const [itemsToReturnByOrder, setItemsToReturnByOrder] = useState<Record<string, Record<string, boolean>>>({});
+  // Decisão do motorista por item: 'deliver' (entregar) ou 'return' (não coube, volta pra fila).
+  // Um item só está "decidido" quando tem entrada aqui — é assim que a tela sabe que a parada
+  // ficou pronta pra concluir (todos os itens decididos) e dispara a foto sozinha.
+  const [itemDecisionByOrder, setItemDecisionByOrder] = useState<Record<string, Record<string, 'deliver' | 'return'>>>({});
+  // Paradas que já dispararam a foto automática (pra não reabrir a câmera em loop).
+  const autoConcludedRef = useRef<Record<string, boolean>>({});
+  // Pedido com o modal de "Retornar pedido completo" (motivo) aberto.
+  const [returnAllModalOrderId, setReturnAllModalOrderId] = useState<string | null>(null);
   const [gpsDataByOrder, setGpsDataByOrder] = useState<Record<string, CapturedGps>>({});
   const [gpsFailureReasonByOrder, setGpsFailureReasonByOrder] = useState<Record<string, string>>({});
   const [gpsStatusByOrder, setGpsStatusByOrder] = useState<Record<string, GpsCaptureStatus>>({});
@@ -280,12 +287,43 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
     });
 
   // Alterna a marcacao de RETORNAR ("nao coube") de um item na entrega parcial.
-  const toggleItemReturn = (routeOrderId: string, itemId: string, returnIt: boolean) => {
-    setItemsToReturnByOrder((prev) => {
+  // Marca UM item como entregue ou retornado (na hora, reversível). Muda a marcação
+  // re-arma a foto automática (a parada pode ter deixado de estar pronta).
+  const setItemDecision = (routeOrderId: string, itemId: string, decision: 'deliver' | 'return') => {
+    autoConcludedRef.current[routeOrderId] = false;
+    setItemDecisionByOrder((prev) => {
       const cur = { ...(prev[routeOrderId] || {}) };
-      if (returnIt) cur[itemId] = true; else delete cur[itemId];
+      cur[itemId] = decision;
       return { ...prev, [routeOrderId]: cur };
     });
+  };
+
+  // Marca TODOS os itens entregáveis de uma parada de uma vez (só pro visual;
+  // o "Entregar/Retornar pedido completo" conclui direto).
+  const setAllItemsDecision = (order: RouteOrderWithDetails, decision: 'deliver' | 'return') => {
+    const items = (routeOrderItemsByRouteOrder[order.id] || []).filter(isDeliverableRouteOrderItem);
+    autoConcludedRef.current[order.id] = false;
+    setItemDecisionByOrder((prev) => {
+      const cur: Record<string, 'deliver' | 'return'> = { ...(prev[order.id] || {}) };
+      for (const it of items) cur[it.id] = decision;
+      return { ...prev, [order.id]: cur };
+    });
+  };
+
+  // A parada está pronta pra concluir? (todos os itens decididos + motivo, se houver retorno)
+  const getStopReadyInfo = (order: RouteOrderWithDetails) => {
+    const items = (routeOrderItemsByRouteOrder[order.id] || []).filter(isDeliverableRouteOrderItem);
+    const decisions = itemDecisionByOrder[order.id] || {};
+    const decidedCount = items.filter((it) => decisions[it.id]).length;
+    const allDecided = items.length > 0 && decidedCount === items.length;
+    const returns = items.filter((it) => decisions[it.id] === 'return');
+    const hasReturn = returns.length > 0;
+    const allReturn = hasReturn && returns.length === items.length;
+    const reason = returnReasonByOrder[order.id] || '';
+    const isOther = reason === 'other' || reason === 'Outro' || reason === '99';
+    const obs = returnObservationsByOrder[order.id] || '';
+    const reasonOk = !hasReturn || (isOther ? obs.trim().length > 0 : reason.length > 0);
+    return { items, allDecided, hasReturn, allReturn, reasonOk, ready: allDecided && reasonOk };
   };
 
   const buildPendingRouteOrderItemsAfterUndo = (items: RouteOrderItem[]) =>
@@ -617,7 +655,9 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
 
       // Entrega parcial: separa os itens marcados para RETORNAR ("nao coube") dos que serao entregues.
       // O retorno por item reaproveita o MOTIVO do pedido (mesmo campo do retorno total).
-      const returnSelection = itemsToReturnByOrder[order.id] || {};
+      const decisions = itemDecisionByOrder[order.id] || {};
+      const returnSelection: Record<string, boolean> = {};
+      for (const it of deliverableItems) if (decisions[it.id] === 'return') returnSelection[it.id] = true;
       const itemsToReturnList = deliverableItems.filter((item) => returnSelection[item.id]);
       const itemsToDeliver = deliverableItems.filter((item) => !returnSelection[item.id]);
       const hasPartialReturn = itemsToReturnList.length > 0;
@@ -825,14 +865,14 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
       toast.error('Erro ao marcar pedido como entregue');
     } finally {
       const next2 = new Set(processingIds); next2.delete(order.id); setProcessingIds(next2);
-      setItemsToReturnByOrder((prev) => { const copy = { ...prev }; delete copy[order.id]; return copy; });
+      setItemDecisionByOrder((prev) => { const copy = { ...prev }; delete copy[order.id]; return copy; });
     }
   };
 
 
-  const markAsReturned = async (order: RouteOrderWithDetails) => {
-    const currentReason = returnReasonByOrder[order.id] || '';
-    const currentObs = returnObservationsByOrder[order.id] || '';
+  const markAsReturned = async (order: RouteOrderWithDetails, reasonOverride?: string, obsOverride?: string) => {
+    const currentReason = reasonOverride ?? (returnReasonByOrder[order.id] || '');
+    const currentObs = obsOverride ?? (returnObservationsByOrder[order.id] || '');
 
     if (!currentReason) {
       toast.error('Por favor, selecione um motivo para o retorno');
@@ -1011,8 +1051,39 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
       toast.error('Erro ao marcar pedido como retornado');
     } finally {
       const next2 = new Set(processingIds); next2.delete(order.id); setProcessingIds(next2);
+      setItemDecisionByOrder((prev) => { const copy = { ...prev }; delete copy[order.id]; return copy; });
     }
   };
+
+  // Conclui a parada com base nas marcações: tudo retornado → retorno total;
+  // caso contrário → entrega (com os itens que não couberam voltando pra fila).
+  // Ambos abrem a câmera (foto obrigatória) por dentro.
+  const concludeStop = (order: RouteOrderWithDetails) => {
+    const info = getStopReadyInfo(order);
+    if (!info.ready || processingIds.has(order.id)) return;
+    if (info.allReturn) void markAsReturned(order);
+    else void markAsDelivered(order);
+  };
+
+  // FOTO AUTOMÁTICA: assim que a parada fica pronta (todos os itens decididos e,
+  // se houver retorno, o motivo preenchido), abre a câmera sozinha — sem o antigo
+  // "Confirmar entrega". Cada parada só dispara uma vez (autoConcludedRef); mudar
+  // uma marcação re-arma. Se o motorista cancelar a foto, o botão "Concluir e tirar
+  // foto" fica disponível pra tentar de novo.
+  useEffect(() => {
+    // Uma foto por vez: se já tem câmera aberta ou parada processando, espera.
+    if (isPhotoProcessing || processingIds.size > 0) return;
+    for (const ro of routeOrders) {
+      if (ro.status !== 'pending') continue;
+      if (autoConcludedRef.current[ro.id]) continue;
+      if (getStopReadyInfo(ro).ready) {
+        autoConcludedRef.current[ro.id] = true;
+        concludeStop(ro);
+        break; // dispara uma parada por vez
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [itemDecisionByOrder, returnReasonByOrder, returnObservationsByOrder, routeOrders, processingIds, isPhotoProcessing]);
 
   const undoReturn = async (routeOrderId: string) => {
     const current = routeOrders.find(ro => ro.id === routeOrderId);
@@ -1128,6 +1199,8 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
       toast.error('Erro ao desfazer retorno');
     } finally {
       const next2 = new Set(processingIds); next2.delete(routeOrderId); setProcessingIds(next2);
+      setItemDecisionByOrder(prev => { const copy = { ...prev }; delete copy[routeOrderId]; return copy; });
+      autoConcludedRef.current[routeOrderId] = false;
     }
   };
 
@@ -1246,6 +1319,8 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
       toast.error('Erro ao desfazer entrega');
     } finally {
       const next2 = new Set(processingIds); next2.delete(routeOrderId); setProcessingIds(next2);
+      setItemDecisionByOrder(prev => { const copy = { ...prev }; delete copy[routeOrderId]; return copy; });
+      autoConcludedRef.current[routeOrderId] = false;
     }
   };
 
@@ -1747,24 +1822,30 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
                             </span>
                           </div>
 
-                          {routeOrder.status === 'pending' && isDeliverableRouteOrderItem(item) && (
-                            <div className="mt-2 flex gap-2">
-                              <button
-                                type="button"
-                                onClick={() => toggleItemReturn(routeOrder.id, item.id, false)}
-                                className={`text-xs px-3 py-1 rounded-md border font-medium transition-colors ${!itemsToReturnByOrder[routeOrder.id]?.[item.id] ? 'border-green-500 bg-green-50 text-green-700' : 'border-gray-300 bg-white text-gray-500 hover:bg-gray-50'}`}
-                              >
-                                Entregar
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => toggleItemReturn(routeOrder.id, item.id, true)}
-                                className={`text-xs px-3 py-1 rounded-md border font-medium transition-colors ${itemsToReturnByOrder[routeOrder.id]?.[item.id] ? 'border-red-500 bg-red-50 text-red-700' : 'border-gray-300 bg-white text-gray-500 hover:bg-gray-50'}`}
-                              >
-                                Retornar
-                              </button>
-                            </div>
-                          )}
+                          {routeOrder.status === 'pending' && isDeliverableRouteOrderItem(item) && (() => {
+                            const decision = itemDecisionByOrder[routeOrder.id]?.[item.id];
+                            return (
+                              <div className="mt-2 flex items-center gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => setItemDecision(routeOrder.id, item.id, 'deliver')}
+                                  className={`text-xs px-3 py-1 rounded-md border font-medium transition-colors ${decision === 'deliver' ? 'border-green-500 bg-green-50 text-green-700' : 'border-gray-300 bg-white text-gray-500 hover:bg-gray-50'}`}
+                                >
+                                  {decision === 'deliver' ? '✓ Entregar' : 'Entregar'}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setItemDecision(routeOrder.id, item.id, 'return')}
+                                  className={`text-xs px-3 py-1 rounded-md border font-medium transition-colors ${decision === 'return' ? 'border-red-500 bg-red-50 text-red-700' : 'border-gray-300 bg-white text-gray-500 hover:bg-gray-50'}`}
+                                >
+                                  {decision === 'return' ? '✓ Retornar' : 'Retornar'}
+                                </button>
+                                {!decision && (
+                                  <span className="text-[11px] text-gray-400">marque este item</span>
+                                )}
+                              </div>
+                            );
+                          })()}
                         </div>
                       ))}
                     </div>
@@ -1775,16 +1856,20 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
                   )}
                 </div>
 
-                {routeOrder.status === 'pending' && Object.keys(itemsToReturnByOrder[routeOrder.id] || {}).length > 0 && (
-                  <div className="mt-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-                    Você marcou {Object.keys(itemsToReturnByOrder[routeOrder.id] || {}).length} item(ns) para <strong>retornar</strong>.
-                    Selecione o <strong>Motivo do Retorno</strong> abaixo e clique em <strong>"Confirmar entrega"</strong> para
-                    entregar o restante e devolver esses itens.
-                  </div>
-                )}
+                {routeOrder.status === 'pending' && (() => {
+                  const returnCount = Object.values(itemDecisionByOrder[routeOrder.id] || {}).filter((d) => d === 'return').length;
+                  if (returnCount === 0) return null;
+                  return (
+                    <div className="mt-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                      Você marcou {returnCount} item(ns) para <strong>retornar</strong>.
+                      Selecione o <strong>Motivo do Retorno</strong> abaixo. Quando todos os itens estiverem
+                      marcados, a <strong>câmera abre sozinha</strong> pra você tirar a foto e concluir.
+                    </div>
+                  );
+                })()}
 
-                {/* Return Form for Pending Orders */}
-                {routeOrder.status === 'pending' && (
+                {/* Formulário só aparece quando precisa: comprovante ligado OU há item marcado pra retornar. */}
+                {routeOrder.status === 'pending' && (deliveryProofConfig.enabled || Object.values(itemDecisionByOrder[routeOrder.id] || {}).some((d) => d === 'return')) && (
                   <div className="mt-4 p-3 bg-gray-50 rounded-lg">
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                       {deliveryProofConfig.enabled && (
@@ -1869,39 +1954,43 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
                           </div>
                         </>
                       )}
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">
-                          Motivo do Retorno
-                        </label>
-                        <select
-                          value={selectedReason}
-                          onChange={(e) => setReturnReasonByOrder(prev => ({ ...prev, [routeOrder.id]: e.target.value }))}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                        >
-                          <option value="">Selecione um motivo</option>
-                          {returnReasons.map((reason) => {
-                            const label = (reason as any).reason_text || (reason as any).reason || reason.id;
-                            const value = (reason as any).reason || (reason as any).reason_text || reason.id;
-                            return (
-                              <option key={reason.id || value} value={value}>
-                                {label}
-                              </option>
-                            );
-                          })}
-                        </select>
-                      </div>
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">
-                          Observacoes {(selectedReason === 'Outro' || selectedReason === '99' || selectedReason === 'other') ? '(obrigatorio para "Outro")' : ''}
-                        </label>
-                        <input
-                          type="text"
-                          value={selectedObs}
-                          onChange={(e) => setReturnObservationsByOrder(prev => ({ ...prev, [routeOrder.id]: e.target.value }))}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                          placeholder="Observacoes adicionais..."
-                        />
-                      </div>
+                      {Object.values(itemDecisionByOrder[routeOrder.id] || {}).some((d) => d === 'return') && (
+                        <>
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">
+                              Motivo do Retorno
+                            </label>
+                            <select
+                              value={selectedReason}
+                              onChange={(e) => setReturnReasonByOrder(prev => ({ ...prev, [routeOrder.id]: e.target.value }))}
+                              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            >
+                              <option value="">Selecione um motivo</option>
+                              {returnReasons.map((reason) => {
+                                const label = (reason as any).reason_text || (reason as any).reason || reason.id;
+                                const value = (reason as any).reason || (reason as any).reason_text || reason.id;
+                                return (
+                                  <option key={reason.id || value} value={value}>
+                                    {label}
+                                  </option>
+                                );
+                              })}
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">
+                              Observacoes {(selectedReason === 'Outro' || selectedReason === '99' || selectedReason === 'other') ? '(obrigatorio para "Outro")' : ''}
+                            </label>
+                            <input
+                              type="text"
+                              value={selectedObs}
+                              onChange={(e) => setReturnObservationsByOrder(prev => ({ ...prev, [routeOrder.id]: e.target.value }))}
+                              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                              placeholder="Observacoes adicionais..."
+                            />
+                          </div>
+                        </>
+                      )}
                     </div>
                   </div>
                 )}
@@ -1934,28 +2023,47 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
 
               {/* Action Buttons */}
               <div className="w-full md:w-auto ml-0 flex gap-2 md:ml-4 md:flex-col md:space-y-2 md:gap-0">
-                {/* GPS removido */}
-                {routeOrder.status === 'pending' && (
-                  <>
-                    <button
-                      onClick={() => markAsDelivered(routeOrder)}
-                      disabled={processingIds.has(routeOrder.id)}
-                      className="flex flex-1 md:flex-none items-center justify-center px-3 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm"
-                    >
-                      <CheckCircle className="h-4 w-4 mr-1" />
-                      {Object.keys(itemsToReturnByOrder[routeOrder.id] || {}).length > 0 ? 'Confirmar entrega' : 'Entregar pedido completo'}
-                    </button>
+                {routeOrder.status === 'pending' && (() => {
+                  const info = getStopReadyInfo(routeOrder);
+                  const busy = processingIds.has(routeOrder.id) || isPhotoProcessing;
+                  return (
+                    <>
+                      {/* Botão de concluir (foto). Aparece quando a parada está pronta —
+                          normalmente a câmera já abriu sozinha; este fica de reserva
+                          (ex.: se cancelou a foto) e pra quem prefere um toque. */}
+                      {info.ready && (
+                        <button
+                          onClick={() => concludeStop(routeOrder)}
+                          disabled={busy}
+                          className="flex flex-1 md:flex-none items-center justify-center px-3 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm"
+                        >
+                          <Camera className="h-4 w-4 mr-1" />
+                          Concluir e tirar foto
+                        </button>
+                      )}
 
-                    <button
-                      onClick={() => markAsReturned(routeOrder)}
-                      disabled={!selectedReason || processingIds.has(routeOrder.id)}
-                      className="flex flex-1 md:flex-none items-center justify-center px-3 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm"
-                    >
-                      <XCircle className="h-4 w-4 mr-1" />
-                      Retornar pedido completo
-                    </button>
-                  </>
-                )}
+                      {/* Atalho: entregar tudo de uma vez */}
+                      <button
+                        onClick={() => markAsDelivered(routeOrder)}
+                        disabled={busy}
+                        className="flex flex-1 md:flex-none items-center justify-center px-3 py-2 bg-white border border-green-600 text-green-700 rounded-md hover:bg-green-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm"
+                      >
+                        <CheckCircle className="h-4 w-4 mr-1" />
+                        Entregar pedido completo
+                      </button>
+
+                      {/* Atalho: retornar tudo (abre o modal do motivo) */}
+                      <button
+                        onClick={() => setReturnAllModalOrderId(routeOrder.id)}
+                        disabled={busy}
+                        className="flex flex-1 md:flex-none items-center justify-center px-3 py-2 bg-white border border-red-600 text-red-700 rounded-md hover:bg-red-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm"
+                      >
+                        <XCircle className="h-4 w-4 mr-1" />
+                        Retornar pedido completo
+                      </button>
+                    </>
+                  );
+                })()}
 
 
               </div>
@@ -1993,6 +2101,76 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
           </p>
         )}
       </div>
+
+      {/* Modal do "Retornar pedido completo": pede UM motivo pra devolver o pedido inteiro. */}
+      {returnAllModalOrderId && (() => {
+        const order = routeOrders.find((ro) => ro.id === returnAllModalOrderId);
+        if (!order) return null;
+        const reason = returnReasonByOrder[order.id] || '';
+        const isOther = reason === 'other' || reason === 'Outro' || reason === '99';
+        const obs = returnObservationsByOrder[order.id] || '';
+        const canConfirm = !!reason && (!isOther || obs.trim().length > 0) && !processingIds.has(order.id);
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+            <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
+              <div className="flex items-center gap-2">
+                <XCircle className="h-5 w-5 text-red-600" />
+                <h3 className="text-lg font-bold text-gray-900">Retornar pedido completo</h3>
+              </div>
+              <p className="mt-1 text-sm text-gray-600">
+                Pedido <span className="font-semibold">{order.order?.order_id_erp}</span> — {order.order?.customer_name}
+              </p>
+              <p className="mt-2 text-xs text-gray-500">
+                Todos os itens deste pedido voltam. Depois de confirmar, a câmera abre pra você tirar a foto.
+              </p>
+
+              <label className="mt-4 block text-sm font-medium text-gray-700">Motivo do retorno</label>
+              <select
+                value={reason}
+                onChange={(e) => setReturnReasonByOrder((prev) => ({ ...prev, [order.id]: e.target.value }))}
+                className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm outline-none focus:border-red-500 focus:ring-2 focus:ring-red-100"
+              >
+                <option value="">Selecione um motivo</option>
+                {returnReasons.map((r) => {
+                  const label = (r as any).reason_text || (r as any).reason || r.id;
+                  const value = (r as any).reason || (r as any).reason_text || r.id;
+                  return <option key={r.id || value} value={value}>{label}</option>;
+                })}
+              </select>
+
+              <label className="mt-3 block text-sm font-medium text-gray-700">
+                Observações {isOther ? '(obrigatório para "Outro")' : '(opcional)'}
+              </label>
+              <input
+                type="text"
+                value={obs}
+                onChange={(e) => setReturnObservationsByOrder((prev) => ({ ...prev, [order.id]: e.target.value }))}
+                className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm outline-none focus:border-red-500 focus:ring-2 focus:ring-red-100"
+                placeholder="Ex.: cliente ausente, endereço errado..."
+              />
+
+              <div className="mt-5 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setReturnAllModalOrderId(null)}
+                  className="rounded-xl border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  disabled={!canConfirm}
+                  onClick={() => { const o = order; setReturnAllModalOrderId(null); void markAsReturned(o); }}
+                  className="flex items-center gap-2 rounded-xl bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Camera className="h-4 w-4" />
+                  Confirmar e tirar foto
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {renderModal()}
     </div>
