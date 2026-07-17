@@ -2016,6 +2016,13 @@ function AssemblyManagementContent() {
     return filtered;
   }, [groupedProducts, filterCity, filterNeighborhood, filterDeadline, filterOrder, filterClient, filterSaleDateStart, filterSaleDateEnd, filterDeliveryDateStart, filterDeliveryDateEnd, filterForecastDateStart, filterForecastDateEnd, filterReturned, filterFull, filterServiceType, deliveryInfo, filterDepartment, filterSubgroup, filterMountPriority]);
 
+  const selectedItemsCount = useMemo(() => {
+    return Array.from(selectedOrders).reduce(
+      (total, orderId) => total + (groupedProducts[orderId]?.length || 0),
+      0
+    );
+  }, [selectedOrders, groupedProducts]);
+
   const filteredOrderIdsByCpf = useMemo(() => {
     const map = new Map<string, string[]>();
 
@@ -2535,7 +2542,7 @@ function AssemblyManagementContent() {
                 className="flex items-center justify-center px-4 py-3 rounded-xl bg-blue-600 text-white hover:bg-blue-700 font-bold transition-all shadow-sm hover:shadow disabled:opacity-60 disabled:cursor-not-allowed disabled:shadow-none transform active:scale-95"
               >
                 <Plus className="h-5 w-5 mr-2" />
-                Criar Rota ({selectedOrders.size})
+                Criar Rota ({selectedOrders.size} pedidos • {selectedItemsCount} itens)
               </button>
             </div>
 
