@@ -407,7 +407,7 @@ function App() {
           <Route
             path="/conferente"
             element={
-              <ProtectedRoute allowedRoles={['conferente']}>
+              <ProtectedRoute allowedRoles={['conferente', 'admin']}>
                 <ConferenteDashboard />
               </ProtectedRoute>
             }
@@ -415,7 +415,7 @@ function App() {
           <Route
             path="/conferente/route/:routeId"
             element={
-              <ProtectedRoute allowedRoles={['conferente']}>
+              <ProtectedRoute allowedRoles={['conferente', 'admin']}>
                 <ConferenteRouteConference />
               </ProtectedRoute>
             }

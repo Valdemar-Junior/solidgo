@@ -59,6 +59,7 @@ import { fetchInChunks, fetchAllPages, chunkArray } from '../../utils/supabase/b
 import { createPickupFromReturn } from '../../utils/pickup/createPickupFromReturn';
 import { saveUserPreference, loadUserPreference, mergeColumnsConfig, type ColumnConfig } from '../../utils/userPreferences';
 import MdfeIssueModal from '../../components/mdfe/MdfeIssueModal';
+import ConferenceDivergenceModal from '../../components/conference/ConferenceDivergenceModal';
 import DatePicker, { registerLocale } from 'react-datepicker';
 import { ptBR } from 'date-fns/locale';
 import 'react-datepicker/dist/react-datepicker.css';
@@ -5275,16 +5276,60 @@ function RouteCreationContent() {
                             {(() => {
                               const conf: any = (route as any).conference;
                               const cStatus = String(conf?.status || '').toLowerCase();
-                              const ok = conf?.result_ok === true || cStatus === 'completed';
-                              const badgeClass = ok
-                                ? 'bg-green-50 text-green-700 border-green-200'
-                                : (cStatus === 'in_progress' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-yellow-50 text-yellow-700 border-yellow-200');
-                              const label = ok ? 'Conferência: Finalizada' : (cStatus === 'in_progress' ? 'Conferência: Em curso' : 'Conferência: Aguardando');
+                              const concluida = cStatus === 'completed';
+                              const comDivergencia = concluida && conf?.result_ok !== true;
+                              const tratada = Boolean(conf?.resolved_at);
+                              const badgeClass = comDivergencia
+                                ? (tratada ? 'bg-gray-100 text-gray-700 border-gray-200' : 'bg-red-50 text-red-700 border-red-200')
+                                : concluida
+                                  ? 'bg-green-50 text-green-700 border-green-200'
+                                  : (cStatus === 'in_progress' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-yellow-50 text-yellow-700 border-yellow-200');
+                              const label = comDivergencia
+                                ? (tratada ? 'Conferência: Divergência tratada' : 'Conferência: Divergência')
+                                : concluida
+                                  ? 'Conferência: Finalizada'
+                                  : (cStatus === 'in_progress' ? 'Conferência: Em curso' : 'Conferência: Aguardando');
                               return (
-                                <span className={`px-2 py-0.5 rounded-full text-[11px] font-semibold border inline-flex items-center gap-1 ${badgeClass}`} title="Status de conferência">
-                                  {ok ? <ClipboardCheck className="h-3 w-3" /> : <ClipboardList className="h-3 w-3" />}
-                                  {label}
-                                </span>
+                                <>
+                                  <span className={`px-2 py-0.5 rounded-full text-[11px] font-semibold border inline-flex items-center gap-1 ${badgeClass}`} title="Status de conferência">
+                                    {concluida && !comDivergencia ? <ClipboardCheck className="h-3 w-3" /> : <ClipboardList className="h-3 w-3" />}
+                                    {label}
+                                  </span>
+                                  {comDivergencia && (
+                                    <button
+                                      onClick={async (e) => {
+                                        e.stopPropagation();
+                                        const toastId = toast.loading('Abrindo divergências...');
+                                        try {
+                                          // A lista nao carrega o cliente/pedido; buscamos aqui pra
+                                          // mostrar de quem e cada divergencia.
+                                          const { data: full } = await supabase
+                                            .from('routes')
+                                            .select('id,name,conferente, route_orders:route_orders(id,order_id, order:orders!order_id(id,order_id_erp,customer_name))')
+                                            .eq('id', route.id)
+                                            .single();
+                                          const { data: confData } = await supabase
+                                            .from('route_conferences')
+                                            .select('*')
+                                            .eq('route_id', route.id)
+                                            .order('created_at', { ascending: false })
+                                            .limit(1)
+                                            .maybeSingle();
+                                          setConferenceRoute({ ...(full || route), conference: confData || conf } as any);
+                                          setShowConferenceModal(true);
+                                          toast.dismiss(toastId);
+                                        } catch (err) {
+                                          console.error(err);
+                                          toast.error('Erro ao abrir as divergências', { id: toastId });
+                                        }
+                                      }}
+                                      className={`px-2 py-0.5 rounded-full text-[11px] font-bold border inline-flex items-center gap-1 transition-colors ${tratada ? 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50' : 'bg-red-600 text-white border-red-600 hover:bg-red-700'}`}
+                                    >
+                                      <AlertTriangle className="h-3 w-3" />
+                                      {tratada ? 'Ver divergências' : 'Tratar divergências'}
+                                    </button>
+                                  )}
+                                </>
                               );
                             })()}
                           </div>
@@ -6221,171 +6266,14 @@ function RouteCreationContent() {
         )
       }
 
-      {/* Conference Review Modal */}
-      {
-        showConferenceModal && conferenceRoute && (
-          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-            <div className="bg-white rounded-xl shadow-xl w-full max-w-5xl max-h-[85vh] flex flex-col overflow-hidden">
-              <div className="px-6 py-4 border-b flex items-center justify-between bg-gray-50">
-                <h4 className="text-lg font-bold text-gray-900">Revisão de Conferência - {conferenceRoute.name}</h4>
-                <button onClick={() => setShowConferenceModal(false)} className="text-gray-500 hover:text-gray-700"><X className="h-5 w-5" /></button>
-              </div>
-              <div className="p-6 overflow-y-auto flex-1">
-                {(() => {
-                  const conf = (conferenceRoute as any).conference;
-                  const missing: Array<{ code: string; orderId?: string }> = conf?.summary?.missing || [];
-                  const notBiped: Array<{ orderId?: string; productCode?: string; reason?: string; notes?: string }> = conf?.summary?.notBipedProducts || [];
-                  const byOrder: Record<string, { codes: string[], order: any }> = {};
-                  (conferenceRoute.route_orders || []).forEach((ro: any) => {
-                    byOrder[String(ro.order_id)] = byOrder[String(ro.order_id)] || { codes: [], order: ro.order };
-                  });
-                  missing.forEach((m) => {
-                    const k = String(m.orderId || '');
-                    if (!byOrder[k]) byOrder[k] = { codes: [], order: null } as any;
-                    byOrder[k].codes.push(m.code);
-                  });
-                  const byOrderProducts: Record<string, Array<{ productCode?: string; reason?: string; notes?: string }>> = {};
-                  notBiped.forEach((p) => {
-                    const k = String(p.orderId || '');
-                    byOrderProducts[k] = byOrderProducts[k] || [];
-                    byOrderProducts[k].push({ productCode: p.productCode, reason: p.reason, notes: p.notes });
-                  });
-                  const authUser = useAuthStore.getState().user;
-                  const markResolved = async (removedIds: string[]) => {
-                    try {
-                      if (!conf?.id) { toast.error('Conferência não encontrada'); return; }
-                      const resolutionPayload = { removedOrderIds: removedIds, missingLabelsByOrder: Object.keys(byOrder).reduce((acc: any, k) => { if ((byOrder[k]?.codes || []).length > 0) acc[k] = byOrder[k].codes; return acc; }, {}), notBipedByOrder: byOrderProducts };
-                      const { error: updErr } = await supabase
-                        .from('route_conferences')
-                        .update({ resolved_at: new Date().toISOString(), resolved_by: authUser?.id || null, resolution: resolutionPayload })
-                        .eq('id', conf.id);
-                      if (updErr) throw updErr;
-                      toast.success('Divergência marcada como resolvida');
-                      setShowConferenceModal(false);
-                      loadData();
-                    } catch (e: any) {
-                      console.error(e);
-                      toast.error('Erro ao marcar divergência como resolvida');
-                    }
-                  };
-                  const orderIds = Object.keys(byOrder).filter(k => byOrder[k].codes.length > 0);
-                  if (orderIds.length === 0) {
-                    const pIds = Object.keys(byOrderProducts).filter(k => (byOrderProducts[k] || []).length > 0);
-                    if (pIds.length === 0) return <div className="text-center py-8 text-gray-500 font-medium">Sem faltantes. Conferência OK.</div>;
-                    return (
-                      <div className="space-y-4">
-                        {pIds.map((oid) => {
-                          const info = byOrder[String(oid)] || { order: null, codes: [] } as any;
-                          const cliente = info.order?.customer_name || 'â€”';
-                          const pedido = info.order?.order_id_erp || 'â€”';
-                          const products = byOrderProducts[oid] || [];
-                          return (
-                            <div key={oid} className="border rounded-lg overflow-hidden">
-                              <div className="px-4 py-2 bg-gray-50 border-b flex justify-between items-center">
-                                <div>
-                                  <span className="font-bold text-gray-900">Pedido: {pedido}</span>
-                                  <span className="mx-2 text-gray-400">|</span>
-                                  <span className="text-gray-700">{cliente}</span>
-                                </div>
-                              </div>
-                              <div className="p-4 bg-white">
-                                <div className="text-sm font-bold text-red-600 mb-2">Produtos não bipados ({products.length}):</div>
-                                <ul className="space-y-2">
-                                  {products.map((p, idx) => (
-                                    <li key={idx} className="text-sm text-gray-700 bg-red-50 p-2 rounded border border-red-100">
-                                      <span className="font-semibold">Produto:</span> {p.productCode || 'â€”'} â€¢ <span className="font-semibold">Motivo:</span> {p.reason || 'â€”'} {p.notes ? `â€¢ ${p.notes}` : ''}
-                                    </li>
-                                  ))}
-                                </ul>
-                              </div>
-                            </div>
-                          );
-                        })}
-                        <div className="flex justify-end space-x-3 pt-4 border-t border-gray-100">
-                          <button
-                            onClick={async () => {
-                              try {
-                                const ids = pIds.filter(Boolean);
-                                if (ids.length === 0) return;
-                                const rid = String(conferenceRoute.id);
-                              const { error: delErr } = await supabase.from('route_orders').delete().eq('route_id', rid).in('order_id', ids);
-                              if (delErr) throw delErr;
-                              const { error: updErr } = await supabase.from('orders').update({ status: 'pending' }).in('id', ids);
-                              if (updErr) throw updErr;
-                              await syncStoreReleaseOrderIds(ids);
-                              toast.success('Pedidos removidos da rota');
-                                setShowConferenceModal(false);
-                                loadData();
-                              } catch (e: any) {
-                                toast.error('Erro ao remover pedidos da rota');
-                              }
-                            }}
-                            className="px-4 py-2 bg-red-100 text-red-700 hover:bg-red-200 rounded-lg font-medium transition-colors"
-                          >Remover pedidos não bipados</button>
-                          <button
-                            onClick={() => { const ids = pIds.filter(Boolean); markResolved(ids); }}
-                            className="px-4 py-2 bg-teal-600 text-white hover:bg-teal-700 rounded-lg font-medium shadow-sm transition-colors"
-                          >Resolver Divergência</button>
-                        </div>
-                      </div>
-                    );
-                  }
-                  return (
-                    <div className="space-y-4">
-                      {orderIds.map((oid) => {
-                        const info = byOrder[oid];
-                        const cliente = info.order?.customer_name || 'â€”';
-                        const pedido = info.order?.order_id_erp || 'â€”';
-                        return (
-                          <div key={oid} className="border rounded-lg overflow-hidden">
-                            <div className="px-4 py-2 bg-gray-50 border-b">
-                              <div className="font-bold text-gray-900">Pedido: {pedido} â€¢ {cliente}</div>
-                            </div>
-                            <div className="p-4 bg-white">
-                              <div className="text-sm font-bold text-red-600 mb-2">Volumes faltantes ({info.codes.length}):</div>
-                              <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                                {info.codes.map((c, idx) => (
-                                  <div key={`${c}-${idx}`} className="text-xs px-2 py-1.5 rounded bg-red-50 text-red-700 border border-red-100 font-mono text-center">{c}</div>
-                                ))}
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })}
-                      <div className="flex justify-end space-x-3 pt-4 border-t border-gray-100">
-                        <button
-                          onClick={async () => {
-                            try {
-                              const ids = orderIds.filter(Boolean);
-                              if (ids.length === 0) return;
-                              const rid = String(conferenceRoute.id);
-                              const { error: delErr } = await supabase.from('route_orders').delete().eq('route_id', rid).in('order_id', ids);
-                              if (delErr) throw delErr;
-                              const { error: updErr } = await supabase.from('orders').update({ status: 'pending' }).in('id', ids);
-                              if (updErr) throw updErr;
-                              await syncStoreReleaseOrderIds(ids);
-                              toast.success('Pedidos faltantes removidos da rota');
-                              setShowConferenceModal(false);
-                              loadData();
-                            } catch (e: any) {
-                              toast.error('Erro ao remover pedidos da rota');
-                            }
-                          }}
-                          className="px-4 py-2 bg-red-100 text-red-700 hover:bg-red-200 rounded-lg font-medium transition-colors"
-                        >Remover pedidos faltantes</button>
-                        <button
-                          onClick={() => { const ids = orderIds.filter(Boolean); markResolved(ids); }}
-                          className="px-4 py-2 bg-teal-600 text-white hover:bg-teal-700 rounded-lg font-medium shadow-sm transition-colors"
-                        >Resolver Divergência</button>
-                      </div>
-                    </div>
-                  );
-                })()}
-              </div>
-            </div>
-          </div>
-        )
-      }
+      {/* Divergencias da conferencia (admin trata aqui, na Gestao de Entregas) */}
+      {showConferenceModal && conferenceRoute && (
+        <ConferenceDivergenceModal
+          route={conferenceRoute}
+          onClose={() => setShowConferenceModal(false)}
+          onChanged={() => loadData()}
+        />
+      )}
 
       {/* Route Details Modal */}
 
