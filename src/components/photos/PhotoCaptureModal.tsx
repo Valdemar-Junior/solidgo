@@ -28,6 +28,8 @@ export interface PhotoCaptureModalProps {
     isOffline?: boolean;
     title?: string; // Título do modal (default: "Fotos da Montagem")
     confirmLabel?: string; // Texto do botão de confirmar (default: "Confirmar Montagem")
+    /** Envio em andamento no consumidor (upload/gravação). Trava o modal para evitar reenvio do mesmo lote. */
+    isSubmitting?: boolean;
 }
 
 export default function PhotoCaptureModal({
@@ -40,6 +42,7 @@ export default function PhotoCaptureModal({
     isOffline = false,
     title = 'Fotos da Montagem',
     confirmLabel = 'Confirmar Montagem',
+    isSubmitting = false,
 }: PhotoCaptureModalProps) {
     const [photos, setPhotos] = useState<CapturedPhoto[]>([]);
     const [isProcessing, setIsProcessing] = useState(false);
@@ -144,6 +147,8 @@ export default function PhotoCaptureModal({
 
     // Confirmar fotos
     const handleConfirm = () => {
+        // Trava contra toques repetidos: o envio leva segundos e o modal segue aberto até concluir.
+        if (isSubmitting) return;
         if (photos.length < minPhotos) {
             setError(`Mínimo de ${minPhotos} foto(s) obrigatória(s).`);
             return;
@@ -153,6 +158,7 @@ export default function PhotoCaptureModal({
 
     // Cancelar
     const handleCancel = () => {
+        if (isSubmitting) return;
         if (photos.length > 0) {
             if (!window.confirm('Tem certeza que deseja cancelar? As fotos serão descartadas.')) {
                 return;
@@ -163,8 +169,8 @@ export default function PhotoCaptureModal({
 
     if (!isOpen) return null;
 
-    const canAddMore = photos.length < maxPhotos;
-    const canConfirm = photos.length >= minPhotos && !isProcessing;
+    const canAddMore = photos.length < maxPhotos && !isSubmitting;
+    const canConfirm = photos.length >= minPhotos && !isProcessing && !isSubmitting;
 
     return createPortal(
         <div className="fixed inset-0 bg-black bg-opacity-50 z-[9999] flex items-center justify-center p-4">
@@ -180,7 +186,8 @@ export default function PhotoCaptureModal({
                         </div>
                         <button
                             onClick={handleCancel}
-                            className="p-2 hover:bg-white/20 rounded-full transition-colors flex-shrink-0"
+                            disabled={isSubmitting}
+                            className="p-2 hover:bg-white/20 rounded-full transition-colors flex-shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                             <X className="w-5 h-5" />
                         </button>
@@ -229,7 +236,7 @@ export default function PhotoCaptureModal({
                                     isLocal={true}
                                     isSynced={false}
                                     showStatus={isOffline}
-                                    onRemove={() => removePhoto(photo.id)}
+                                    onRemove={isSubmitting ? undefined : () => removePhoto(photo.id)}
                                 />
                             ))}
 
@@ -312,8 +319,9 @@ export default function PhotoCaptureModal({
                 <div className="bg-gray-50 px-6 py-4 flex gap-3">
                     <button
                         onClick={handleCancel}
-                        className="flex-1 px-4 py-3 border border-gray-300 rounded-lg text-gray-700 
-                      font-medium hover:bg-gray-100 transition-colors h-auto min-h-[48px]"
+                        disabled={isSubmitting}
+                        className="flex-1 px-4 py-3 border border-gray-300 rounded-lg text-gray-700
+                      font-medium hover:bg-gray-100 transition-colors h-auto min-h-[48px] disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                         Cancelar
                     </button>
@@ -325,8 +333,17 @@ export default function PhotoCaptureModal({
                                 ? 'bg-green-500 text-white hover:bg-green-600'
                                 : 'bg-gray-300 text-gray-500 cursor-not-allowed'}`}
                     >
-                        <Check className="w-5 h-5 flex-shrink-0" />
-                        <span>{confirmLabel}</span>
+                        {isSubmitting ? (
+                            <>
+                                <Loader2 className="w-5 h-5 flex-shrink-0 animate-spin" />
+                                <span>Enviando fotos...</span>
+                            </>
+                        ) : (
+                            <>
+                                <Check className="w-5 h-5 flex-shrink-0" />
+                                <span>{confirmLabel}</span>
+                            </>
+                        )}
                     </button>
                 </div>
 

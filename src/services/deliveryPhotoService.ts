@@ -117,6 +117,23 @@ export const DeliveryPhotoService = {
             if (error) throw error;
             return data;
         } catch (error) {
+            // 23505 = a foto deste route_order já está registrada (constraint de unicidade).
+            // Trata como sucesso e descarta o arquivo recém-enviado, que ficaria órfão no Storage.
+            if ((error as { code?: string } | null)?.code === '23505') {
+                console.warn('[DeliveryPhotoService] Foto já registrada, ignorando duplicata:', fileName);
+
+                await supabase.storage.from(BUCKET_NAME).remove([storagePath]);
+
+                const { data: existing } = await supabase
+                    .from('delivery_photos')
+                    .select()
+                    .eq('route_order_id', routeOrderId)
+                    .eq('file_name', fileName)
+                    .maybeSingle();
+
+                if (existing) return existing;
+            }
+
             console.error('[DeliveryPhotoService] Erro ao registrar no banco:', error);
             throw error;
         }

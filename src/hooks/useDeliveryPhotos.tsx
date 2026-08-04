@@ -2,7 +2,7 @@
  * useDeliveryPhotos - Hook para isolar lógica de captura de fotos de entrega
  */
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { supabase } from '../supabase/client';
 import { NetworkStatus, SyncQueue } from '../utils/offline/storage';
 import { DeliveryPhotoService } from '../services/deliveryPhotoService';
@@ -26,6 +26,11 @@ export function useDeliveryPhotos(): UseDeliveryPhotosResult {
     const [isProcessing, setIsProcessing] = useState(false);
     const [resolvePromise, setResolvePromise] = useState<((value: boolean) => void) | null>(null);
 
+    // Trava síncrona: o estado do React não atualiza a tempo de barrar toques no mesmo tick.
+    const isSubmittingRef = useRef(false);
+    // Fotos já gravadas na sessão atual do modal, para a retentativa não regravar o que subiu.
+    const savedPhotoIdsRef = useRef<Set<string>>(new Set());
+
     // Configuração
     const [configEnabled, setConfigEnabled] = useState(false);
 
@@ -45,6 +50,7 @@ export function useDeliveryPhotos(): UseDeliveryPhotosResult {
         if (!configEnabled) return Promise.resolve(true);
 
         return new Promise((resolve) => {
+            savedPhotoIdsRef.current = new Set();
             setAction(actionType);
             setCurrentRouteOrderId(routeOrderId);
             setPhotosRequired(actionType === 'delivered');
@@ -54,6 +60,9 @@ export function useDeliveryPhotos(): UseDeliveryPhotosResult {
     }, [configEnabled]);
 
     const handleConfirm = async (capturedPhotos: CapturedPhoto[]) => {
+        // Barra execuções concorrentes: cada uma regravaria o lote inteiro.
+        if (isSubmittingRef.current) return;
+        isSubmittingRef.current = true;
         setIsProcessing(true);
         try {
             const userId = (await supabase.auth.getUser()).data.user?.id || 'offline_user';
@@ -68,6 +77,9 @@ export function useDeliveryPhotos(): UseDeliveryPhotosResult {
                 } else if (action === 'returned') {
                     type = 'return_evidence';
                 }
+
+                // Numa retentativa após falha parcial, pula o que já foi gravado.
+                if (savedPhotoIdsRef.current.has(photo.id)) continue;
 
                 if (isOnline) {
                     const result = await DeliveryPhotoService.uploadPhoto(currentRouteOrderId, photo.base64, photo.fileName, type);
@@ -87,6 +99,8 @@ export function useDeliveryPhotos(): UseDeliveryPhotosResult {
                         userId
                     );
                 }
+
+                savedPhotoIdsRef.current.add(photo.id);
             }
 
             if (!isOnline && capturedPhotos.length > 0) {
@@ -102,11 +116,13 @@ export function useDeliveryPhotos(): UseDeliveryPhotosResult {
             console.error('[useDeliveryPhotos] Erro ao salvar:', error);
             toast.error('Erro ao salvar fotos. Tente novamente.');
         } finally {
+            isSubmittingRef.current = false;
             setIsProcessing(false);
         }
     };
 
     const handleClose = () => {
+        if (isSubmittingRef.current) return;
         const canSkip = !photosRequired;
         setIsOpen(false);
         if (resolvePromise) resolvePromise(canSkip);
@@ -123,6 +139,7 @@ export function useDeliveryPhotos(): UseDeliveryPhotosResult {
             isOffline={!NetworkStatus.isOnline()}
             title="Fotos da Entrega"
             confirmLabel="Confirmar Entrega"
+            isSubmitting={isProcessing}
         />
     );
 
