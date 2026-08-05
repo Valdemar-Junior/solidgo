@@ -43,6 +43,7 @@ export default function Settings() {
   const [enviaGrupo, setEnviaGrupo] = useState('');
 
   const [consultaLancamento, setConsultaLancamento] = useState('');
+  const [auditoriaMontagem, setAuditoriaMontagem] = useState('');
   const [requireConference, setRequireConference] = useState(true);
   const [allowOrderUpdates, setAllowOrderUpdates] = useState(false);
   const [requireAssemblyPhotos, setRequireAssemblyPhotos] = useState(false); // NOVO: Fotos de montagem
@@ -76,13 +77,14 @@ export default function Settings() {
   const load = async () => {
     try {
       setLoading(true);
-      const [p, n, nd, m, g, l, confFlag, updateFlag, photoFlag, deliveryPhotoFlag, deliveryProofFlag, ruralKeys, generalDeadlines, storeReleaseFlag] = await Promise.all([
+      const [p, n, nd, m, g, l, am, confFlag, updateFlag, photoFlag, deliveryPhotoFlag, deliveryProofFlag, ruralKeys, generalDeadlines, storeReleaseFlag] = await Promise.all([
         getUrl('envia_pedidos'),
         getUrl('gera_nf'),
         getUrl('gera_nf_devolucao'),
         getUrl('envia_mensagem'),
         getUrl('envia_grupo'),
         getUrl('consulta_lancamento'),
+        getUrl('auditoria_montagem'),
         supabase.from('app_settings').select('value').eq('key', 'require_route_conference').maybeSingle(),
         supabase.from('app_settings').select('value').eq('key', 'allow_order_updates_on_import').maybeSingle(),
         supabase.from('app_settings').select('value').eq('key', 'require_assembly_photos').maybeSingle(), // NOVO
@@ -98,6 +100,7 @@ export default function Settings() {
       setEnviaMensagem(m || '');
       setEnviaGrupo(g || '');
       setConsultaLancamento(l || '');
+      setAuditoriaMontagem(am || '');
 
       const enabled = (confFlag.data as any)?.value?.enabled;
       setRequireConference(enabled === false ? false : true);
@@ -180,6 +183,7 @@ export default function Settings() {
 
         { key: 'envia_grupo', url: enviaGrupo, active: true },
         { key: 'consulta_lancamento', url: consultaLancamento, active: true },
+        { key: 'auditoria_montagem', url: auditoriaMontagem, active: true },
       ].filter(r => r.url !== undefined);
 
       const { error } = await supabase.from('webhook_settings').upsert(rows, { onConflict: 'key' });
@@ -733,6 +737,25 @@ export default function Settings() {
                       />
                     </div>
                     <p className="text-xs text-gray-500">Usado para buscar dados de Trocas e Assistencias pelo numero do lancamento.</p>
+                  </div>
+
+                  {/* Auditoria de Montagem (Gerente) */}
+                  <div className="space-y-2">
+                    <label className="flex items-center gap-2 text-sm font-medium text-gray-900">
+                      <FilePlus className="h-4 w-4 text-gray-500" />
+                      Auditoria de Montagem
+                    </label>
+                    <div className="relative">
+                      <Globe className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+                      <input
+                        type="text"
+                        value={auditoriaMontagem}
+                        onChange={e => setAuditoriaMontagem(e.target.value)}
+                        className="w-full pl-10 pr-4 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
+                        placeholder="https://webhook.n8n.io/..."
+                      />
+                    </div>
+                    <p className="text-xs text-gray-500">Consulta no ERP as vendas sem montagem marcada pelo vendedor. Usado na aba de auditoria do gerente.</p>
                   </div>
                 </div>
 

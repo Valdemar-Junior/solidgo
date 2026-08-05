@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
-import { CheckCircle2, Loader2, LogOut, RefreshCw, Search, Store, Undo2 } from 'lucide-react';
+import { CheckCircle2, Hammer, Loader2, LogOut, RefreshCw, Search, Store, Undo2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../../supabase/client';
+import AssemblyAuditPanel from './AssemblyAuditPanel';
 import { useAuthStore } from '../../stores/authStore';
 import type { OrderItem, StoreReleaseAssignment, UserStoreReleaseLocation } from '../../types/database';
 import { getStoreReleaseStatusLabel, normalizeStoreReleaseLocation } from '../../utils/storeRelease';
@@ -31,6 +32,8 @@ type ActionModalState = {
   assignment: AssignmentRow;
 } | null;
 
+type PanelTab = 'release' | 'assembly-audit';
+
 function formatDateTime(value?: string | null) {
   if (!value) return '-';
   const date = new Date(value);
@@ -46,6 +49,7 @@ function getAssignmentItems(items: OrderItem[] | null | undefined, storeLocation
 export default function StoreReleaseManagement() {
   const navigate = useNavigate();
   const { user, logout } = useAuthStore();
+  const [activeTab, setActiveTab] = useState<PanelTab>('release');
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<'pending' | 'all'>('pending');
@@ -251,21 +255,27 @@ export default function StoreReleaseManagement() {
       <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8 space-y-6">
         <div className="flex flex-col gap-4 rounded-2xl border border-gray-200 bg-white p-6 shadow-sm md:flex-row md:items-center md:justify-between">
           <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-600">Saida de Loja</p>
-            <h1 className="mt-1 text-2xl font-bold text-gray-900">Liberacao de pedidos</h1>
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-600">Painel do Gerente</p>
+            <h1 className="mt-1 text-2xl font-bold text-gray-900">
+              {activeTab === 'release' ? 'Liberacao de pedidos' : 'Auditoria de montagem'}
+            </h1>
             <p className="mt-2 text-sm text-gray-500">
-              Libere apenas os locais vinculados ao seu perfil. O pedido so fica apto para roteirizacao quando todas as pendencias forem liberadas.
+              {activeTab === 'release'
+                ? 'Libere apenas os locais vinculados ao seu perfil. O pedido so fica apto para roteirizacao quando todas as pendencias forem liberadas.'
+                : 'Vendas em que o vendedor nao marcou montagem no ERP. Revise uma a uma e decida se a montagem deve ser gerada.'}
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-3">
-            <button
-              type="button"
-              onClick={() => void loadData()}
-              className="inline-flex items-center rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50"
-            >
-              <RefreshCw className="mr-2 h-4 w-4" />
-              Atualizar
-            </button>
+            {activeTab === 'release' && (
+              <button
+                type="button"
+                onClick={() => void loadData()}
+                className="inline-flex items-center rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50"
+              >
+                <RefreshCw className="mr-2 h-4 w-4" />
+                Atualizar
+              </button>
+            )}
             <button
               type="button"
               onClick={handleLogout}
@@ -277,6 +287,33 @@ export default function StoreReleaseManagement() {
           </div>
         </div>
 
+        <div className="flex flex-wrap gap-2 rounded-2xl border border-gray-200 bg-white p-2 shadow-sm">
+          <button
+            type="button"
+            onClick={() => setActiveTab('release')}
+            className={`inline-flex items-center rounded-xl px-4 py-2 text-sm font-semibold transition ${
+              activeTab === 'release' ? 'bg-emerald-600 text-white' : 'text-gray-600 hover:bg-gray-50'
+            }`}
+          >
+            <Store className="mr-2 h-4 w-4" />
+            Liberacao de saida
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('assembly-audit')}
+            className={`inline-flex items-center rounded-xl px-4 py-2 text-sm font-semibold transition ${
+              activeTab === 'assembly-audit' ? 'bg-emerald-600 text-white' : 'text-gray-600 hover:bg-gray-50'
+            }`}
+          >
+            <Hammer className="mr-2 h-4 w-4" />
+            Auditoria de montagem
+          </button>
+        </div>
+
+        {activeTab === 'assembly-audit' && <AssemblyAuditPanel />}
+
+        {activeTab === 'release' && (
+        <>
         <div className="grid gap-4 md:grid-cols-3">
           <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
             <p className="text-sm text-gray-500">Locais autorizados</p>
@@ -436,6 +473,8 @@ export default function StoreReleaseManagement() {
             })
           )}
         </div>
+        </>
+        )}
       </div>
 
       {actionModal && (

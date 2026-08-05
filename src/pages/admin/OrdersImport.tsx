@@ -527,7 +527,7 @@ export default function OrdersImport() {
       if (numerosLancamento.length > 0) {
         const { data: existentesPorLancamento } = await supabase
           .from('orders')
-          .select('id, order_id_erp')
+          .select('id, order_id_erp, items_json')
           .in('order_id_erp', numerosLancamento);
         existentes = existentesPorLancamento || [];
       }
@@ -591,9 +591,27 @@ export default function OrdersImport() {
             const original = existentes.find(e => String(e.order_id_erp) === String(o.order_id_erp));
             if (!original) return;
 
+            // Preserva a montagem marcada a mao na auditoria do gerente: o ERP continua
+            // mandando o item sem montagem e a reimportacao apagaria a correcao.
+            const skuOf = (item: any) => String(item?.sku || item?.codigo || item?.codigo_produto || '').trim().toUpperCase();
+            const auditMarkedSkus = new Set<string>(
+              (Array.isArray(original.items_json) ? original.items_json : [])
+                .filter((item: any) => item?.assembly_audit_marked === true)
+                .map(skuOf)
+                .filter(Boolean)
+            );
+
+            const mergedItems = Array.isArray(o.items_json) && auditMarkedSkus.size > 0
+              ? o.items_json.map((item: any) => (
+                  auditMarkedSkus.has(skuOf(item))
+                    ? { ...item, has_assembly: 'Sim', assembly_audit_marked: true }
+                    : item
+                ))
+              : o.items_json;
+
             // SAFE UPDATE: Apenas campos informativos de produto e classificação
             const { error: updateError } = await supabase.from('orders').update({
-              items_json: o.items_json,        // Descrição, Cor, Ref
+              items_json: mergedItems,         // Descrição, Cor, Ref
               raw_json: o.raw_json,            // JSON Bruto
               product_group: o.product_group,  // Novo Grupo
               product_subgroup: o.product_subgroup, // Novo Subgrupo
