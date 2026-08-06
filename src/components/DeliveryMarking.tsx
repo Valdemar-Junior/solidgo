@@ -8,6 +8,7 @@ import { buildFullAddress, geocodeAddress, openWazeWithLL } from '../utils/maps'
 import { toast } from 'sonner';
 import { useDeliveryPhotos } from '../hooks/useDeliveryPhotos';
 import { syncAssemblyProductsForRoute } from '../utils/assembly/syncAssemblyProducts';
+import ProcessingOverlay from './ProcessingOverlay';
 
 const FALLBACK_RETURN_REASONS: ReturnReason[] = [
   { id: '1', reason: 'Cliente ausente', type: 'both' },
@@ -58,6 +59,9 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
   const [loading, setLoading] = useState(true);
   const [isOnline, setIsOnline] = useState(NetworkStatus.isOnline());
   const [processingIds, setProcessingIds] = useState<Set<string>>(new Set());
+  // Mensagem do overlay de processamento ("Buscando sua localização...", "Registrando a entrega...").
+  // Null = sem overlay. Público leigo precisa VER o que está acontecendo, senão toca de novo.
+  const [savingLabel, setSavingLabel] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('pending');
   // Seleção por pedido para evitar pré-seleção global
@@ -473,6 +477,9 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
   const markAsDelivered = async (order: RouteOrderWithDetails) => {
     try {
       if (processingIds.has(order.id)) return;
+      // Trava JÁ no primeiro toque: antes ela só armava depois das fotos, e o vão
+      // (GPS pode levar segundos) deixava um segundo toque disparar o fluxo de novo.
+      setProcessingIds(prev => { const n = new Set(prev); n.add(order.id); return n; });
 
       const recipientName = String(recipientNameByOrder[order.id] || '').trim();
       const recipientRelation = String(recipientRelationByOrder[order.id] || '').trim();
@@ -495,7 +502,9 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
         }
 
         if (deliveryProofConfig.requireGps && !gpsData) {
+          setSavingLabel('Buscando sua localização...');
           const gpsResult = await captureGpsForOrder(order.id);
+          setSavingLabel(null);
           if (gpsResult.ok) {
             gpsData = gpsResult.data;
             gpsStatus = 'ok';
@@ -520,7 +529,8 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
       const photosCaptured = await capturePhotos('delivered', order.order_id, order.id);
       if (!photosCaptured) return;
 
-      const next = new Set(processingIds); next.add(order.id); setProcessingIds(next);
+      // Fase de gravação: o modal fechou e sem isso a tela ficaria parada.
+      setSavingLabel('Registrando a entrega...');
       const confirmation = {
         order_id: order.order_id,
         route_id: routeId,
@@ -607,7 +617,8 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
       console.error('Error marking as delivered:', error);
       toast.error('Erro ao marcar pedido como entregue');
     } finally {
-      const next2 = new Set(processingIds); next2.delete(order.id); setProcessingIds(next2);
+      setSavingLabel(null);
+      setProcessingIds(prev => { const n = new Set(prev); n.delete(order.id); return n; });
     }
   };
 
@@ -630,6 +641,8 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
 
     try {
       if (processingIds.has(order.id)) return;
+      // Trava já no primeiro toque, como na entrega.
+      setProcessingIds(prev => { const n = new Set(prev); n.add(order.id); return n; });
 
       // 1. Capturar Fotos (Opcional, mas oferecido)
       const photosCaptured = await capturePhotos('returned', order.order_id, order.id);
@@ -637,7 +650,7 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
       // Se o hook retornar false, significa "user cancelou ação inteira".
       if (!photosCaptured) return;
 
-      const next = new Set(processingIds); next.add(order.id); setProcessingIds(next);
+      setSavingLabel('Registrando o retorno...');
       const confirmation = {
         order_id: order.order_id,
         route_id: routeId,
@@ -752,7 +765,8 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
       console.error('Error marking as returned:', error);
       toast.error('Erro ao marcar pedido como retornado');
     } finally {
-      const next2 = new Set(processingIds); next2.delete(order.id); setProcessingIds(next2);
+      setSavingLabel(null);
+      setProcessingIds(prev => { const n = new Set(prev); n.delete(order.id); return n; });
     }
   };
 
@@ -1513,6 +1527,7 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
       </div>
 
       {renderModal()}
+      {savingLabel && <ProcessingOverlay message={savingLabel} />}
     </div>
   );
 }

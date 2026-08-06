@@ -24,6 +24,7 @@ export function useDeliveryPhotos(): UseDeliveryPhotosResult {
     const [currentRouteOrderId, setCurrentRouteOrderId] = useState<string>('');
     const [photosRequired, setPhotosRequired] = useState(false);
     const [isProcessing, setIsProcessing] = useState(false);
+    const [submitLabel, setSubmitLabel] = useState<string | null>(null);
     const [resolvePromise, setResolvePromise] = useState<((value: boolean) => void) | null>(null);
 
     // Trava síncrona: o estado do React não atualiza a tempo de barrar toques no mesmo tick.
@@ -71,6 +72,8 @@ export function useDeliveryPhotos(): UseDeliveryPhotosResult {
             let index = 0;
             for (const photo of capturedPhotos) {
                 index++;
+                // Progresso visível no botão: o público leigo precisa VER que anda.
+                setSubmitLabel(`Enviando foto ${index} de ${capturedPhotos.length}...`);
                 let type = 'general';
                 if (action === 'delivered') {
                     type = index === 1 ? 'product' : 'receipt';
@@ -118,6 +121,7 @@ export function useDeliveryPhotos(): UseDeliveryPhotosResult {
         } finally {
             isSubmittingRef.current = false;
             setIsProcessing(false);
+            setSubmitLabel(null);
         }
     };
 
@@ -140,6 +144,7 @@ export function useDeliveryPhotos(): UseDeliveryPhotosResult {
             title="Fotos da Entrega"
             confirmLabel="Confirmar Entrega"
             isSubmitting={isProcessing}
+            submittingLabel={submitLabel || undefined}
         />
     );
 

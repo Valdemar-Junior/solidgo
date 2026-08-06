@@ -9,6 +9,7 @@ import { toast } from 'sonner';
 
 // ===== FOTOS DE MONTAGEM (Fase 3 - Integração) =====
 import { PhotoCaptureModal, CapturedPhoto } from './photos';
+import ProcessingOverlay from './ProcessingOverlay';
 import { PhotoStorage } from '../utils/offline/photoStorage';
 import { PhotoService } from '../services/photoService';
 import { blobToBase64, compressImage, base64ToBlob } from '../utils/imageCompression';
@@ -49,6 +50,9 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
   const [pendingPhotoItems, setPendingPhotoItems] = useState<any[]>([]);
   const [requirePhotos, setRequirePhotos] = useState(false);
   const [isSubmittingPhotos, setIsSubmittingPhotos] = useState(false);
+  // Progresso visível durante o envio ("Enviando foto 2 de 3...") e gravação.
+  const [photoSubmitLabel, setPhotoSubmitLabel] = useState<string | null>(null);
+  const [savingLabel, setSavingLabel] = useState<string | null>(null);
 
   // Trava síncrona: o estado do React não atualiza a tempo de barrar toques no mesmo tick.
   const photoSubmitLockRef = useRef(false);
@@ -281,7 +285,11 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
 
       // Cada foto sobe UMA vez e vale para todos os itens do kit. Antes ela era
       // enviada uma vez por item, o que multiplicava a espera do montador.
+      let photoIndex = 0;
       for (const photo of photos) {
+        photoIndex++;
+        // Progresso visível no botão: o público leigo precisa VER que anda.
+        setPhotoSubmitLabel(`Enviando foto ${photoIndex} de ${photos.length}...`);
         // Numa retentativa após falha parcial, pula a foto já gravada.
         if (savedPhotoKeysRef.current.has(photo.id)) continue;
 
@@ -341,6 +349,7 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
     } finally {
       photoSubmitLockRef.current = false;
       setIsSubmittingPhotos(false);
+      setPhotoSubmitLabel(null);
     }
   };
 
@@ -349,6 +358,8 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
       const ids = itemsToMark.map(i => i.id);
       if (ids.some(id => processingIds.has(id))) return;
       const next = new Set(processingIds); ids.forEach(id => next.add(id)); setProcessingIds(next);
+      // Feedback em tela cheia durante a gravação: sem isso o montador acha que travou.
+      setSavingLabel('Registrando a montagem...');
 
       const now = new Date().toISOString();
       const userId = (await supabase.auth.getUser()).data.user?.id || '';
@@ -395,6 +406,7 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
       console.error('Error marking as completed:', error);
       toast.error('Erro ao marcar serviço');
     } finally {
+      setSavingLabel(null);
       const ids = itemsToMark.map(i => i.id);
       const next2 = new Set(processingIds); ids.forEach(id => next2.delete(id)); setProcessingIds(next2);
     }
@@ -422,6 +434,7 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
       const ids = itemsToMark.map(i => i.id);
       if (ids.some(id => processingIds.has(id))) return;
       const next = new Set(processingIds); ids.forEach(id => next.add(id)); setProcessingIds(next);
+      setSavingLabel('Registrando o retorno...');
 
       const now = new Date().toISOString();
       const userId = (await supabase.auth.getUser()).data.user?.id || '';
@@ -507,6 +520,7 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
       console.error('Error marking return:', error);
       toast.error('Erro ao registrar retorno');
     } finally {
+      setSavingLabel(null);
       const ids = itemsToMark.map(i => i.id);
       const next2 = new Set(processingIds); ids.forEach(id => next2.delete(id)); setProcessingIds(next2);
     }
@@ -1318,7 +1332,9 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
         productName={pendingPhotoItems.length > 0 ? pendingPhotoItems[0].product_name : undefined}
         isOffline={!isOnline}
         isSubmitting={isSubmittingPhotos}
+        submittingLabel={photoSubmitLabel || undefined}
       />
+      {savingLabel && <ProcessingOverlay message={savingLabel} />}
     </div>
   );
 }

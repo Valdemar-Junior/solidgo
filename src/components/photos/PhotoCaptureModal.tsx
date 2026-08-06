@@ -31,6 +31,8 @@ export interface PhotoCaptureModalProps {
     confirmLabel?: string; // Texto do botão de confirmar (default: "Confirmar Montagem")
     /** Envio em andamento no consumidor (upload/gravação). Trava o modal para evitar reenvio do mesmo lote. */
     isSubmitting?: boolean;
+    /** Texto do botão durante o envio, ex.: "Enviando foto 2 de 3..." (default: "Enviando fotos...") */
+    submittingLabel?: string;
 }
 
 export default function PhotoCaptureModal({
@@ -44,6 +46,7 @@ export default function PhotoCaptureModal({
     title = 'Fotos da Montagem',
     confirmLabel = 'Confirmar Montagem',
     isSubmitting = false,
+    submittingLabel,
 }: PhotoCaptureModalProps) {
     const [photos, setPhotos] = useState<CapturedPhoto[]>([]);
     const [isProcessing, setIsProcessing] = useState(false);
@@ -343,7 +346,7 @@ export default function PhotoCaptureModal({
                         {isSubmitting ? (
                             <>
                                 <Loader2 className="w-5 h-5 flex-shrink-0 animate-spin" />
-                                <span>Enviando fotos...</span>
+                                <span>{submittingLabel || 'Enviando fotos...'}</span>
                             </>
                         ) : (
                             <>
