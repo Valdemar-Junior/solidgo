@@ -30,6 +30,15 @@ export interface PendingDeliveryPhoto {
     lastSyncError?: string;          // Último erro de sync
 }
 
+// Versão leve de PendingDeliveryPhoto para listagens: sem o base64
+export interface PendingDeliveryPhotoMeta {
+    id: string;
+    routeOrderId: string;
+    fileName: string;
+    syncAttempts: number;
+    createdAt: number;
+}
+
 /**
  * Gera ID único para foto local
  */
@@ -88,6 +97,10 @@ export const DeliveryPhotoStorage = {
 
     /**
      * Recupera todas as fotos pendentes de sync
+     *
+     * ATENCAO: retorna o base64 de TODAS as fotos de uma vez. Com acumulo
+     * grande isso estoura a memoria da aba. Para o ciclo de sync use
+     * getPendingSyncMeta() e carregue uma foto por vez com getById().
      */
     async getPendingSync(): Promise<PendingDeliveryPhoto[]> {
         const pending: PendingDeliveryPhoto[] = [];
@@ -95,6 +108,27 @@ export const DeliveryPhotoStorage = {
         await deliveryPhotoStorage.iterate<PendingDeliveryPhoto, void>((value) => {
             if (!value.isSynced) {
                 pending.push(value);
+            }
+        });
+
+        return pending.sort((a, b) => a.createdAt - b.createdAt);
+    },
+
+    /**
+     * Lista leve das fotos pendentes: so metadados, nunca o base64.
+     */
+    async getPendingSyncMeta(): Promise<PendingDeliveryPhotoMeta[]> {
+        const pending: PendingDeliveryPhotoMeta[] = [];
+
+        await deliveryPhotoStorage.iterate<PendingDeliveryPhoto, void>((value) => {
+            if (!value.isSynced) {
+                pending.push({
+                    id: value.id,
+                    routeOrderId: value.routeOrderId,
+                    fileName: value.fileName,
+                    syncAttempts: value.syncAttempts || 0,
+                    createdAt: value.createdAt || 0,
+                });
             }
         });
 
@@ -172,7 +206,7 @@ export const DeliveryPhotoStorage = {
      * Conta fotos pendentes de sync
      */
     async countPending(): Promise<number> {
-        const pending = await this.getPendingSync();
+        const pending = await this.getPendingSyncMeta();
         return pending.length;
     },
 

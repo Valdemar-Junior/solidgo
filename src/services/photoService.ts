@@ -271,18 +271,69 @@ export const PhotoService = {
      * Sincroniza todas as fotos pendentes
      */
     async syncAllPending(): Promise<{ synced: number; failed: number }> {
-        // Roda a cada 30s pelo background sync: uma foto estruturalmente quebrada
-        // nao pode tentar para sempre gastando dados. Ela permanece no aparelho.
-        const pending = (await PhotoStorage.getPendingSync())
-            .filter(p => p.syncAttempts < 8);
+        // Roda a cada 30s pelo background sync. Trabalha SO com metadados e
+        // carrega uma foto por vez: o fluxo antigo salvava copia local de toda
+        // foto, mesmo online, sem nunca marcar como sincronizada — meses de
+        // acumulo. Carregar tudo com base64 de uma vez estourava a memoria da
+        // aba nos aparelhos de campo (tela "Ah, nao!" do Chrome).
+        const meta = await PhotoStorage.getPendingSyncMeta();
+        if (meta.length === 0) return { synced: 0, failed: 0 };
+
         let synced = 0;
         let failed = 0;
+        let purged = 0;
 
-        for (const photo of pending) {
-            const success = await this.syncPendingPhoto(photo);
-            if (success) {
-                synced++;
-            } else {
+        // 1. Acumulo legado: foto tirada online ja esta no servidor. Resolver
+        //    por consulta (sem upload) esvazia o backlog sem gastar dados.
+        const existingByKey = new Map<string, { id: string; storage_path: string }>();
+        const productIds = Array.from(new Set(meta.map(m => m.assemblyProductId)));
+        for (let i = 0; i < productIds.length; i += 50) {
+            const { data } = await supabase
+                .from('assembly_photos')
+                .select('id, assembly_product_id, file_name, storage_path')
+                .in('assembly_product_id', productIds.slice(i, i + 50));
+            for (const row of (data || []) as Array<{ id: string; assembly_product_id: string; file_name: string; storage_path: string }>) {
+                existingByKey.set(`${row.assembly_product_id}|${row.file_name}`, row);
+            }
+        }
+
+        const TWO_WEEKS_MS = 14 * 24 * 60 * 60 * 1000;
+        const MAX_UPLOADS_PER_CYCLE = 5;
+        let uploads = 0;
+
+        for (const m of meta) {
+            try {
+                const found = existingByKey.get(`${m.assemblyProductId}|${m.fileName}`);
+                if (found) {
+                    await PhotoStorage.markSynced(m.id, found.storage_path, found.id);
+                    synced++;
+                    continue;
+                }
+
+                // Sem registro no servidor e com mais de 14 dias: sobra da era em
+                // que o sync nao existia, de rota ha muito encerrada (que o RLS
+                // nem deixa consultar). Remove para nao tentar para sempre.
+                if (m.createdAt > 0 && Date.now() - m.createdAt > TWO_WEEKS_MS) {
+                    await PhotoStorage.remove(m.id);
+                    purged++;
+                    continue;
+                }
+
+                // Foto quebrada nao pode tentar para sempre gastando dados.
+                if (m.syncAttempts >= 8) continue;
+
+                // Envio de verdade: poucas por ciclo, uma na memoria por vez.
+                if (uploads >= MAX_UPLOADS_PER_CYCLE) continue;
+                uploads++;
+
+                const photo = await PhotoStorage.getById(m.id);
+                if (!photo) continue;
+
+                const success = await this.syncPendingPhoto(photo);
+                if (success) synced++;
+                else failed++;
+            } catch (err) {
+                console.error('[PhotoService] Erro ao processar foto pendente:', m.id, err);
                 failed++;
             }
         }
@@ -292,7 +343,7 @@ export const PhotoService = {
             await PhotoStorage.cleanSynced();
         }
 
-        console.log(`[PhotoService] Sync completo: ${synced} sucesso, ${failed} falhas`);
+        console.log(`[PhotoService] Sync completo: ${synced} sucesso, ${failed} falhas, ${purged} legadas removidas`);
         return { synced, failed };
     },
 

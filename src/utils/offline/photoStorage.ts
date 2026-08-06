@@ -29,6 +29,15 @@ export interface PendingPhoto {
     lastSyncError?: string;          // Último erro de sync
 }
 
+// Versão leve de PendingPhoto para listagens: sem o base64
+export interface PendingPhotoMeta {
+    id: string;
+    assemblyProductId: string;
+    fileName: string;
+    syncAttempts: number;
+    createdAt: number;
+}
+
 /**
  * Gera ID único para foto local
  */
@@ -85,6 +94,10 @@ export const PhotoStorage = {
 
     /**
      * Recupera todas as fotos pendentes de sync
+     *
+     * ATENCAO: retorna o base64 de TODAS as fotos de uma vez. Com acumulo
+     * grande isso estoura a memoria da aba. Para o ciclo de sync use
+     * getPendingSyncMeta() e carregue uma foto por vez com getById().
      */
     async getPendingSync(): Promise<PendingPhoto[]> {
         const pending: PendingPhoto[] = [];
@@ -92,6 +105,27 @@ export const PhotoStorage = {
         await photoStorage.iterate<PendingPhoto, void>((value) => {
             if (!value.isSynced) {
                 pending.push(value);
+            }
+        });
+
+        return pending.sort((a, b) => a.createdAt - b.createdAt);
+    },
+
+    /**
+     * Lista leve das fotos pendentes: so metadados, nunca o base64.
+     */
+    async getPendingSyncMeta(): Promise<PendingPhotoMeta[]> {
+        const pending: PendingPhotoMeta[] = [];
+
+        await photoStorage.iterate<PendingPhoto, void>((value) => {
+            if (!value.isSynced) {
+                pending.push({
+                    id: value.id,
+                    assemblyProductId: value.assemblyProductId,
+                    fileName: value.fileName,
+                    syncAttempts: value.syncAttempts || 0,
+                    createdAt: value.createdAt || 0,
+                });
             }
         });
 
@@ -169,7 +203,7 @@ export const PhotoStorage = {
      * Conta fotos pendentes de sync
      */
     async countPending(): Promise<number> {
-        const pending = await this.getPendingSync();
+        const pending = await this.getPendingSyncMeta();
         return pending.length;
     },
 

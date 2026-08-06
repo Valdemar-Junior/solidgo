@@ -195,21 +195,68 @@ export const DeliveryPhotoService = {
      * Sincroniza todas as fotos pendentes
      */
     async syncAllPending(): Promise<{ processed: number, failures: number }> {
-        // Roda a cada 30s pelo background sync: uma foto estruturalmente quebrada
-        // nao pode tentar para sempre gastando dados. Ela permanece no aparelho.
-        const pending = (await DeliveryPhotoStorage.getPendingSync())
-            .filter(p => p.syncAttempts < 8);
+        // Roda a cada 30s pelo background sync. Trabalha SO com metadados e
+        // carrega uma foto por vez, para nao estourar a memoria da aba com o
+        // base64 de muitas fotos acumuladas (ver mesmo desenho no PhotoService).
+        const meta = await DeliveryPhotoStorage.getPendingSyncMeta();
+        if (meta.length === 0) return { processed: 0, failures: 0 };
+
+        console.log(`[DeliveryPhotoService] ${meta.length} fotos pendentes...`);
+
         let processed = 0;
         let failures = 0;
+        let purged = 0;
 
-        if (pending.length === 0) return { processed: 0, failures: 0 };
+        // Foto ja registrada no servidor resolve por consulta, sem upload.
+        const existingByKey = new Map<string, { id: string; storage_path: string }>();
+        const routeOrderIds = Array.from(new Set(meta.map(m => m.routeOrderId)));
+        for (let i = 0; i < routeOrderIds.length; i += 50) {
+            const { data } = await supabase
+                .from('delivery_photos')
+                .select('id, route_order_id, file_name, storage_path')
+                .in('route_order_id', routeOrderIds.slice(i, i + 50));
+            for (const row of (data || []) as Array<{ id: string; route_order_id: string; file_name: string; storage_path: string }>) {
+                existingByKey.set(`${row.route_order_id}|${row.file_name}`, row);
+            }
+        }
 
-        console.log(`[DeliveryPhotoService] Sincronizando ${pending.length} fotos pendentes...`);
+        const TWO_WEEKS_MS = 14 * 24 * 60 * 60 * 1000;
+        const MAX_UPLOADS_PER_CYCLE = 5;
+        let uploads = 0;
 
-        for (const photo of pending) {
-            const success = await this.processPendingPhoto(photo);
-            if (success) processed++;
-            else failures++;
+        for (const m of meta) {
+            try {
+                const found = existingByKey.get(`${m.routeOrderId}|${m.fileName}`);
+                if (found) {
+                    await DeliveryPhotoStorage.markSynced(m.id, found.storage_path, found.id);
+                    processed++;
+                    continue;
+                }
+
+                // Sobra antiga sem registro no servidor: remove em vez de tentar
+                // para sempre (mesma regra do PhotoService).
+                if (m.createdAt > 0 && Date.now() - m.createdAt > TWO_WEEKS_MS) {
+                    await DeliveryPhotoStorage.remove(m.id);
+                    purged++;
+                    continue;
+                }
+
+                // Foto quebrada nao pode tentar para sempre gastando dados.
+                if (m.syncAttempts >= 8) continue;
+
+                if (uploads >= MAX_UPLOADS_PER_CYCLE) continue;
+                uploads++;
+
+                const photo = await DeliveryPhotoStorage.getById(m.id);
+                if (!photo) continue;
+
+                const success = await this.processPendingPhoto(photo);
+                if (success) processed++;
+                else failures++;
+            } catch (err) {
+                console.error('[DeliveryPhotoService] Erro ao processar foto pendente:', m.id, err);
+                failures++;
+            }
         }
 
         // Limpar fotos sincronizadas para liberar espaço
@@ -217,6 +264,7 @@ export const DeliveryPhotoService = {
             await DeliveryPhotoStorage.cleanSynced();
         }
 
+        if (purged > 0) console.log(`[DeliveryPhotoService] ${purged} fotos legadas removidas`);
         return { processed, failures };
     }
 };
