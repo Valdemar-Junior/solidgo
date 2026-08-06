@@ -1,15 +1,17 @@
 /**
- * Remove fotos de entrega duplicadas geradas pelo reenvio do mesmo lote.
+ * Remove fotos duplicadas geradas pelo reenvio do mesmo lote (entrega ou montagem).
  *
- * Uma duplicata é definida como mais de uma linha em delivery_photos com o mesmo
- * (route_order_id, file_name). O file_name é gerado uma única vez na captura, com
- * timestamp + random, então repetição do nome significa a mesma foto gravada N vezes.
- * Mantém a linha mais antiga de cada grupo e apaga as demais, junto com os arquivos
- * correspondentes no Storage (cada cópia foi para um storage_path distinto).
+ * Uma duplicata é mais de uma linha com o mesmo (dono, file_name) — dono é o
+ * route_order na entrega e o assembly_product na montagem. O file_name é gerado uma
+ * única vez na captura, com timestamp + random, então repetição do nome significa a
+ * mesma foto gravada N vezes. Mantém a linha mais antiga de cada grupo e apaga as
+ * demais, junto com os arquivos no Storage (cada cópia foi para um caminho distinto).
  *
  * Uso:
- *   node scripts/cleanup-duplicate-delivery-photos.mjs           # dry-run, só relata
- *   node scripts/cleanup-duplicate-delivery-photos.mjs --apply   # executa a limpeza
+ *   node scripts/cleanup-duplicate-photos.mjs --target=entrega            # dry-run
+ *   node scripts/cleanup-duplicate-photos.mjs --target=entrega --apply    # executa
+ *   node scripts/cleanup-duplicate-photos.mjs --target=montagem           # dry-run
+ *   node scripts/cleanup-duplicate-photos.mjs --target=montagem --apply   # executa
  *
  * Requer SUPABASE_SERVICE_ROLE_KEY (no .env ou no ambiente): o RLS não permite
  * DELETE para um cliente anônimo.
@@ -20,7 +22,21 @@ import path from 'path';
 import { pathToFileURL } from 'url';
 import { createClient } from '@supabase/supabase-js';
 
-const BUCKET_NAME = 'delivery-photos';
+const TARGETS = {
+  entrega: {
+    table: 'delivery_photos',
+    ownerColumn: 'route_order_id',
+    bucket: 'delivery-photos',
+    migration: '20260804120000_dedupe_delivery_photos.sql',
+  },
+  montagem: {
+    table: 'assembly_photos',
+    ownerColumn: 'assembly_product_id',
+    bucket: 'assembly-photos',
+    migration: '20260804130000_dedupe_assembly_photos.sql',
+  },
+};
+
 const PAGE_SIZE = 1000;
 const BATCH_SIZE = 100;
 
@@ -39,16 +55,16 @@ function loadEnv(rootDir) {
   return env;
 }
 
-async function fetchAllPhotos(supabase) {
+async function fetchAllPhotos(supabase, target) {
   const rows = [];
   for (let from = 0; ; from += PAGE_SIZE) {
     const { data, error } = await supabase
-      .from('delivery_photos')
-      .select('id, route_order_id, file_name, storage_path, created_at')
+      .from(target.table)
+      .select(`id, ${target.ownerColumn}, file_name, storage_path, created_at`)
       .order('created_at', { ascending: true })
       .range(from, from + PAGE_SIZE - 1);
 
-    if (error) throw new Error(`Falha ao ler delivery_photos: ${error.message}`);
+    if (error) throw new Error(`Falha ao ler ${target.table}: ${error.message}`);
     if (!data || data.length === 0) break;
 
     rows.push(...data);
@@ -57,7 +73,7 @@ async function fetchAllPhotos(supabase) {
   return rows;
 }
 
-export function findDuplicates(rows) {
+export function findDuplicates(rows, ownerColumn = 'route_order_id') {
   const groups = new Map();
   let semNome = 0;
 
@@ -66,7 +82,7 @@ export function findDuplicates(rows) {
       semNome++;
       continue;
     }
-    const key = `${row.route_order_id}|${row.file_name}`;
+    const key = `${row[ownerColumn]}|${row.file_name}`;
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(row);
   }
@@ -84,7 +100,7 @@ export function findDuplicates(rows) {
   return { excedentes, gruposAfetados, gruposTotais: groups.size, semNome };
 }
 
-async function chunkedDelete(supabase, excedentes) {
+async function chunkedDelete(supabase, target, excedentes) {
   let arquivosRemovidos = 0;
   let linhasRemovidas = 0;
 
@@ -93,14 +109,14 @@ async function chunkedDelete(supabase, excedentes) {
 
     const paths = lote.map((r) => r.storage_path).filter(Boolean);
     if (paths.length > 0) {
-      const { error } = await supabase.storage.from(BUCKET_NAME).remove(paths);
+      const { error } = await supabase.storage.from(target.bucket).remove(paths);
       // Arquivo ausente não impede a remoção da linha órfã.
       if (error) console.warn(`  aviso: falha ao remover arquivos do Storage: ${error.message}`);
       else arquivosRemovidos += paths.length;
     }
 
     const ids = lote.map((r) => r.id);
-    const { error: deleteError } = await supabase.from('delivery_photos').delete().in('id', ids);
+    const { error: deleteError } = await supabase.from(target.table).delete().in('id', ids);
     if (deleteError) throw new Error(`Falha ao apagar linhas: ${deleteError.message}`);
     linhasRemovidas += ids.length;
 
@@ -112,6 +128,15 @@ async function chunkedDelete(supabase, excedentes) {
 
 async function main() {
   const apply = process.argv.includes('--apply');
+
+  const targetArg = (process.argv.find((a) => a.startsWith('--target=')) || '').split('=')[1];
+  const target = TARGETS[targetArg];
+  if (!target) {
+    console.error(`Erro: informe o alvo. Opções: ${Object.keys(TARGETS).join(', ')}`);
+    console.error('Exemplo: node scripts/cleanup-duplicate-photos.mjs --target=montagem');
+    process.exit(1);
+  }
+
   const env = loadEnv(process.cwd());
   const url = process.env.VITE_SUPABASE_URL || env.VITE_SUPABASE_URL || '';
   const service =
@@ -132,9 +157,9 @@ async function main() {
 
   const supabase = createClient(url, service, { auth: { persistSession: false } });
 
-  console.log('Lendo delivery_photos...');
-  const rows = await fetchAllPhotos(supabase);
-  const { excedentes, gruposAfetados, gruposTotais, semNome } = findDuplicates(rows);
+  console.log(`Lendo ${target.table} (fotos de ${targetArg})...`);
+  const rows = await fetchAllPhotos(supabase, target);
+  const { excedentes, gruposAfetados, gruposTotais, semNome } = findDuplicates(rows, target.ownerColumn);
 
   console.log('');
   console.log(`Linhas na tabela:      ${rows.length}`);
@@ -161,12 +186,11 @@ async function main() {
   }
 
   console.log('Aplicando limpeza...');
-  const { arquivosRemovidos, linhasRemovidas } = await chunkedDelete(supabase, excedentes);
+  const { arquivosRemovidos, linhasRemovidas } = await chunkedDelete(supabase, target, excedentes);
 
   console.log('');
   console.log(`Concluído: ${linhasRemovidas} linhas e ${arquivosRemovidos} arquivos removidos.`);
-  console.log('Rode a migration 20260804120000_dedupe_delivery_photos.sql para recalcular');
-  console.log('o photo_count dos comprovantes e criar o índice de unicidade.');
+  console.log(`Rode a migration ${target.migration} para criar o índice de unicidade.`);
 }
 
 // Só executa quando chamado direto, para permitir importar findDuplicates em testes.

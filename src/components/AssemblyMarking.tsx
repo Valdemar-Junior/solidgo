@@ -24,6 +24,9 @@ const FALLBACK_RETURN_REASONS: ReturnReason[] = [
   { id: '99', reason: 'Outro', type: 'both' }
 ];
 
+const isAssemblyItemResolved = (status: unknown) =>
+  status === 'completed' || status === 'cancelled';
+
 interface AssemblyMarkingProps {
   routeId: string;
   onUpdated?: () => void;
@@ -45,6 +48,12 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
   const [showPhotoModal, setShowPhotoModal] = useState(false);
   const [pendingPhotoItems, setPendingPhotoItems] = useState<any[]>([]);
   const [requirePhotos, setRequirePhotos] = useState(false);
+  const [isSubmittingPhotos, setIsSubmittingPhotos] = useState(false);
+
+  // Trava síncrona: o estado do React não atualiza a tempo de barrar toques no mesmo tick.
+  const photoSubmitLockRef = useRef(false);
+  // Pares item+foto já gravados na sessão atual do modal, para a retentativa não regravar.
+  const savedPhotoKeysRef = useRef<Set<string>>(new Set());
 
 
   useEffect(() => {
@@ -250,6 +259,7 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
   const handleMarkAsCompleted = (itemsToMark: any[]) => {
     if (requirePhotos) {
       // Abre modal de fotos antes de marcar como montado
+      savedPhotoKeysRef.current = new Set();
       setPendingPhotoItems(itemsToMark);
       setShowPhotoModal(true);
     } else {
@@ -260,13 +270,22 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
 
   // ===== CALLBACK QUANDO FOTOS SÃO CONFIRMADAS =====
   const handlePhotosConfirmed = async (photos: CapturedPhoto[]) => {
+    // Barra execuções concorrentes: cada uma regravaria o lote inteiro.
+    if (photoSubmitLockRef.current) return;
+    photoSubmitLockRef.current = true;
+    setIsSubmittingPhotos(true);
     try {
       const userId = (await supabase.auth.getUser()).data.user?.id || '';
+      let uploadFalhou = false;
 
       // Processar cada item pendente
       for (const item of pendingPhotoItems) {
-        // Salvar fotos localmente (serão sincronizadas depois)
         for (const photo of photos) {
+          // Numa retentativa após falha parcial, pula o par item+foto já gravado.
+          const key = `${item.id}|${photo.id}`;
+          if (savedPhotoKeysRef.current.has(key)) continue;
+
+          // Salvar foto localmente (será sincronizada depois)
           await PhotoStorage.saveLocal(
             item.id,                    // assembly_product_id
             photo.base64,
@@ -275,24 +294,30 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
             photo.mimeType,
             userId
           );
-        }
 
-        // Se online, tentar fazer upload imediato
-        if (isOnline) {
-          try {
-            for (const photo of photos) {
+          // Se online, tentar fazer upload imediato
+          if (isOnline) {
+            try {
               const blob = base64ToBlob(photo.base64);
               await PhotoService.uploadComplete(blob, item.id, photo.fileName, userId);
+            } catch (uploadErr) {
+              console.error('[AssemblyMarking] Erro no upload, fotos salvas localmente:', uploadErr);
+              uploadFalhou = true;
             }
-            // Limpar fotos locais já sincronizadas
-            await PhotoStorage.cleanSynced();
-          } catch (uploadErr) {
-            console.error('[AssemblyMarking] Erro no upload, fotos salvas localmente:', uploadErr);
-            toast.info('Fotos salvas localmente. Serão sincronizadas quando possível.');
           }
-        } else {
-          toast.info('Modo offline. Fotos serão sincronizadas quando houver conexão.');
+
+          savedPhotoKeysRef.current.add(key);
         }
+      }
+
+      if (isOnline) {
+        // Limpar fotos locais já sincronizadas
+        await PhotoStorage.cleanSynced();
+        if (uploadFalhou) {
+          toast.info('Fotos salvas localmente. Serão sincronizadas quando possível.');
+        }
+      } else {
+        toast.info('Modo offline. Fotos serão sincronizadas quando houver conexão.');
       }
 
       // Agora marcar os itens como montados
@@ -305,6 +330,9 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
     } catch (error: any) {
       console.error('[AssemblyMarking] Erro ao processar fotos:', error);
       toast.error('Erro ao processar fotos');
+    } finally {
+      photoSubmitLockRef.current = false;
+      setIsSubmittingPhotos(false);
     }
   };
 
@@ -616,9 +644,9 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
     if (routeStatus === 'completed') return;
 
     // Safety check
-    const pending = assemblyItems.filter(i => i.status === 'pending');
-    if (pending.length > 0) {
-      toast.error('Ainda há itens pendentes!');
+    const unresolved = assemblyItems.filter(i => !isAssemblyItemResolved(i.status));
+    if (unresolved.length > 0) {
+      toast.error(`Ainda há ${unresolved.length} item(ns) pendente(s)!`);
       return;
     }
 
@@ -645,6 +673,20 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
       }
 
       if (isOnline && !hasPendingSync) {
+        // Revalida no servidor. O estado local pode estar desatualizado e existem
+        // estados intermediarios (assigned/in_progress) que tambem sao pendencias.
+        const { data: serverItems, error: serverItemsError } = await supabase
+          .from('assembly_products')
+          .select('id, status')
+          .eq('assembly_route_id', routeId);
+        if (serverItemsError) throw serverItemsError;
+
+        const serverUnresolved = (serverItems || []).filter(item => !isAssemblyItemResolved(item.status));
+        if (serverUnresolved.length > 0) {
+          toast.error(`A rota ainda possui ${serverUnresolved.length} item(ns) pendente(s). Atualize a tela e conclua ou retorne todos.`);
+          return;
+        }
+
         // 1. Mark route completed (must not block operation on clone errors)
         const { error } = await supabase.from('assembly_routes').update({ status: 'completed' }).eq('id', routeId);
         if (error) throw error;
@@ -1214,7 +1256,7 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
       <div className="mt-8 pt-4 border-t border-gray-200 pb-8">
         <button
           onClick={finalizeRoute}
-          disabled={processingIds.size > 0 || assemblyItems.some(i => i.status === 'pending') || routeStatus === 'completed'}
+          disabled={processingIds.size > 0 || assemblyItems.some(i => !isAssemblyItemResolved(i.status)) || routeStatus === 'completed'}
           className={`w-full flex items-center justify-center px-4 py-4 text-white font-bold text-lg rounded-xl shadow-lg transition-all active:scale-95 ${routeStatus === 'completed'
             ? 'bg-gray-400 cursor-not-allowed opacity-100 hover:bg-gray-400'
             : 'bg-green-600 hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed'
@@ -1241,7 +1283,7 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
             </>
           )}
         </button>
-        {assemblyItems.some(i => i.status === 'pending') && (
+        {assemblyItems.some(i => !isAssemblyItemResolved(i.status)) && (
           <p className="text-center text-sm text-gray-500 mt-2 bg-yellow-50 p-2 rounded border border-yellow-100">
             ⚠️ Conclua ou retorne todos os itens para finalizar a rota.
           </p>
@@ -1258,6 +1300,7 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
       <PhotoCaptureModal
         isOpen={showPhotoModal}
         onClose={() => {
+          if (photoSubmitLockRef.current) return;
           setShowPhotoModal(false);
           setPendingPhotoItems([]);
         }}
@@ -1266,6 +1309,7 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
         maxPhotos={3}
         productName={pendingPhotoItems.length > 0 ? pendingPhotoItems[0].product_name : undefined}
         isOffline={!isOnline}
+        isSubmitting={isSubmittingPhotos}
       />
     </div>
   );

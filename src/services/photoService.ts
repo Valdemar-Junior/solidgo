@@ -72,7 +72,7 @@ export const PhotoService = {
         fileName: string,
         fileSize: number,
         userId: string
-    ): Promise<{ success: boolean; id?: string; error?: string }> {
+    ): Promise<{ success: boolean; id?: string; error?: string; duplicate?: boolean; existingStoragePath?: string }> {
         try {
             const { data, error } = await supabase
                 .from('assembly_photos')
@@ -89,6 +89,26 @@ export const PhotoService = {
                 .single();
 
             if (error) {
+                // 23505 = esta foto ja esta registrada neste produto (constraint de unicidade).
+                if (error.code === '23505') {
+                    const { data: existing } = await supabase
+                        .from('assembly_photos')
+                        .select('id, storage_path')
+                        .eq('assembly_product_id', assemblyProductId)
+                        .eq('file_name', fileName)
+                        .maybeSingle();
+
+                    if (existing) {
+                        console.warn('[PhotoService] Foto já registrada, ignorando duplicata:', fileName);
+                        return {
+                            success: true,
+                            id: existing.id,
+                            duplicate: true,
+                            existingStoragePath: existing.storage_path,
+                        };
+                    }
+                }
+
                 console.error('[PhotoService] Erro ao salvar registro:', error);
                 return { success: false, error: error.message };
             }
@@ -127,6 +147,17 @@ export const PhotoService = {
             // Rollback: tentar deletar do Storage
             await this.delete(uploadResult.storagePath);
             return { success: false, error: saveResult.error };
+        }
+
+        // Foto ja registrada: descarta o arquivo recem-enviado, que ficaria orfao,
+        // e aponta para o que ja estava gravado.
+        if (saveResult.duplicate && saveResult.existingStoragePath) {
+            await supabase.storage.from(BUCKET_NAME).remove([uploadResult.storagePath]);
+            return {
+                success: true,
+                remoteId: saveResult.id,
+                storagePath: saveResult.existingStoragePath,
+            };
         }
 
         return {
