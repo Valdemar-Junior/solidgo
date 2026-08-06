@@ -2,6 +2,9 @@ import { supabase } from '../../supabase/client';
 import { OfflineStorage, SyncQueue, NetworkStatus } from './storage';
 import { toast } from 'sonner';
 import { syncAssemblyProductsForRoute } from '../assembly/syncAssemblyProducts';
+import { DeliveryPhotoService } from '../../services/deliveryPhotoService';
+import { PhotoService } from '../../services/photoService';
+import { DeliveryPhotoStorage } from './deliveryPhotoStorage';
 
 export class BackgroundSyncService {
   private static instance: BackgroundSyncService;
@@ -94,10 +97,15 @@ export class BackgroundSyncService {
     this.syncPromise = (async () => {
       let syncedCount = 0;
       try {
+        // Fotos sincronizam ANTES da fila: a confirmação de entrega gera o
+        // comprovante digital, e ele precisa encontrar as fotos já no banco.
+        const photosSynced = await this.syncPendingPhotos(silent);
+        syncedCount += photosSynced;
+
         const pendingItems = await SyncQueue.getPendingItems();
 
         if (pendingItems.length === 0) {
-          return 0;
+          return syncedCount;
         }
 
         console.log(`Syncing ${pendingItems.length} pending items...`);
@@ -134,6 +142,38 @@ export class BackgroundSyncService {
     })();
 
     return this.syncPromise;
+  }
+
+  /**
+   * Sobe as fotos guardadas no aparelho (entrega e montagem).
+   *
+   * Os serviços já existiam mas nunca eram chamados: foto tirada sem internet
+   * ficava presa no IndexedDB para sempre. O índice único do banco torna a
+   * retentativa segura — reenviar uma foto já registrada não duplica nada.
+   */
+  private async syncPendingPhotos(silent = false): Promise<number> {
+    let total = 0;
+
+    try {
+      const { processed } = await DeliveryPhotoService.syncAllPending();
+      total += processed;
+    } catch (error) {
+      console.error('[BackgroundSync] Erro no sync de fotos de entrega:', error);
+    }
+
+    try {
+      const { synced } = await PhotoService.syncAllPending();
+      total += synced;
+    } catch (error) {
+      console.error('[BackgroundSync] Erro no sync de fotos de montagem:', error);
+    }
+
+    if (total > 0) {
+      console.log(`[BackgroundSync] ${total} fotos sincronizadas`);
+      if (!silent) toast.success(`${total} foto${total > 1 ? 's' : ''} enviada${total > 1 ? 's' : ''}`);
+    }
+
+    return total;
   }
 
   private async syncItem(item: any): Promise<void> {
@@ -289,16 +329,21 @@ export class BackgroundSyncService {
 
     console.log('[BackgroundSync] syncAssemblyRouteCompletion:', route_id);
 
-    // 0. VERIFICAÇÃO DE SEGURANÇA: Não finalizar se houver itens pendentes (aguardando sync)
-    const { count: pendingCount } = await supabase
+    // 0. VERIFICAÇÃO DE SEGURANÇA: assigned e in_progress também são pendências.
+    // Buscar os estados evita que uma checagem apenas por "pending" deixe a rota passar.
+    const { data: routeItems, error: routeItemsError } = await supabase
       .from('assembly_products')
-      .select('id', { count: 'exact', head: true })
-      .eq('assembly_route_id', route_id)
-      .eq('status', 'pending');
+      .select('id, status')
+      .eq('assembly_route_id', route_id);
+    if (routeItemsError) throw routeItemsError;
 
-    if (pendingCount && pendingCount > 0) {
-      console.warn(`[BackgroundSync] Cannot complete route ${route_id}: ${pendingCount} items still pending.`);
-      throw new Error(`Route still has pending items. Waiting for item sync.`);
+    const unresolvedCount = (routeItems || [])
+      .filter(item => item.status !== 'completed' && item.status !== 'cancelled')
+      .length;
+
+    if (unresolvedCount > 0) {
+      console.warn(`[BackgroundSync] Cannot complete route ${route_id}: ${unresolvedCount} items still unresolved.`);
+      throw new Error(`Route still has unresolved items. Waiting for item sync.`);
     }
 
     // 1. Mark assembly route as completed (non-blocking flow for clone failures)
@@ -428,7 +473,122 @@ export class BackgroundSyncService {
       if (orderError2) console.warn('Failed to update order status:', orderError2);
     }
 
+    if (action === 'delivered') {
+      await this.syncOfflineDeliveryReceipt(data);
+    }
+
     await this.logSyncAction('delivery_confirmation', order_id, action, user_id);
+  }
+
+  /**
+   * Gera o comprovante digital de uma entrega feita offline.
+   *
+   * O fluxo online grava o comprovante na hora; o offline guardava os dados na
+   * fila (recebedor, GPS) mas nunca os transformava em comprovante. Os dados já
+   * estavam aqui — faltava esta chamada.
+   */
+  private async syncOfflineDeliveryReceipt(data: any): Promise<void> {
+    // Config: se o comprovante digital estiver desligado, nada a fazer.
+    let proofEnabled = false;
+    try {
+      const { data: settings } = await supabase
+        .from('app_settings')
+        .select('value')
+        .eq('key', 'delivery_proof_settings')
+        .single();
+      proofEnabled = Boolean((settings as any)?.value?.enabled);
+    } catch {
+      const cached = await OfflineStorage.getItem('delivery_proof_settings');
+      proofEnabled = Boolean((cached as any)?.enabled);
+    }
+    if (!proofEnabled) return;
+
+    const { data: ro } = await supabase
+      .from('route_orders')
+      .select('id')
+      .eq('order_id', data.order_id)
+      .eq('route_id', data.route_id)
+      .maybeSingle();
+    if (!ro?.id) {
+      console.warn('[BackgroundSync] route_order não encontrado para comprovante offline:', data.order_id);
+      return;
+    }
+
+    // Se ainda há foto desta entrega presa no aparelho, espera o próximo ciclo:
+    // o comprovante gravado sem elas ficaria com contagem errada para sempre.
+    // Foto que estourou o limite de tentativas (8, mesmo corte dos serviços) não
+    // segura o comprovante — senão ele nunca sairia.
+    const pendingPhotos = (await DeliveryPhotoStorage.getByOrder(ro.id))
+      .filter(p => !p.isSynced && p.syncAttempts < 8);
+    if (pendingPhotos.length > 0) {
+      throw new Error(`Aguardando sync de ${pendingPhotos.length} foto(s) antes do comprovante`);
+    }
+
+    // Idempotência por entrega: numa retentativa da fila, o comprovante desta
+    // MESMA entrega (mesmo device_timestamp) já existe e não deve duplicar.
+    // Uma reentrega legítima tem timestamp diferente e gera comprovante novo.
+    const { data: existing } = await supabase
+      .from('delivery_receipts')
+      .select('id')
+      .eq('route_order_id', ro.id)
+      .eq('device_timestamp', data.local_timestamp)
+      .maybeSingle();
+    if (existing) return;
+
+    const { data: photos } = await supabase
+      .from('delivery_photos')
+      .select('id, storage_path, photo_type')
+      .eq('route_order_id', ro.id);
+    const photoRefs = (photos || []).map((p: any) => ({
+      id: p.id,
+      path: p.storage_path,
+      type: p.photo_type,
+    }));
+
+    const { data: sessionData } = await supabase.auth.getSession();
+    const accessToken = sessionData.session?.access_token;
+
+    const response = await fetch('/api/delivery-proof', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+      },
+      body: JSON.stringify({
+        orderId: data.order_id,
+        routeId: data.route_id,
+        routeOrderId: ro.id,
+        deliveredByUserId: data.user_id,
+        deviceTimestamp: data.local_timestamp,
+        recipientName: data.recipient_name || '',
+        recipientRelation: data.recipient_relation || '',
+        recipientNotes: data.recipient_notes || null,
+        gpsLat: data.gps_lat ?? null,
+        gpsLng: data.gps_lng ?? null,
+        gpsAccuracyM: data.gps_accuracy_m ?? null,
+        gpsStatus: data.gps_status || 'failed',
+        gpsFailureReason: data.gps_failure_reason || null,
+        photoCount: photoRefs.length,
+        photoRefs,
+        networkMode: 'offline',
+        // A entrega foi offline, mas este registro está sendo gravado online.
+        syncStatus: 'synced',
+        deviceInfo: {
+          userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : 'unknown',
+          platform: typeof navigator !== 'undefined' ? navigator.platform : 'unknown',
+        },
+        appVersion: import.meta.env.VITE_APP_VERSION || null,
+      }),
+    });
+
+    // Resposta ok:false em modo sombra é decisão do servidor de não bloquear;
+    // não retenta. Falha de rede (fetch lança) sobe e a fila tenta de novo.
+    const body = await response.json().catch(() => null);
+    if (body?.ok === true && body?.receiptId) {
+      console.log('[BackgroundSync] Comprovante offline gravado:', body.receiptId);
+    } else if (body?.ok === false) {
+      console.warn('[BackgroundSync] Comprovante offline não gravado:', body?.warning || body?.error);
+    }
   }
 
   private async syncReturnRevert(data: any): Promise<void> {

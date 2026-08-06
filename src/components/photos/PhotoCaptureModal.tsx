@@ -7,8 +7,9 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { Camera, Image, X, Check, AlertCircle, Loader2 } from 'lucide-react';
-import { compressImageWithFallback, blobToBase64, generatePhotoFileName, formatFileSize } from '../../utils/imageCompression';
+import { compressImageWithFallback, blobToBase64, generatePhotoFileName } from '../../utils/imageCompression';
 import PhotoThumbnail from './PhotoThumbnail';
+import { markBusy, markIdle } from '../../utils/updateGate';
 
 export interface CapturedPhoto {
     id: string;
@@ -61,6 +62,14 @@ export default function PhotoCaptureModal({
         }
     }, [isOpen]);
 
+    // Enquanto o modal está aberto há fotos não confirmadas: segura a
+    // atualização automática do app, que recarregaria a tela e as perderia.
+    useEffect(() => {
+        if (!isOpen) return;
+        markBusy();
+        return () => markIdle();
+    }, [isOpen]);
+
     // Gerar ID único para foto
     const generatePhotoId = () => `photo_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
 
@@ -86,11 +95,10 @@ export default function PhotoCaptureModal({
 
             // Avisa so quando o tamanho vai doer de verdade no envio. Antes isso
             // passava calado e a foto subia inteira, com varios megabytes.
+            // Linguagem leiga de proposito: o usuario nao tem o que resolver,
+            // so precisa saber que a espera maior e normal.
             if (!resultado.compressed && processedBlob.size > 1024 * 1024) {
-                setCameraError(
-                    `Não foi possível reduzir esta foto (${formatFileSize(processedBlob.size)}). ` +
-                    'O envio pode demorar bem mais que o normal.'
-                );
+                setCameraError('Essa foto ficou pesada. Pode confirmar normalmente — só vai demorar um pouco mais para enviar.');
             }
 
             // Converter para base64

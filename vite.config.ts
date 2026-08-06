@@ -32,7 +32,10 @@ export default defineConfig({
       },
     }),
     VitePWA({
-      registerType: 'autoUpdate',
+      // 'prompt' devolve o controle do reload ao app: src/pwa.ts atualiza sozinho
+      // do mesmo jeito, mas espera terminar qualquer trabalho em andamento
+      // (fotos capturadas sem confirmar) antes de recarregar. Ver updateGate.ts.
+      registerType: 'prompt',
       includeAssets: [
         'favicon.svg',
         'favicon.ico',

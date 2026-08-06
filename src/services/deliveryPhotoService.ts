@@ -160,13 +160,21 @@ export const DeliveryPhotoService = {
             }
 
             // 2. Registrar no Banco
-            const dbRecord = await this.registerPhotoInDb(
-                photo.routeOrderId,
-                uploadResult.storagePath,
-                photo.fileName,
-                photo.fileSize,
-                photo.photoType
-            );
+            let dbRecord;
+            try {
+                dbRecord = await this.registerPhotoInDb(
+                    photo.routeOrderId,
+                    uploadResult.storagePath,
+                    photo.fileName,
+                    photo.fileSize,
+                    photo.photoType
+                );
+            } catch (registerError) {
+                // Sem registro o arquivo ficaria orfao no Storage — e a proxima
+                // tentativa subiria outro. Remove antes de propagar o erro.
+                await supabase.storage.from(BUCKET_NAME).remove([uploadResult.storagePath]);
+                throw registerError;
+            }
 
             // 3. Atualizar status local
             await DeliveryPhotoStorage.markSynced(
@@ -187,7 +195,10 @@ export const DeliveryPhotoService = {
      * Sincroniza todas as fotos pendentes
      */
     async syncAllPending(): Promise<{ processed: number, failures: number }> {
-        const pending = await DeliveryPhotoStorage.getPendingSync();
+        // Roda a cada 30s pelo background sync: uma foto estruturalmente quebrada
+        // nao pode tentar para sempre gastando dados. Ela permanece no aparelho.
+        const pending = (await DeliveryPhotoStorage.getPendingSync())
+            .filter(p => p.syncAttempts < 8);
         let processed = 0;
         let failures = 0;
 

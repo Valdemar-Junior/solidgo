@@ -54,7 +54,13 @@ const normalizeBody = (body: AnyRecord) => {
   const deviceInfo = safeDeviceInfo(body.deviceInfo || body.device_info);
   const appVersion = asString(body.appVersion || body.app_version) || null;
   const deviceTimestamp = asDateIsoOrNull(body.deviceTimestamp || body.device_timestamp);
-  const syncStatus = networkMode === 'offline' ? 'pending_sync' : 'synced';
+  // Entrega feita offline pode ser registrada depois, ja online (background sync):
+  // network_mode preserva onde a entrega aconteceu, syncStatus explicita que o
+  // registro chegou ao servidor.
+  const explicitSyncStatus = asString(body.syncStatus || body.sync_status).toLowerCase();
+  const syncStatus = explicitSyncStatus === 'synced'
+    ? 'synced'
+    : (networkMode === 'offline' ? 'pending_sync' : 'synced');
 
   return {
     orderId,

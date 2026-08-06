@@ -271,7 +271,10 @@ export const PhotoService = {
      * Sincroniza todas as fotos pendentes
      */
     async syncAllPending(): Promise<{ synced: number; failed: number }> {
-        const pending = await PhotoStorage.getPendingSync();
+        // Roda a cada 30s pelo background sync: uma foto estruturalmente quebrada
+        // nao pode tentar para sempre gastando dados. Ela permanece no aparelho.
+        const pending = (await PhotoStorage.getPendingSync())
+            .filter(p => p.syncAttempts < 8);
         let synced = 0;
         let failed = 0;
 
