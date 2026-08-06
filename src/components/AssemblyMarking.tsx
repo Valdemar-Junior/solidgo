@@ -276,38 +276,46 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
     setIsSubmittingPhotos(true);
     try {
       const userId = (await supabase.auth.getUser()).data.user?.id || '';
+      const itemIds = pendingPhotoItems.map((item) => item.id);
       let uploadFalhou = false;
 
-      // Processar cada item pendente
-      for (const item of pendingPhotoItems) {
-        for (const photo of photos) {
-          // Numa retentativa após falha parcial, pula o par item+foto já gravado.
-          const key = `${item.id}|${photo.id}`;
-          if (savedPhotoKeysRef.current.has(key)) continue;
+      // Cada foto sobe UMA vez e vale para todos os itens do kit. Antes ela era
+      // enviada uma vez por item, o que multiplicava a espera do montador.
+      for (const photo of photos) {
+        // Numa retentativa após falha parcial, pula a foto já gravada.
+        if (savedPhotoKeysRef.current.has(photo.id)) continue;
 
-          // Salvar foto localmente (será sincronizada depois)
-          await PhotoStorage.saveLocal(
-            item.id,                    // assembly_product_id
-            photo.base64,
-            photo.fileName,
-            photo.fileSize,
-            photo.mimeType,
-            userId
-          );
+        let enviada = false;
 
-          // Se online, tentar fazer upload imediato
-          if (isOnline) {
-            try {
-              const blob = base64ToBlob(photo.base64);
-              await PhotoService.uploadComplete(blob, item.id, photo.fileName, userId);
-            } catch (uploadErr) {
-              console.error('[AssemblyMarking] Erro no upload, fotos salvas localmente:', uploadErr);
-              uploadFalhou = true;
+        if (isOnline) {
+          try {
+            const blob = base64ToBlob(photo.base64);
+            const result = await PhotoService.uploadCompleteShared(blob, itemIds, photo.fileName, userId);
+            enviada = result.success;
+            if (!result.success) {
+              console.error('[AssemblyMarking] Falha no upload da foto:', result.error);
             }
+          } catch (uploadErr) {
+            console.error('[AssemblyMarking] Erro no upload, fotos salvas localmente:', uploadErr);
           }
-
-          savedPhotoKeysRef.current.add(key);
         }
+
+        // Offline ou falha no envio: guarda no aparelho para não perder a foto
+        if (!enviada) {
+          for (const itemId of itemIds) {
+            await PhotoStorage.saveLocal(
+              itemId,                     // assembly_product_id
+              photo.base64,
+              photo.fileName,
+              photo.fileSize,
+              photo.mimeType,
+              userId
+            );
+          }
+          if (isOnline) uploadFalhou = true;
+        }
+
+        savedPhotoKeysRef.current.add(photo.id);
       }
 
       if (isOnline) {

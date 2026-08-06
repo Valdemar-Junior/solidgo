@@ -168,6 +168,65 @@ export const PhotoService = {
     },
 
     /**
+     * Envia UMA foto e liga o mesmo arquivo a varios produtos (kit confirmado de uma vez).
+     *
+     * Antes, uma foto era enviada uma vez para CADA item do kit: kit de 5 pecas com
+     * 3 fotos gerava 15 envios em fila da mesma imagem. Agora e um envio por foto,
+     * com uma linha por produto apontando para o mesmo arquivo.
+     */
+    async uploadCompleteShared(
+        blob: Blob,
+        assemblyProductIds: string[],
+        fileName: string,
+        userId: string
+    ): Promise<{ success: boolean; storagePath?: string; error?: string }> {
+        if (assemblyProductIds.length === 0) {
+            return { success: false, error: 'Nenhum produto informado' };
+        }
+
+        // 1. Upload unico. O arquivo fica sob o primeiro produto, no mesmo formato de caminho de sempre.
+        const uploadResult = await this.upload(blob, assemblyProductIds[0], fileName);
+        if (!uploadResult.success || !uploadResult.storagePath) {
+            return { success: false, error: uploadResult.error };
+        }
+
+        const storagePath = uploadResult.storagePath;
+
+        // 2. Uma linha por produto, todas apontando para o mesmo arquivo
+        const rows = assemblyProductIds.map((id) => ({
+            assembly_product_id: id,
+            storage_path: storagePath,
+            file_name: fileName,
+            file_size: blob.size,
+            uploaded_at: new Date().toISOString(),
+            created_by: userId,
+            is_synced: true,
+        }));
+
+        const { error } = await supabase.from('assembly_photos').insert(rows);
+
+        if (error) {
+            // 23505 = alguma linha ja existia. Regrava uma a uma, pulando as repetidas.
+            if (error.code === '23505') {
+                for (const row of rows) {
+                    const { error: rowError } = await supabase.from('assembly_photos').insert(row);
+                    if (rowError && rowError.code !== '23505') {
+                        console.error('[PhotoService] Erro ao registrar foto do kit:', rowError);
+                    }
+                }
+                return { success: true, storagePath };
+            }
+
+            // Sem registro no banco o arquivo ficaria orfao no Storage
+            console.error('[PhotoService] Erro ao registrar fotos do kit:', error);
+            await supabase.storage.from(BUCKET_NAME).remove([storagePath]);
+            return { success: false, error: error.message };
+        }
+
+        return { success: true, storagePath };
+    },
+
+    /**
      * Sincroniza uma foto pendente do armazenamento local
      */
     async syncPendingPhoto(pendingPhoto: PendingPhoto): Promise<boolean> {
