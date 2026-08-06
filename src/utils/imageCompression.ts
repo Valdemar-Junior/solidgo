@@ -16,6 +16,85 @@ const DEFAULT_OPTIONS: CompressionOptions = {
     mimeType: 'image/jpeg',
 };
 
+// Abaixo disso a foto ja esta pequena: nao vale processar nem arriscar ampliar.
+const SKIP_COMPRESSION_BYTES = 400 * 1024;
+
+// Acima disso o envio comeca a pesar em rede de rua; tenta de novo mais agressivo.
+const TARGET_MAX_BYTES = 600 * 1024;
+
+// Tentativas em cascata, da melhor qualidade para a mais economica.
+const ATTEMPTS: CompressionOptions[] = [
+    { maxWidth: 1200, quality: 0.75 },
+    { maxWidth: 1000, quality: 0.7 },
+    { maxWidth: 800, quality: 0.6 },
+];
+
+export interface CompressionOutcome {
+    blob: Blob;
+    /** false = nao foi possivel reduzir e o original esta sendo usado */
+    compressed: boolean;
+    originalSize: number;
+    attempts: number;
+}
+
+interface DecodedImage {
+    source: CanvasImageSource;
+    width: number;
+    height: number;
+    release: () => void;
+}
+
+/**
+ * Decodifica a imagem ja no tamanho de destino quando o navegador permite.
+ *
+ * Camera de celular hoje gera fotos de 48 a 108 megapixels. O caminho antigo
+ * (<img> + canvas) precisa alocar a imagem inteira na memoria para so entao
+ * reduzir, e e ai que aparelho mais simples desiste — era a causa de um terco
+ * das fotos subirem sem compressao nenhuma.
+ */
+async function decodeImage(file: File | Blob, maxWidth: number): Promise<DecodedImage> {
+    if (typeof createImageBitmap === 'function') {
+        try {
+            const bitmap = await createImageBitmap(file, {
+                resizeWidth: maxWidth,
+                resizeQuality: 'high',
+                // Sem isso, foto tirada na vertical sobe deitada: o <img> aplicava
+                // a rotacao do EXIF sozinho, aqui e preciso pedir.
+                imageOrientation: 'from-image',
+            });
+            return {
+                source: bitmap,
+                width: bitmap.width,
+                height: bitmap.height,
+                release: () => bitmap.close(),
+            };
+        } catch {
+            // Navegador sem suporte as opcoes de redimensionamento: usa o caminho antigo.
+        }
+    }
+
+    return new Promise<DecodedImage>((resolve, reject) => {
+        const img = new Image();
+        const url = URL.createObjectURL(file);
+
+        img.onload = () => {
+            resolve({
+                source: img,
+                width: img.naturalWidth || img.width,
+                height: img.naturalHeight || img.height,
+                release: () => URL.revokeObjectURL(url),
+            });
+        };
+
+        img.onerror = () => {
+            URL.revokeObjectURL(url);
+            reject(new Error('Falha ao carregar imagem'));
+        };
+
+        img.src = url;
+    });
+}
+
 /**
  * Comprime uma imagem (File ou Blob) para reduzir tamanho
  * @param file - Arquivo de imagem original
@@ -27,64 +106,88 @@ export async function compressImage(
     options: CompressionOptions = {}
 ): Promise<Blob> {
     const opts = { ...DEFAULT_OPTIONS, ...options };
+    const maxW = opts.maxWidth || 1200;
+    const maxH = opts.maxHeight || Infinity;
 
-    return new Promise((resolve, reject) => {
-        const img = new Image();
-        const url = URL.createObjectURL(file);
+    const decoded = await decodeImage(file, maxW);
 
-        img.onload = () => {
-            URL.revokeObjectURL(url);
+    try {
+        // O decodificador pode ter ignorado o redimensionamento: recalcula sempre.
+        let width = decoded.width;
+        let height = decoded.height;
 
-            // Calcular novas dimensões mantendo proporção
-            let { width, height } = img;
-            const maxW = opts.maxWidth || 1200;
-            const maxH = opts.maxHeight || Infinity;
+        if (width > maxW) {
+            height = Math.round((height * maxW) / width);
+            width = maxW;
+        }
 
-            if (width > maxW) {
-                height = Math.round((height * maxW) / width);
-                width = maxW;
-            }
+        if (height > maxH) {
+            width = Math.round((width * maxH) / height);
+            height = maxH;
+        }
 
-            if (height > maxH) {
-                width = Math.round((width * maxH) / height);
-                height = maxH;
-            }
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
 
-            // Criar canvas para redimensionar
-            const canvas = document.createElement('canvas');
-            canvas.width = width;
-            canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) throw new Error('Não foi possível criar contexto 2D');
 
-            const ctx = canvas.getContext('2d');
-            if (!ctx) {
-                reject(new Error('Não foi possível criar contexto 2D'));
-                return;
-            }
+        ctx.drawImage(decoded.source, 0, 0, width, height);
 
-            // Desenhar imagem redimensionada
-            ctx.drawImage(img, 0, 0, width, height);
-
-            // Converter para blob comprimido
+        return await new Promise<Blob>((resolve, reject) => {
             canvas.toBlob(
                 (blob) => {
-                    if (blob) {
-                        resolve(blob);
-                    } else {
-                        reject(new Error('Falha ao comprimir imagem'));
-                    }
+                    if (blob) resolve(blob);
+                    else reject(new Error('Falha ao comprimir imagem'));
                 },
                 opts.mimeType,
                 opts.quality
             );
-        };
+        });
+    } finally {
+        decoded.release();
+    }
+}
 
-        img.onerror = () => {
-            URL.revokeObjectURL(url);
-            reject(new Error('Falha ao carregar imagem'));
-        };
+/**
+ * Comprime insistindo: se a foto continuar grande, tenta de novo menor.
+ *
+ * Nunca falha silenciosamente — quando nao consegue reduzir, devolve o original
+ * com compressed=false para quem chamou poder avisar o usuario, em vez de subir
+ * varios megabytes sem ninguem perceber.
+ */
+export async function compressImageWithFallback(file: File | Blob): Promise<CompressionOutcome> {
+    const originalSize = file.size;
 
-        img.src = url;
-    });
+    // Ja esta pequena o bastante: processar so gastaria tempo e poderia ampliar.
+    if (originalSize > 0 && originalSize <= SKIP_COMPRESSION_BYTES) {
+        return { blob: file, compressed: true, originalSize, attempts: 0 };
+    }
+
+    let melhor: Blob | null = null;
+    let attempts = 0;
+
+    for (const attempt of ATTEMPTS) {
+        attempts++;
+        try {
+            const blob = await compressImage(file, attempt);
+
+            if (!melhor || blob.size < melhor.size) melhor = blob;
+            if (blob.size <= TARGET_MAX_BYTES) break;
+        } catch (err) {
+            console.warn(`[compressImage] Tentativa ${attempts} falhou:`, err);
+        }
+    }
+
+    if (melhor && melhor.size < originalSize) {
+        return { blob: melhor, compressed: true, originalSize, attempts };
+    }
+
+    console.warn(
+        `[compressImage] Não foi possível reduzir a imagem (${formatFileSize(originalSize)}). Enviando original.`
+    );
+    return { blob: file, compressed: false, originalSize, attempts };
 }
 
 /**

@@ -7,7 +7,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { Camera, Image, X, Check, AlertCircle, Loader2 } from 'lucide-react';
-import { compressImage, blobToBase64, generatePhotoFileName } from '../../utils/imageCompression';
+import { compressImageWithFallback, blobToBase64, generatePhotoFileName, formatFileSize } from '../../utils/imageCompression';
 import PhotoThumbnail from './PhotoThumbnail';
 
 export interface CapturedPhoto {
@@ -80,18 +80,17 @@ export default function PhotoCaptureModal({
             setIsProcessing(true);
             setError(null);
 
-            let processedBlob: Blob = file;
-            let outputMimeType = file.type || 'image/jpeg';
+            const resultado = await compressImageWithFallback(file);
+            const processedBlob = resultado.blob;
+            const outputMimeType = resultado.compressed ? 'image/jpeg' : (file.type || 'image/jpeg');
 
-            try {
-                processedBlob = await compressImage(file, {
-                    maxWidth: 1200,
-                    quality: 0.75,
-                    mimeType: 'image/jpeg',
-                });
-                outputMimeType = 'image/jpeg';
-            } catch (compressionError) {
-                console.warn('Falha na compressão da imagem, usando arquivo original:', compressionError);
+            // Avisa so quando o tamanho vai doer de verdade no envio. Antes isso
+            // passava calado e a foto subia inteira, com varios megabytes.
+            if (!resultado.compressed && processedBlob.size > 1024 * 1024) {
+                setCameraError(
+                    `Não foi possível reduzir esta foto (${formatFileSize(processedBlob.size)}). ` +
+                    'O envio pode demorar bem mais que o normal.'
+                );
             }
 
             // Converter para base64
