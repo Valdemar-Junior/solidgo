@@ -1327,8 +1327,8 @@ export default function AssemblyMarking({ routeId, onUpdated }: AssemblyMarkingP
           setPendingPhotoItems([]);
         }}
         onConfirm={handlePhotosConfirmed}
-        minPhotos={1}
-        maxPhotos={3}
+        minPhotos={2}
+        maxPhotos={5}
         productName={pendingPhotoItems.length > 0 ? pendingPhotoItems[0].product_name : undefined}
         isOffline={!isOnline}
         isSubmitting={isSubmittingPhotos}

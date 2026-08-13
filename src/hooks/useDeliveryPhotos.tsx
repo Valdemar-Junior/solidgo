@@ -138,7 +138,7 @@ export function useDeliveryPhotos(): UseDeliveryPhotosResult {
             onClose={handleClose}
             onConfirm={handleConfirm}
             minPhotos={photosRequired ? 2 : 0}
-            maxPhotos={3}
+            maxPhotos={5}
             productName={action === 'delivered' ? 'Entrega: Foto do Produto + Recibo' : 'Retorno: Foto (Opcional)'}
             isOffline={!NetworkStatus.isOnline()}
             title="Fotos da Entrega"

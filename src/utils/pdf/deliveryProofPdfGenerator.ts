@@ -545,7 +545,7 @@ export class DeliveryProofPdfGenerator {
     drawCard(contentX, evidenceTop, contentW, evidenceH);
     drawSectionTitle(contentX + 12, evidenceTop - 20, 'EVIDENCIAS VISUAIS');
 
-    const photos = data.photos.slice(0, 4);
+    const photos = data.photos.slice(0, 5);
     const primaryPhotos = photos.slice(0, 2);
     const tileGap = 10;
     const tileW = (contentW - 24 - tileGap) / 2;
