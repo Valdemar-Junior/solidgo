@@ -1248,6 +1248,7 @@ export default function AuditDashboard() {
             });
             setEditedOrder({
                 tem_frete_full: data.tem_frete_full || '',
+                phone: data.phone || '',
                 address_json: data.address_json || {},
                 items_json: data.items_json || [],
                 observacoes_publicas: observacoesPublicas,
@@ -1287,6 +1288,17 @@ export default function AuditDashboard() {
         }
         if (oldAddr.number !== newAddr.number) {
             changes.push({ field: 'endereco_numero', old_value: oldAddr.number || '', new_value: newAddr.number || '' });
+        }
+        if (String(oldAddr.complement ?? '') !== String(newAddr.complement ?? '')) {
+            changes.push({ field: 'endereco_complemento', old_value: oldAddr.complement || '', new_value: newAddr.complement || '' });
+        }
+
+        // Telefone: a coluna e NOT NULL no banco, entao um campo apagado vira
+        // string vazia — nunca null — para nao derrubar o salvamento.
+        const oldPhone = String(searchedOrder.phone ?? '');
+        const newPhone = String(editedOrder.phone ?? '').trim();
+        if (oldPhone !== newPhone) {
+            changes.push({ field: 'telefone', old_value: oldPhone, new_value: newPhone });
         }
 
         // Check observation changes
@@ -1340,6 +1352,7 @@ export default function AuditDashboard() {
                 .from('orders')
                 .update({
                     tem_frete_full: editedOrder.tem_frete_full,
+                    phone: newPhone,
                     address_json: editedOrder.address_json,
                     items_json: editedOrder.items_json,
                     observacoes_publicas: editedOrder.observacoes_publicas,
@@ -1375,6 +1388,36 @@ export default function AuditDashboard() {
 
             toast.success(`${changes.length} alteração(ões) salva(s) com sucesso!`);
 
+            /**
+             * Os cards de montagem guardam uma copia do telefone e do endereco feita
+             * no momento em que foram gerados, e nada no sistema a atualiza depois.
+             * Sem isto o montador continuaria vendo o dado errado que acabou de ser
+             * corrigido. Os cards ja concluidos ou cancelados ficam intactos para
+             * preservar o historico do que foi feito na epoca.
+             */
+            const contactChanged = changes.some(
+                (c) => c.field === 'telefone' || c.field.startsWith('endereco_')
+            );
+
+            if (contactChanged) {
+                const { data: syncedCards, error: cardsError } = await supabase
+                    .from('assembly_products')
+                    .update({
+                        customer_phone: updatedOrder.phone,
+                        installation_address: updatedOrder.address_json
+                    })
+                    .eq('order_id', searchedOrder.id)
+                    .in('status', ['pending', 'assigned', 'in_progress'])
+                    .select('id');
+
+                if (cardsError) {
+                    console.error(cardsError);
+                    toast.error('O pedido foi salvo, mas os cards de montagem em aberto continuaram com os dados antigos.');
+                } else if ((syncedCards || []).length > 0) {
+                    toast.success(`${syncedCards!.length} card(s) de montagem em aberto atualizado(s).`);
+                }
+            }
+
             if (String(updatedOrder.status || '').toLowerCase() === 'delivered' && montagemChangedToSim) {
                 try {
                     const syncResult = await syncAssemblyProductsForOrder(updatedOrder.id);
@@ -1396,6 +1439,7 @@ export default function AuditDashboard() {
             setSearchedOrder(syncedOrder);
             setEditedOrder({
                 tem_frete_full: updatedOrder.tem_frete_full || '',
+                phone: updatedOrder.phone || '',
                 address_json: updatedOrder.address_json || {},
                 items_json: updatedOrder.items_json || [],
                 observacoes_publicas: String(updatedOrder.observacoes_publicas ?? ''),
@@ -2133,6 +2177,29 @@ export default function AuditDashboard() {
                                             </div>
                                         </div>
 
+                                        {/* Contact */}
+                                        <div className="border-b border-gray-100 pb-6">
+                                            <label className="flex items-center gap-2 text-sm font-semibold text-gray-700 mb-3">
+                                                📞 Contato do cliente
+                                            </label>
+                                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                                <div>
+                                                    <label className="block text-xs text-gray-500 mb-1">Telefone</label>
+                                                    <input
+                                                        type="text"
+                                                        value={editedOrder.phone || ''}
+                                                        maxLength={40}
+                                                        placeholder="Ex.: 84 99999-9999"
+                                                        onChange={(e) => setEditedOrder({ ...editedOrder, phone: e.target.value })}
+                                                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500"
+                                                    />
+                                                    <p className="mt-1 text-xs text-gray-500">
+                                                        É o número que o motorista e o montador enxergam no aplicativo.
+                                                    </p>
+                                                </div>
+                                            </div>
+                                        </div>
+
                                         {/* Address */}
                                         <div className="border-b border-gray-100 pb-6">
                                             <label className="flex items-center gap-2 text-sm font-semibold text-gray-700 mb-3">
@@ -2174,6 +2241,24 @@ export default function AuditDashboard() {
                                                         })}
                                                         className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500"
                                                     />
+                                                </div>
+                                                <div>
+                                                    <label className="block text-xs text-gray-500 mb-1">Complemento</label>
+                                                    <input
+                                                        type="text"
+                                                        value={editedOrder.address_json.complement || ''}
+                                                        maxLength={40}
+                                                        placeholder="Ex.: APTO 302 BLOCO B"
+                                                        onChange={(e) => setEditedOrder({
+                                                            ...editedOrder,
+                                                            address_json: { ...editedOrder.address_json, complement: e.target.value }
+                                                        })}
+                                                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500"
+                                                    />
+                                                    <p className="mt-1 text-xs text-gray-500">
+                                                        Use apenas apto, bloco, torre, casa, quadra ou lote. Ponto de referência
+                                                        ("perto do mercado") atrapalha a navegação e é ignorado pelo mapa.
+                                                    </p>
                                                 </div>
                                                 <div>
                                                     <label className="block text-xs text-gray-500 mb-1">Cidade 🔒</label>
