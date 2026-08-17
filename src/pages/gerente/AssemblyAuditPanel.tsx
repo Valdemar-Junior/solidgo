@@ -1,5 +1,16 @@
 import { useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, CheckCircle2, Clock, Hammer, Loader2, PackageSearch, RefreshCw, XCircle } from 'lucide-react';
+import {
+  AlertTriangle,
+  CheckCircle2,
+  Clock,
+  FileText,
+  Hammer,
+  Loader2,
+  Lock,
+  PackageSearch,
+  RefreshCw,
+  XCircle,
+} from 'lucide-react';
 import { supabase } from '../../supabase/client';
 import type { OrderItem } from '../../types/database';
 import { toast } from 'sonner';
@@ -31,6 +42,8 @@ type LocalOrder = {
   order_id_erp: string;
   status: string | null;
   items_json: OrderItem[] | null;
+  observacoes_internas: string | null;
+  observacoes_publicas: string | null;
 };
 
 type AuditRecord = {
@@ -78,6 +91,27 @@ function normalizeSku(value: unknown) {
   return String(value ?? '').trim().toUpperCase();
 }
 
+/** O ERP devolve textos como "SEM OBSERVACAO" quando o campo esta vazio; tratamos como vazio. */
+const EMPTY_OBSERVATION_TEXTS = ['', '-', 'sem observacao', 'sem observação', 'sem obs', 'null'];
+
+function cleanObservation(value?: string | null) {
+  const raw = String(value ?? '').trim();
+  if (EMPTY_OBSERVATION_TEXTS.includes(raw.toLowerCase())) return '';
+  return raw;
+}
+
+/**
+ * "*montagem*" na observacao interna e a marca usada nas vendas de e-commerce: ela serve para
+ * MARCAR que o produto tem montagem (na importacao, em RouteCreation, virando has_assembly).
+ * Quem GERA os cards de montagem e a finalizacao da rota pelo motorista, via
+ * sync_missing_assembly_products_for_order, que le apenas has_assembly nos itens.
+ * Logo, na auditoria a keyword e so o indicio da intencao; o que garante montagem e o item
+ * marcado, porque e nele que a finalizacao da rota vai olhar.
+ */
+function hasAssemblyKeyword(...values: Array<string | null | undefined>) {
+  return /\*\s*montagem\s*\*/i.test(values.filter(Boolean).join(' '));
+}
+
 function getItemSku(item: OrderItem | any) {
   return normalizeSku(item?.sku || item?.codigo || item?.codigo_produto || 'SKU-INDEF');
 }
@@ -105,6 +139,47 @@ function extractSkusFromErpText(value?: string | null): string[] {
       return match ? normalizeSku(match[1]) : '';
     })
     .filter(Boolean);
+}
+
+/**
+ * covered            -> todos os produtos apontados pelo ERP ja estao marcados com montagem
+ *                       no SolidGo. Nao foi esquecimento: nao precisa de decisao do gerente.
+ * keyword_uncovered  -> a observacao pede montagem, mas ha produto sem a marcacao. Como a
+ *                       finalizacao da rota gera os cards a partir dos produtos marcados,
+ *                       esse produto passaria batido. E o caso mais grave da tela.
+ * pending            -> caso comum, precisa da decisao do gerente.
+ * no_order           -> pedido ainda nao importado, nao da para avaliar.
+ */
+type CoverageStatus = 'covered' | 'keyword_uncovered' | 'pending' | 'no_order';
+
+type Coverage = {
+  status: CoverageStatus;
+  erpSkus: string[];
+  uncoveredSkus: string[];
+  keyword: boolean;
+};
+
+function evaluateCoverage(row: ErpSaleRow, order: LocalOrder | undefined | null, keyword: boolean): Coverage {
+  const erpSkus = Array.from(new Set(extractSkusFromErpText(row.produtos_sem_montagem)));
+
+  if (!order) {
+    return { status: 'no_order', erpSkus, uncoveredSkus: erpSkus, keyword };
+  }
+
+  const items = Array.isArray(order.items_json) ? order.items_json : [];
+  const markedSkus = new Set(items.filter(itemAlreadyHasAssembly).map(getItemSku));
+  const uncoveredSkus = erpSkus.filter((sku) => !markedSkus.has(sku));
+
+  // Sem SKU legivel no texto do ERP nao ha como afirmar cobertura: mantemos na fila por seguranca.
+  if (erpSkus.length > 0 && uncoveredSkus.length === 0) {
+    return { status: 'covered', erpSkus, uncoveredSkus, keyword };
+  }
+
+  if (keyword) {
+    return { status: 'keyword_uncovered', erpSkus, uncoveredSkus, keyword };
+  }
+
+  return { status: 'pending', erpSkus, uncoveredSkus, keyword };
 }
 
 function chunkArray<T>(items: T[], size: number): T[][] {
@@ -157,7 +232,7 @@ export default function AssemblyAuditPanel() {
   const [auditByErp, setAuditByErp] = useState<Record<string, AuditRecord>>({});
   const [ordersLookupFailed, setOrdersLookupFailed] = useState(false);
   const [auditLookupFailed, setAuditLookupFailed] = useState(false);
-  const [statusFilter, setStatusFilter] = useState<'pending' | 'all'>('pending');
+  const [statusFilter, setStatusFilter] = useState<'pending' | 'covered' | 'all'>('pending');
   const [modal, setModal] = useState<ModalState>(null);
   const [saving, setSaving] = useState(false);
 
@@ -183,7 +258,10 @@ export default function AssemblyAuditPanel() {
 
     for (const chunk of chunkArray(uniqueIds, 200)) {
       const [ordersResult, auditResult] = await Promise.all([
-        supabase.from('orders').select('id, order_id_erp, status, items_json').in('order_id_erp', chunk),
+        supabase
+          .from('orders')
+          .select('id, order_id_erp, status, items_json, observacoes_internas, observacoes_publicas')
+          .in('order_id_erp', chunk),
         supabase
           .from('assembly_audit_records')
           .select('order_id_erp, decision, notes, assembly_applied, assembly_products_created, pending_reason, decided_at, decided_by_user_id')
@@ -268,34 +346,79 @@ export default function AssemblyAuditPanel() {
     // Carrega apenas na primeira montagem; as demais consultas sao manuais.
   }, []);
 
-  const visibleRows = useMemo(() => {
-    return rows.filter((row) => {
+  /**
+   * Uma unica passada calcula tudo o que a tela precisa por venda: observacoes,
+   * indicio da keyword e se a montagem ja esta garantida. Evita recalcular no render.
+   */
+  const contextByErp = useMemo(() => {
+    const map: Record<string, { observacoes: string; observacoesInternas: string; coverage: Coverage }> = {};
+
+    rows.forEach((row) => {
       const erpId = String(row.pedido ?? '').trim();
-      if (statusFilter === 'pending') return !auditByErp[erpId];
+      const order = ordersByErp[erpId];
+      const observacoes = cleanObservation(row.observacoes_venda) || cleanObservation(order?.observacoes_publicas);
+      // O webhook do ERP pode nao trazer a obs interna; nesse caso usamos a do pedido importado.
+      const observacoesInternas =
+        cleanObservation(row.observacoes_internas) || cleanObservation(order?.observacoes_internas);
+      const keyword = hasAssemblyKeyword(observacoes, observacoesInternas);
+
+      map[erpId] = { observacoes, observacoesInternas, coverage: evaluateCoverage(row, order, keyword) };
+    });
+
+    return map;
+  }, [rows, ordersByErp]);
+
+  const visibleRows = useMemo(() => {
+    const filtered = rows.filter((row) => {
+      const erpId = String(row.pedido ?? '').trim();
+      const status = contextByErp[erpId]?.coverage.status;
+
+      // Montagem ja garantida nao e esquecimento: sai da fila de decisao.
+      if (statusFilter === 'pending') return !auditByErp[erpId] && status !== 'covered';
+      if (statusFilter === 'covered') return status === 'covered';
       return true;
     });
-  }, [rows, auditByErp, statusFilter]);
+
+    // A observacao que promete montagem sem item marcado vai para o topo: e o risco real.
+    return filtered
+      .map((row, index) => ({ row, index }))
+      .sort((a, b) => {
+        const rank = (row: ErpSaleRow) =>
+          contextByErp[String(row.pedido ?? '').trim()]?.coverage.status === 'keyword_uncovered' ? 0 : 1;
+        return rank(a.row) - rank(b.row) || a.index - b.index;
+      })
+      .map((entry) => entry.row);
+  }, [rows, auditByErp, statusFilter, contextByErp]);
 
   const summary = useMemo(() => {
     let pending = 0;
     let audited = 0;
     let notImported = 0;
+    let covered = 0;
+    let atRisk = 0;
     let pendingValue = 0;
 
     rows.forEach((row) => {
       const erpId = String(row.pedido ?? '').trim();
+      const status = contextByErp[erpId]?.coverage.status;
+
+      if (status === 'covered') {
+        covered += 1;
+        return;
+      }
       if (auditByErp[erpId]) {
         audited += 1;
         return;
       }
+      if (status === 'keyword_uncovered') atRisk += 1;
       pending += 1;
       if (!ordersByErp[erpId]) notImported += 1;
       const value = Number(String(row.valor_pedido ?? '').replace(',', '.'));
       if (Number.isFinite(value)) pendingValue += value;
     });
 
-    return { pending, audited, notImported, pendingValue, total: rows.length };
-  }, [rows, auditByErp, ordersByErp]);
+    return { pending, audited, notImported, covered, atRisk, pendingValue, total: rows.length };
+  }, [rows, auditByErp, ordersByErp, contextByErp]);
 
   const openModal = (row: ErpSaleRow) => {
     const erpId = String(row.pedido ?? '').trim();
@@ -410,16 +533,18 @@ export default function AssemblyAuditPanel() {
           </div>
           <select
             value={statusFilter}
-            onChange={(event) => setStatusFilter(event.target.value as 'pending' | 'all')}
+            onChange={(event) => setStatusFilter(event.target.value as 'pending' | 'covered' | 'all')}
             className="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
           >
-            <option value="pending">Somente nao auditados</option>
+            <option value="pending">Precisam de decisao</option>
+            <option value="covered">Montagem ja garantida</option>
             <option value="all">Todos do periodo</option>
           </select>
         </div>
         <p className="mt-4 text-sm text-gray-500">
           Vendas das ultimas 48 horas em que o vendedor nao marcou montagem no ERP. Nem toda venda desta lista precisa de
-          montagem — voce decide caso a caso.
+          montagem — voce decide caso a caso. Vendas cujos produtos ja estao marcados com montagem no SolidGo (caso comum
+          do e-commerce) saem da fila e ficam em "Montagem ja garantida".
         </p>
       </div>
 
@@ -437,10 +562,32 @@ export default function AssemblyAuditPanel() {
         </div>
       )}
 
-      <div className="grid gap-4 md:grid-cols-4">
+      {summary.atRisk > 0 && (
+        <div className="flex items-start gap-3 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">
+          <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" />
+          <div>
+            <p className="font-semibold">
+              {summary.atRisk === 1
+                ? '1 venda promete montagem na observacao, mas o produto nao esta marcado.'
+                : `${summary.atRisk} vendas prometem montagem na observacao, mas os produtos nao estao marcados.`}
+            </p>
+            <p className="mt-1">
+              A montagem e gerada quando o motorista finaliza a rota, e ela olha os produtos marcados. Sem a marcacao, o
+              produto passa batido e o card nao nasce. Elas estao no topo da lista.
+            </p>
+          </div>
+        </div>
+      )}
+
+      <div className="grid gap-4 md:grid-cols-5">
         <div className="rounded-2xl border border-amber-200 bg-amber-50 p-5">
-          <p className="text-xs font-semibold uppercase tracking-wider text-amber-600">Aguardando auditoria</p>
+          <p className="text-xs font-semibold uppercase tracking-wider text-amber-600">Precisam de decisao</p>
           <p className="mt-2 text-3xl font-bold text-amber-700">{summary.pending}</p>
+        </div>
+        <div className="rounded-2xl border border-blue-200 bg-blue-50 p-5">
+          <p className="text-xs font-semibold uppercase tracking-wider text-blue-600">Montagem ja garantida</p>
+          <p className="mt-2 text-3xl font-bold text-blue-700">{summary.covered}</p>
+          <p className="mt-1 text-xs text-blue-600">Produtos ja marcados no SolidGo.</p>
         </div>
         <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-5">
           <p className="text-xs font-semibold uppercase tracking-wider text-emerald-600">Ja auditadas</p>
@@ -468,18 +615,32 @@ export default function AssemblyAuditPanel() {
           <div className="rounded-2xl border border-dashed border-gray-300 bg-white p-10 text-center text-gray-500 shadow-sm">
             <CheckCircle2 className="mx-auto mb-3 h-10 w-10 text-emerald-500" />
             <p className="font-medium text-gray-900">
-              {hasLoadedOnce
-                ? 'Nenhuma venda pendente de auditoria nas ultimas 48 horas.'
-                : 'Clique em Atualizar para consultar o ERP.'}
+              {!hasLoadedOnce
+                ? 'Clique em Atualizar para consultar o ERP.'
+                : statusFilter === 'covered'
+                  ? 'Nenhuma venda com montagem ja garantida nas ultimas 48 horas.'
+                  : 'Nenhuma venda precisa de decisao nas ultimas 48 horas.'}
             </p>
+            {hasLoadedOnce && statusFilter === 'pending' && summary.covered > 0 && (
+              <p className="mt-2 text-sm text-gray-500">
+                {summary.covered === 1
+                  ? '1 venda ficou fora da fila porque a montagem ja esta garantida.'
+                  : `${summary.covered} vendas ficaram fora da fila porque a montagem ja esta garantida.`}{' '}
+                Use o filtro "Montagem ja garantida" para conferir.
+              </p>
+            )}
           </div>
         ) : (
           visibleRows.map((row) => {
             const erpId = String(row.pedido ?? '').trim();
             const order = ordersByErp[erpId];
             const audit = auditByErp[erpId];
-            const observacoes = String(row.observacoes_venda || '');
-            const looksLikeNoAssembly = /sem\s+montagem/i.test(observacoes);
+            const context = contextByErp[erpId];
+            const observacoes = context?.observacoes || '';
+            const observacoesInternas = context?.observacoesInternas || '';
+            const coverage = context?.coverage;
+            const keywordMontagem = coverage?.keyword ?? false;
+            const looksLikeNoAssembly = !keywordMontagem && /sem\s+montagem/i.test(`${observacoes} ${observacoesInternas}`);
 
             return (
               <div key={erpId} className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
@@ -503,6 +664,24 @@ export default function AssemblyAuditPanel() {
                       ) : (
                         <span className="rounded-full bg-gray-100 px-3 py-1 text-xs font-semibold text-gray-600">
                           Nao importado
+                        </span>
+                      )}
+                      {coverage?.status === 'covered' && (
+                        <span className="inline-flex items-center rounded-full bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
+                          <CheckCircle2 className="mr-1 h-3 w-3" />
+                          Montagem ja garantida
+                        </span>
+                      )}
+                      {coverage?.status === 'keyword_uncovered' && (
+                        <span className="inline-flex items-center rounded-full bg-red-50 px-3 py-1 text-xs font-semibold text-red-700">
+                          <AlertTriangle className="mr-1 h-3 w-3" />
+                          Obs. promete montagem sem produto marcado
+                        </span>
+                      )}
+                      {keywordMontagem && coverage?.status !== 'keyword_uncovered' && (
+                        <span className="inline-flex items-center rounded-full bg-purple-50 px-3 py-1 text-xs font-semibold text-purple-700">
+                          <Hammer className="mr-1 h-3 w-3" />
+                          Observacao marca *montagem*
                         </span>
                       )}
                       {looksLikeNoAssembly && (
@@ -536,8 +715,30 @@ export default function AssemblyAuditPanel() {
                         {row.cidade ? ` - ${row.cidade}` : ''}
                         {row.cep_entrega ? ` (${row.cep_entrega})` : ''}
                       </p>
-                      {observacoes && observacoes !== 'SEM OBSERVACAO' && <p>Obs. da venda: {observacoes}</p>}
                     </div>
+
+                    {(observacoes || observacoesInternas) && (
+                      <div className="mt-3 space-y-2 rounded-xl border border-gray-200 bg-gray-50 p-3">
+                        {observacoes && (
+                          <div>
+                            <p className="flex items-center text-[11px] font-semibold uppercase tracking-wide text-gray-500">
+                              <FileText className="mr-2 h-3.5 w-3.5" />
+                              Obs. da venda
+                            </p>
+                            <p className="mt-1 whitespace-pre-line text-sm text-gray-800">{observacoes}</p>
+                          </div>
+                        )}
+                        {observacoesInternas && (
+                          <div>
+                            <p className="flex items-center text-[11px] font-semibold uppercase tracking-wide text-gray-500">
+                              <Lock className="mr-2 h-3.5 w-3.5" />
+                              Obs. interna
+                            </p>
+                            <p className="mt-1 whitespace-pre-line text-sm text-gray-800">{observacoesInternas}</p>
+                          </div>
+                        )}
+                      </div>
+                    )}
 
                     <div className="mt-3 rounded-xl border border-gray-200 bg-gray-50 p-3">
                       <p className="flex items-center text-[11px] font-semibold uppercase tracking-wide text-gray-500">
@@ -549,6 +750,29 @@ export default function AssemblyAuditPanel() {
                         {row.qtd_itens_sem_montagem || 0} item(ns) • {formatCurrency(row.valor_itens_sem_montagem)}
                       </p>
                     </div>
+
+                    {coverage?.status === 'covered' && (
+                      <div className="mt-3 rounded-xl border border-blue-200 bg-blue-50 p-3 text-xs text-blue-800">
+                        <p className="font-semibold">Nao foi esquecimento.</p>
+                        <p className="mt-1">
+                          O ERP nao marcou montagem nesses produtos, mas no SolidGo eles ja estao marcados
+                          {keywordMontagem ? ' (caso tipico do e-commerce, pela marca *montagem* na observacao)' : ''}. A
+                          montagem e gerada quando o motorista finaliza a rota, entao ela ja nasceu ou vai nascer sozinha.
+                          Nao precisa decidir nada.
+                        </p>
+                      </div>
+                    )}
+
+                    {coverage?.status === 'keyword_uncovered' && (
+                      <div className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-xs text-red-800">
+                        <p className="font-semibold">Atencao: a observacao pede montagem, mas o produto nao esta marcado.</p>
+                        <p className="mt-1">
+                          Quando o motorista finalizar a rota, a montagem sera gerada a partir dos produtos marcados — e
+                          esse ficaria de fora.
+                          {coverage.uncoveredSkus.length > 0 && ` Falta marcar: ${coverage.uncoveredSkus.join(', ')}.`}
+                        </p>
+                      </div>
+                    )}
 
                     {audit && (
                       <div className="mt-3 rounded-xl border border-gray-100 bg-white p-3 text-xs text-gray-600">
@@ -569,10 +793,14 @@ export default function AssemblyAuditPanel() {
                     <button
                       type="button"
                       onClick={() => openModal(row)}
-                      className="inline-flex w-full items-center justify-center rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700"
+                      className={`inline-flex w-full items-center justify-center rounded-xl px-4 py-2 text-sm font-semibold ${
+                        coverage?.status === 'covered'
+                          ? 'border border-gray-300 bg-white text-gray-700 hover:bg-gray-50'
+                          : 'bg-emerald-600 text-white hover:bg-emerald-700'
+                      }`}
                     >
                       <Hammer className="mr-2 h-4 w-4" />
-                      {audit ? 'Rever decisao' : 'Auditar venda'}
+                      {audit ? 'Rever decisao' : coverage?.status === 'covered' ? 'Conferir' : 'Auditar venda'}
                     </button>
                     {!order && (
                       <p className="mt-2 text-center text-xs text-gray-500">
@@ -602,6 +830,46 @@ export default function AssemblyAuditPanel() {
                 <p className="font-semibold text-gray-900">Produtos apontados pelo ERP</p>
                 <p className="mt-1">{modal.row.produtos_sem_montagem || '-'}</p>
               </div>
+
+              {(() => {
+                const obsVenda =
+                  cleanObservation(modal.row.observacoes_venda) || cleanObservation(modal.order?.observacoes_publicas);
+                const obsInterna =
+                  cleanObservation(modal.row.observacoes_internas) || cleanObservation(modal.order?.observacoes_internas);
+                if (!obsVenda && !obsInterna) return null;
+
+                return (
+                  <div className="space-y-3 rounded-xl border border-gray-200 bg-white p-4 text-sm text-gray-600">
+                    {obsVenda && (
+                      <div>
+                        <p className="flex items-center text-[11px] font-semibold uppercase tracking-wide text-gray-500">
+                          <FileText className="mr-2 h-3.5 w-3.5" />
+                          Obs. da venda
+                        </p>
+                        <p className="mt-1 whitespace-pre-line text-gray-800">{obsVenda}</p>
+                      </div>
+                    )}
+                    {obsInterna && (
+                      <div>
+                        <p className="flex items-center text-[11px] font-semibold uppercase tracking-wide text-gray-500">
+                          <Lock className="mr-2 h-3.5 w-3.5" />
+                          Obs. interna
+                        </p>
+                        <p className="mt-1 whitespace-pre-line text-gray-800">{obsInterna}</p>
+                      </div>
+                    )}
+                    {hasAssemblyKeyword(obsVenda, obsInterna) && (
+                      <div className="rounded-lg bg-purple-50 px-3 py-2 text-xs text-purple-800">
+                        <p className="font-semibold">A observacao tem a marca *montagem* (padrao do e-commerce).</p>
+                        <p className="mt-1">
+                          Ela serve para marcar que o produto tem montagem. O card e gerado quando o motorista finaliza a
+                          rota, a partir dos produtos marcados abaixo.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
 
               {!modal.order ? (
                 <div className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
