@@ -1280,7 +1280,7 @@ function RouteCreationContent() {
 
   // Table Config
   const [columnsConf, setColumnsConf] = useState<Array<{ id: string, label: string, visible: boolean }>>([
-    { id: 'data', label: 'Data', visible: true },
+    { id: 'data', label: 'Data e Hora', visible: true },
     { id: 'pedido', label: 'Pedido', visible: true },
     { id: 'previsaoEntrega', label: 'Prev. Entrega', visible: true },
     { id: 'cliente', label: 'Cliente', visible: true },
@@ -1456,7 +1456,7 @@ function RouteCreationContent() {
   useEffect(() => {
     const loadColumnsFromSupabase = async () => {
       const defaults: ColumnConfig[] = [
-        { id: 'data', label: 'Data', visible: true },
+        { id: 'data', label: 'Data e Hora', visible: true },
         { id: 'pedido', label: 'Pedido', visible: true },
         { id: 'previsaoEntrega', label: 'Prev. Entrega', visible: true },
         { id: 'cliente', label: 'Cliente', visible: true },

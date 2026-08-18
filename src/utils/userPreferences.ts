@@ -116,7 +116,9 @@ function loadFromLocalStorage<T>(key: string): T | null {
 
 /**
  * Merge saved columns configuration with defaults
- * Ensures no missing columns and preserves order/visibility from saved config
+ * Ensures no missing columns and preserves order/visibility from saved config.
+ * O label vem sempre do padrao: o usuario nao renomeia colunas na tela, entao um
+ * label salvo e apenas uma copia velha e impediria renomear a coluna no codigo.
  */
 export function mergeColumnsConfig(
     saved: ColumnConfig[] | null,
@@ -148,8 +150,7 @@ export function mergeColumnsConfig(
         if (defaultCol) {
             result.push({
                 ...defaultCol,
-                visible: col.visible,
-                label: col.label || defaultCol.label
+                visible: col.visible
             });
             addedIds.add(col.id);
         }
