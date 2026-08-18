@@ -46,11 +46,12 @@ const TIME_PARTS_FORMATTER = new Intl.DateTimeFormat('en-US', {
   timeZone: TIME_ZONE,
   hour: '2-digit',
   minute: '2-digit',
+  second: '2-digit',
   hourCycle: 'h23',
 });
 
 /**
- * 'DD/MM/AAAA HH:MM' no fuso de Brasilia.
+ * 'DD/MM/AAAA HH:MM:SS' no fuso de Brasilia.
  *
  * Pedidos importados antes de 18/08/2026 foram gravados a meia-noite, porque o ERP
  * so mandava a data. Nesses casos devolve apenas o dia, para nao exibir um '00:00'
@@ -63,9 +64,9 @@ export const formatDateTimeBR = (value: Date | string | number | null | undefine
   const dateLabel = formatDateBR(date);
   const parts = TIME_PARTS_FORMATTER.formatToParts(date);
   const pick = (type: string) => parts.find((part) => part.type === type)?.value ?? '';
-  const timeLabel = `${pick('hour')}:${pick('minute')}`;
+  const timeLabel = `${pick('hour')}:${pick('minute')}:${pick('second')}`;
 
-  return timeLabel === '00:00' ? dateLabel : `${dateLabel} ${timeLabel}`;
+  return timeLabel === '00:00:00' ? dateLabel : `${dateLabel} ${timeLabel}`;
 };
 
 /** Instante ISO da meia-noite de Brasilia daquele dia (para filtros do Supabase). */

@@ -602,15 +602,15 @@ function RouteCreationContent() {
   const sortedRows = useMemo(() => {
     if (!sortColumn) return filteredRows;
 
-    // Aceita 'DD/MM/AAAA' e 'DD/MM/AAAA HH:MM' (pedidos novos trazem a hora da venda).
+    // Aceita 'DD/MM/AAAA' e 'DD/MM/AAAA HH:MM:SS' (pedidos novos trazem a hora da venda).
     const parseDateStr = (str: string) => {
       if (!str || str === '-') return 0;
       try {
         const [datePart, timePart] = String(str).trim().split(' ');
         const [d, m, y] = datePart.split('/').map(Number);
         if (!d || !m || !y) return 0;
-        const [hh, mm] = String(timePart || '').split(':').map(Number);
-        return new Date(y, m - 1, d, hh || 0, mm || 0).getTime();
+        const [hh, mm, ss] = String(timePart || '').split(':').map(Number);
+        return new Date(y, m - 1, d, hh || 0, mm || 0, ss || 0).getTime();
       } catch { return 0; }
     };
 
