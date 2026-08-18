@@ -1,5 +1,6 @@
 import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
 import { fitTextSafe, sanitizePdfText } from './pdfTextSanitizer';
+import { formatDateBR, toDateBR, todayBR } from '../dateBR';
 
 export interface AssemblyOperationalReportFilters {
   includeCompleted?: boolean;
@@ -101,15 +102,7 @@ export class AssemblyOperationalReportGenerator {
         return `${day}/${month}/${year}`;
       }
 
-      const isoMatch = normalizedValue.match(/^(\d{4})-(\d{2})-(\d{2})T/);
-      if (isoMatch) {
-        const [, year, month, day] = isoMatch;
-        return `${day}/${month}/${year}`;
-      }
-
-      const date = new Date(normalizedValue);
-      if (Number.isNaN(date.getTime())) return '-';
-      return date.toLocaleDateString('pt-BR');
+      return formatDateBR(normalizedValue);
     };
 
     const formatDateTime = (value?: string | null) => {
@@ -120,28 +113,19 @@ export class AssemblyOperationalReportGenerator {
     };
 
     const isOverdue = (value?: string | null) => {
-      if (!value) return false;
-      const date = new Date(value);
-      if (Number.isNaN(date.getTime())) return false;
+      const forecastDate = toDateBR(value);
+      if (!forecastDate) return false;
 
-      const forecastDate = date.toISOString().slice(0, 10);
-      const today = new Date();
-      const todayDate = new Date(today.getFullYear(), today.getMonth(), today.getDate())
-        .toISOString()
-        .slice(0, 10);
-
-      return forecastDate < todayDate;
+      return forecastDate < todayBR();
     };
 
     const toDateOnly = (value?: string | null) => {
       if (!value) return null;
       const normalizedValue = String(value).trim();
-      const isoDate = normalizedValue.match(/^(\d{4}-\d{2}-\d{2})/);
+      const isoDate = normalizedValue.match(/^(\d{4}-\d{2}-\d{2})$/);
       if (isoDate) return isoDate[1];
 
-      const date = new Date(normalizedValue);
-      if (Number.isNaN(date.getTime())) return null;
-      return date.toISOString().slice(0, 10);
+      return toDateBR(normalizedValue) || null;
     };
 
     const getDeadlineStatus = (row: AssemblyOperationalReportRow) => {

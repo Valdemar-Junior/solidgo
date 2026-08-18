@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { supabase } from '../../supabase/client';
+import { startOfDayBR } from '../../utils/dateBR';
 import {
   BarChart,
   Bar,
@@ -68,7 +69,7 @@ export default function AdminDashboard() {
   const loadDashboardData = async () => {
     try {
       setLoading(true);
-      const today = new Date().toISOString().split('T')[0];
+      const today = startOfDayBR();
 
       // KPI Cards
       const [
@@ -110,10 +111,10 @@ export default function AdminDashboard() {
       for (let i = 6; i >= 0; i--) {
         const d = new Date(now);
         d.setDate(now.getDate() - i);
-        const dayStr = d.toISOString().split('T')[0];
+        const dayStr = startOfDayBR(d);
         const nextDay = new Date(d);
         nextDay.setDate(d.getDate() + 1);
-        const nextDayStr = nextDay.toISOString().split('T')[0];
+        const nextDayStr = startOfDayBR(nextDay);
 
         const [{ count: del }, { count: pen }] = await Promise.all([
           supabase.from('route_orders').select('*', { count: 'exact', head: true }).eq('status', 'delivered').gte('delivered_at', dayStr).lt('delivered_at', nextDayStr),

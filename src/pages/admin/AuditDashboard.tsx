@@ -1,6 +1,7 @@
 ﻿
 import React, { useEffect, useState } from 'react';
 import { supabase } from '../../supabase/client';
+import { todayBR } from '../../utils/dateBR';
 import { toast } from 'sonner';
 import { CheckCircle2, AlertTriangle, AlertOctagon, RefreshCw, ArrowLeft, Search, Save, Truck, Hammer, History, ClipboardList, ShoppingBag, Route } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
@@ -55,10 +56,10 @@ export default function AuditDashboard() {
     const [routeChanging, setRouteChanging] = useState(false);
     const [assemblyAuditLoading, setAssemblyAuditLoading] = useState(false);
     const [assemblyPeriodStart, setAssemblyPeriodStart] = useState(() => {
-        return new Date().toISOString().slice(0, 10);
+        return todayBR();
     });
     const [assemblyPeriodEnd, setAssemblyPeriodEnd] = useState(() => {
-        return new Date().toISOString().slice(0, 10);
+        return todayBR();
     });
     const [assemblyOverview, setAssemblyOverview] = useState({
         delivered_orders: 0,
@@ -400,8 +401,8 @@ export default function AuditDashboard() {
     };
 
     const getAssemblyPeriodRange = () => {
-        const startValue = assemblyPeriodStart || new Date().toISOString().slice(0, 10);
-        const endValue = assemblyPeriodEnd || new Date().toISOString().slice(0, 10);
+        const startValue = assemblyPeriodStart || todayBR();
+        const endValue = assemblyPeriodEnd || todayBR();
         const start = new Date(`${startValue}T00:00:00`);
         const end = new Date(`${endValue}T23:59:59.999`);
 

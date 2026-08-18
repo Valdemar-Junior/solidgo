@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, Loader2, MapPin, Phone, Search, Truck, Hammer, FileText, FileSpreadsheet, AlertTriangle, LogOut, Eye, ChevronDown, ChevronUp, Copy, Check, Briefcase } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../../supabase/client';
+import { formatDateTimeBR } from '../../utils/dateBR';
 import { useAuthStore } from '../../stores/authStore';
 import type { Order, OrderWithdrawal, StoreReleaseAssignment, StoreReleaseHistory } from '../../types/database';
 import { toast } from 'sonner';
@@ -1476,7 +1477,7 @@ export default function OrderLookup() {
                     const raw = selectedOrder.raw_json || {};
                     const saleDate = (selectedOrder as any).data_venda || raw.data_venda;
                     if (!saleDate) return null;
-                    return <span className="px-2 py-1 rounded-full bg-gray-100 text-gray-700 border border-gray-200 font-medium">Venda: {formatDate(saleDate)}</span>;
+                    return <span className="px-2 py-1 rounded-full bg-gray-100 text-gray-700 border border-gray-200 font-medium">Venda: {formatDateTimeBR(saleDate)}</span>;
                   })()}
                   {(() => {
                     const raw = selectedOrder.raw_json || {};

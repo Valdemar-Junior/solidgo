@@ -3,6 +3,7 @@ import { ArrowLeft, CalendarRange, FileSpreadsheet, Hammer, Loader2, MapPin, Rot
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { supabase } from '../../supabase/client';
+import { toDateBR, todayBR } from '../../utils/dateBR';
 import { MultiSelect } from '../../components/ui/MultiSelect';
 import { DeliverySheetGenerator } from '../../utils/pdf/deliverySheetGenerator';
 import {
@@ -102,7 +103,7 @@ type AssemblyPendingProductRow = {
   } | null;
 };
 
-const getToday = () => new Date().toISOString().slice(0, 10);
+const getToday = () => todayBR();
 
 const createInitialFilters = (): FiltersState => {
   const today = getToday();
@@ -906,9 +907,8 @@ function matchesPendingDate(value: string | null | undefined, start: string, end
   if (!start && !end) return true;
   if (!value) return true;
 
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return true;
-  const dateOnly = parsed.toISOString().slice(0, 10);
+  const dateOnly = toDateBR(value);
+  if (!dateOnly) return true;
 
   if (start && dateOnly < start) return false;
   if (end && dateOnly > end) return false;

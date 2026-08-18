@@ -1,6 +1,7 @@
 ﻿import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { supabase } from '../../supabase/client';
+import { formatDateTimeBR, toDateBR, todayBR } from '../../utils/dateBR';
 import type { CarrierCity, DeliveryRouteCatalog, Order, DriverWithUser, Vehicle, RouteWithDetails, OrderWithdrawal } from '../../types/database';
 import {
   Truck,
@@ -406,9 +407,9 @@ function RouteCreationContent() {
       if (!prev) return 'none';
       // ... existing date logic check ...
       // Need to replicate the check since I am replacing the variable assignment and the check follows
-      const today = new Date().toISOString().slice(0, 10);
+      const today = todayBR();
       try {
-        const pDate = new Date(prev).toISOString().slice(0, 10);
+        const pDate = toDateBR(prev);
         return pDate < today ? 'out' : 'within';
       } catch { return 'none'; }
     };
@@ -430,7 +431,7 @@ function RouteCreationContent() {
       const saleDateRaw = o.data_venda || raw.data_venda;
       if (saleDateRaw) {
         try {
-          saleDateStr = new Date(saleDateRaw).toISOString().slice(0, 10);
+          saleDateStr = toDateBR(saleDateRaw);
         } catch { }
       }
 
@@ -553,7 +554,7 @@ function RouteCreationContent() {
         const v: any = {};
         // Populate values map for easy sorting access
         v['pedido'] = o.order_id_erp || raw?.lancamento_venda || o.id.slice(0, 8);
-        v['data'] = formatDate(o.data_venda || raw?.data_venda);
+        v['data'] = formatDateTimeBR(o.data_venda || raw?.data_venda);
         v['cliente'] = o.customer_name || raw?.destinatario_nome || '-';
         v['cpf'] = o.customer_cpf || raw?.cpf_cnpj || '-';
         v['telefone'] = o.phone || raw?.destinatario_telefone || '-';
@@ -601,11 +602,15 @@ function RouteCreationContent() {
   const sortedRows = useMemo(() => {
     if (!sortColumn) return filteredRows;
 
+    // Aceita 'DD/MM/AAAA' e 'DD/MM/AAAA HH:MM' (pedidos novos trazem a hora da venda).
     const parseDateStr = (str: string) => {
       if (!str || str === '-') return 0;
       try {
-        const [d, m, y] = str.split('/').map(Number);
-        return new Date(y, m - 1, d).getTime();
+        const [datePart, timePart] = String(str).trim().split(' ');
+        const [d, m, y] = datePart.split('/').map(Number);
+        if (!d || !m || !y) return 0;
+        const [hh, mm] = String(timePart || '').split(':').map(Number);
+        return new Date(y, m - 1, d, hh || 0, mm || 0).getTime();
       } catch { return 0; }
     };
 
@@ -4099,9 +4104,9 @@ function RouteCreationContent() {
                     const getPrazoStatusForOrder = (ord: any) => {
                       const p = ord.previsao_entrega || ord.raw_json?.previsao_entrega || ord.raw_json?.data_prevista_entrega;
                       if (!p) return 'none';
-                      const today = new Date().toISOString().slice(0, 10);
+                      const today = todayBR();
                       try {
-                        const pd = new Date(p).toISOString().slice(0, 10);
+                        const pd = toDateBR(p);
                         return pd < today ? 'out' : 'within';
                       } catch { return 'none'; }
                     };

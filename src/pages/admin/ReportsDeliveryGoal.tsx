@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { MultiSelect } from '../../components/ui/MultiSelect';
 import { supabase } from '../../supabase/client';
+import { toDateBR, todayBR } from '../../utils/dateBR';
 import { DeliverySheetGenerator } from '../../utils/pdf/deliverySheetGenerator';
 import {
   DeliveryGoalReportGenerator,
@@ -64,8 +65,8 @@ const PERFORMANCE_PERCENT_TARGET = 90;
 const WEEKLY_TARGET = 120;
 
 const createInitialFilters = (): FiltersState => ({
-  startDate: new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().slice(0, 10),
-  endDate: new Date().toISOString().slice(0, 10),
+  startDate: toDateBR(new Date(new Date().getFullYear(), new Date().getMonth(), 1)),
+  endDate: todayBR(),
   viewModes: ['driver', 'helper'],
   personIds: [],
 });
