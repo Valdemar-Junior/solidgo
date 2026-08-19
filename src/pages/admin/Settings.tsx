@@ -53,6 +53,8 @@ export default function Settings() {
   const [deliveryProofRequireGps, setDeliveryProofRequireGps] = useState(false);
   const [storeReleaseControlEnabled, setStoreReleaseControlEnabled] = useState(false);
   const [storeReleaseOnlyDisassemblable, setStoreReleaseOnlyDisassemblable] = useState(true);
+  // Configuracao de NF (DANFE): logo da empresa em base64 (sem prefixo data:).
+  const [nfLogoBase64, setNfLogoBase64] = useState<string>('');
 
   // State for Logistics
   const [ruralKeywords, setRuralKeywords] = useState<string[]>([]);
@@ -77,7 +79,7 @@ export default function Settings() {
   const load = async () => {
     try {
       setLoading(true);
-      const [p, n, nd, m, g, l, am, confFlag, updateFlag, photoFlag, deliveryPhotoFlag, deliveryProofFlag, ruralKeys, generalDeadlines, storeReleaseFlag] = await Promise.all([
+      const [p, n, nd, m, g, l, am, confFlag, updateFlag, photoFlag, deliveryPhotoFlag, deliveryProofFlag, ruralKeys, generalDeadlines, storeReleaseFlag, nfConfigFlag] = await Promise.all([
         getUrl('envia_pedidos'),
         getUrl('gera_nf'),
         getUrl('gera_nf_devolucao'),
@@ -93,6 +95,7 @@ export default function Settings() {
         supabase.from('app_settings').select('value').eq('key', 'rural_keywords').maybeSingle(),
         supabase.from('app_settings').select('value').eq('key', 'general_deadlines').maybeSingle(),
         supabase.from('app_settings').select('value').eq('key', 'store_release_control').maybeSingle(),
+        supabase.from('app_settings').select('value').eq('key', 'nf_config').maybeSingle(),
       ]);
       setEnviaPedidos(p || '');
       setGeraNf(n || '');
@@ -131,6 +134,9 @@ export default function Settings() {
       setStoreReleaseControlEnabled(storeRelease?.enabled === true);
       setStoreReleaseOnlyDisassemblable(storeRelease?.only_block_disassemblable_items !== false);
 
+      const nfConfig = (nfConfigFlag.data as any)?.value || {};
+      setNfLogoBase64(String(nfConfig?.logoBase64 || ''));
+
     } catch {
       toast.error('Erro ao carregar configuracoes');
     } finally {
@@ -153,6 +159,26 @@ export default function Settings() {
     setRuralKeywords(ruralKeywords.filter(k => k !== keyword));
   };
 
+
+  const handleNfLogoUpload = (file: File | null) => {
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      toast.error('Selecione uma imagem (PNG ou JPG).');
+      return;
+    }
+    if (file.size > 1024 * 1024) {
+      toast.error('Logo muito grande (max. 1MB). Reduza a imagem.');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result || '');
+      const raw = result.includes(',') ? result.split(',')[1] : result; // tira "data:image/...;base64,"
+      setNfLogoBase64(raw);
+    };
+    reader.onerror = () => toast.error('Falha ao ler a imagem.');
+    reader.readAsDataURL(file);
+  };
 
   const save = async () => {
     try {
@@ -236,6 +262,13 @@ export default function Settings() {
         updated_at: new Date().toISOString()
       }], { onConflict: 'key' });
       if (generalErr) throw generalErr;
+
+      const { error: nfErr } = await supabase.from('app_settings').upsert([{
+        key: 'nf_config',
+        value: { logoBase64: nfLogoBase64 || '' },
+        updated_at: new Date().toISOString()
+      }], { onConflict: 'key' });
+      if (nfErr) throw nfErr;
 
       const { error: syncStoreReleaseErr } = await supabase.rpc('sync_store_release_for_open_orders');
       if (syncStoreReleaseErr) {
@@ -591,6 +624,48 @@ export default function Settings() {
                   </div>
                 </div>
 
+              </div>
+
+              {/* Configuracao de NF (DANFE) */}
+              <div className="bg-white rounded-xl border border-gray-200 p-6">
+                <h3 className="font-bold text-gray-900 mb-1">Configuracao de NF (DANFE)</h3>
+                <p className="text-sm text-gray-600 mb-3">
+                  Logo da empresa que aparece na nota fiscal. Envie um PNG ou JPG &mdash; o sistema guarda e usa automaticamente ao gerar a DANFE.
+                </p>
+                <div className="flex items-center gap-4">
+                  <div className="h-20 w-40 flex items-center justify-center rounded-lg border border-gray-200 bg-gray-50 overflow-hidden">
+                    {nfLogoBase64 ? (
+                      <img
+                        src={`data:image/${nfLogoBase64.startsWith('/9j/') ? 'jpeg' : 'png'};base64,${nfLogoBase64}`}
+                        alt="Logo da nota fiscal"
+                        className="max-h-full max-w-full object-contain"
+                      />
+                    ) : (
+                      <span className="text-xs text-gray-400">Sem logo</span>
+                    )}
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <label className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-300 text-sm font-medium text-gray-700 hover:bg-gray-50 cursor-pointer">
+                      <input
+                        type="file"
+                        accept="image/png,image/jpeg"
+                        className="hidden"
+                        onChange={(e) => handleNfLogoUpload(e.target.files?.[0] || null)}
+                      />
+                      {nfLogoBase64 ? 'Trocar logo' : 'Enviar logo'}
+                    </label>
+                    {nfLogoBase64 && (
+                      <button
+                        type="button"
+                        onClick={() => setNfLogoBase64('')}
+                        className="text-xs text-red-600 hover:underline text-left"
+                      >
+                        Remover logo
+                      </button>
+                    )}
+                  </div>
+                </div>
+                <p className="text-xs text-gray-400 mt-2">Depois de enviar, clique em "Salvar Tudo" abaixo.</p>
               </div>
 
               <div className="flex justify-end">

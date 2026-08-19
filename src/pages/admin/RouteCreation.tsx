@@ -1,6 +1,7 @@
 ﻿import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { supabase } from '../../supabase/client';
+import { generateDanfeBase64 } from '../../utils/danfe/generateDanfe';
 import { formatDateTimeBR, toDateBR, todayBR } from '../../utils/dateBR';
 import type { CarrierCity, DeliveryRouteCatalog, Order, DriverWithUser, Vehicle, RouteWithDetails, OrderWithdrawal } from '../../types/database';
 import {
@@ -2103,28 +2104,6 @@ function RouteCreationContent() {
     });
   };
 
-  const resolveDanfeWebhookUrl = async (isReturnDanfe: boolean) => {
-    const fallbackUrl = isReturnDanfe
-      ? 'https://n8n.lojaodosmoveis.shop/webhook/gera_nf_devolucao'
-      : 'https://n8n.lojaodosmoveis.shop/webhook/gera_nf';
-    const settingKeys = isReturnDanfe ? ['gera_nf_devolucao', 'gera_nf'] : ['gera_nf'];
-
-    for (const key of settingKeys) {
-      try {
-        const { data } = await supabase
-          .from('webhook_settings')
-          .select('url')
-          .eq('key', key)
-          .eq('active', true)
-          .single();
-
-        if (data?.url) return String(data.url);
-      } catch { }
-    }
-
-    return fallbackUrl;
-  };
-
   const mapOrderToDeliverySheetOrder = (
     order: any,
     routeOrder: any,
@@ -3348,12 +3327,10 @@ function RouteCreationContent() {
         if (c) conferenteName = c.name;
       }
 
-      // 1. Gerar DANFE da nota de devoluÃ§Ã£o via webhook
+      // 1. Gerar DANFE da nota de devolução (desativado: a DANFE sai na rota de coleta)
       toast.info('Gerando nota fiscal de devolução...');
 
-      const nfWebhook = await resolveDanfeWebhookUrl(true);
-
-      // Usar o XML de devoluÃ§Ã£o que veio do ERP
+      // Usar o XML de devolução que veio do ERP
       const xmlDevolucao = String(order.return_nfe_xml || '');
       if (!xmlDevolucao) {
         toast.warning('XML de devolução não encontrado. Continuando sem DANFE.');
@@ -3362,32 +3339,8 @@ function RouteCreationContent() {
       let danfeBase64 = String(order.return_danfe_base64 || '');
       const shouldGenerateDanfeOnPickupCreation = false;
       if (shouldGenerateDanfeOnPickupCreation && xmlDevolucao && !danfeBase64.startsWith('JVBER')) {
-        try {
-          const resp = await fetch(nfWebhook, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              route_id: `COLETA-${order.order_id_erp}`,
-              documentos: [{ order_id: order.id, numero: order.return_nfe_number || order.order_id_erp, xml: xmlDevolucao }],
-              count: 1,
-              tipo: 'devolucao'
-            })
-          });
-          if (resp.ok) {
-            const payload = await resp.json();
-            const items = Array.isArray(payload) ? payload : [payload];
-            if (items[0]?.pdf_base64) {
-              danfeBase64 = items[0].pdf_base64;
-            } else if (typeof payload?.data === 'string' && payload.data.startsWith('JVBER')) {
-              danfeBase64 = payload.data;
-            } else if (Array.isArray(payload?.documentos)) {
-              const item = payload.documentos.find((entry: any) => String(entry?.order_id) === String(order.id));
-              if (item?.data?.startsWith('JVBER')) danfeBase64 = item.data;
-            }
-          }
-        } catch (e) {
-          console.warn('Falha ao gerar DANFE de devoluÃ§Ã£o:', e);
-        }
+        const gerada = await generateDanfeBase64(xmlDevolucao);
+        if (gerada.startsWith('JVBER')) danfeBase64 = gerada;
       }
 
       // 2. CRIAR NOVO PEDIDO DE COLETA (Prefixo C-)
@@ -6204,23 +6157,21 @@ function RouteCreationContent() {
                             return { order_id: ro.order_id, numero: String(ro.order?.order_id_erp || ro.order_id || ''), xml: xmlText };
                           }).filter((d: any) => d.xml && d.xml.includes('<'));
                           if (docs.length === 0) { toast.error('Nenhum XML encontrado nos pedidos faltantes'); setNfLoading(false); return; }
-                          const nfWebhook = await resolveDanfeWebhookUrl(isPickupRoute);
-                          const bodyPayload: any = { route_id: routeId, documentos: docs, count: docs.length };
-                          if (isPickupRoute) bodyPayload.tipo = 'devolucao';
-                          const resp = await fetch(nfWebhook, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(bodyPayload) });
-                          const text = await resp.text();
-                          let payload: any = null; try { payload = JSON.parse(text); } catch { payload = { error: text }; }
-                          if (!resp.ok) { toast.error('Erro ao gerar notas fiscais'); setNfLoading(false); return; }
+                          // Gera cada DANFE via /api/danfe (mesmo endpoint pra venda e devolução), em lotes.
                           const base64List: string[] = [];
                           const mapByOrderId = new Map<string, string>();
-                          const pushData = (val: any) => { if (typeof val === 'string' && val.startsWith('JVBER')) base64List.push(val); };
-                          if (payload?.pdf) pushData(payload.pdf);
-                          if (payload?.data) pushData(payload.data);
-                          if (Array.isArray(payload?.pdfs)) payload.pdfs.forEach((b: any) => pushData(b));
-                          if (Array.isArray(payload)) payload.forEach((d: any) => { if (d?.data?.startsWith('JVBER')) pushData(d.data); if (d?.order_id && d?.data?.startsWith('JVBER')) mapByOrderId.set(String(d.order_id), d.data); });
-                          if (Array.isArray(payload?.documentos)) payload.documentos.forEach((d: any) => { if (d?.data?.startsWith('JVBER')) pushData(d.data); if (d?.order_id) mapByOrderId.set(String(d.order_id), d.data); });
-                          if (Array.isArray(payload?.arquivos)) payload.arquivos.forEach((d: any) => { if (d?.data?.startsWith('JVBER')) pushData(d.data); if (d?.order_id) mapByOrderId.set(String(d.order_id), d.data); });
-                          if (base64List.length === 0) { toast.error('Resposta não contém PDFs em base64'); setNfLoading(false); return; }
+                          const CONC = 4;
+                          for (let i = 0; i < docs.length; i += CONC) {
+                            const batch = docs.slice(i, i + CONC);
+                            await Promise.all(batch.map(async (doc: any) => {
+                              const b64 = await generateDanfeBase64(doc.xml);
+                              if (b64 && b64.startsWith('JVBER')) {
+                                base64List.push(b64);
+                                mapByOrderId.set(String(doc.order_id), b64);
+                              }
+                            }));
+                          }
+                          if (base64List.length === 0) { toast.error('Não foi possível gerar as notas fiscais (verifique o XML / serviço de DANFE)'); setNfLoading(false); return; }
                           try {
                             // Salvar DANFE no campo correto baseado no tipo de rota
                             const danfeField = isPickupRoute ? 'return_danfe_base64' : 'danfe_base64';
@@ -6776,29 +6727,8 @@ function RouteCreationContent() {
                                             return first ? (typeof first === 'string' ? first : (first?.xml || '')) : '';
                                           })());
                                       if (!xml || !xml.includes('<')) { toast.error('XML não encontrado'); return; }
-                                      const webhookUrl = await resolveDanfeWebhookUrl(isPickupDanfeRoute);
-                                      const bodyPayload: any = {
-                                        route_id: selectedRoute.id,
-                                        documentos: [{
-                                          order_id: ro.order_id,
-                                          numero: String(ro.order?.order_id_erp || ro.order_id || ''),
-                                          xml
-                                        }],
-                                        count: 1
-                                      };
-                                      if (isPickupDanfeRoute) bodyPayload.tipo = 'devolucao';
-                                      const resp = await fetch(webhookUrl, {
-                                        method: 'POST', headers: { 'Content-Type': 'application/json' },
-                                        body: JSON.stringify(bodyPayload)
-                                      });
-                                      const text = await resp.text();
-                                      let payload: any = null; try { payload = JSON.parse(text); } catch { payload = { error: text }; }
-                                      if (!resp.ok) { toast.error('Erro ao gerar DANFE'); return; }
-                                      let b64: string | null = null;
-                                      if (typeof payload?.data === 'string' && payload.data.startsWith('JVBER')) b64 = payload.data;
-                                      else if (Array.isArray(payload?.documentos)) { const item = payload.documentos.find((d: any) => String(d?.order_id) === String(ro.order_id)); if (item?.data?.startsWith('JVBER')) b64 = item.data; }
-                                      else if (Array.isArray(payload)) { const item = payload.find((d: any) => String(d?.order_id) === String(ro.order_id)); if (item?.data?.startsWith('JVBER')) b64 = item.data; }
-                                      if (!b64) { toast.error('DANFE não retornada pelo webhook'); return; }
+                                      const b64 = await generateDanfeBase64(xml);
+                                      if (!b64 || !b64.startsWith('JVBER')) { toast.error('Não foi possível gerar a DANFE (verifique o XML / serviço de DANFE)'); return; }
                                       const danfeField = isPickupDanfeRoute ? 'return_danfe_base64' : 'danfe_base64';
                                       const generatedAt = new Date().toISOString();
                                       await supabase.from('orders').update({ [danfeField]: b64, danfe_gerada_em: generatedAt }).eq('id', ro.order_id);

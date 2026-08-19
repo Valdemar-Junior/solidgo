@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, Loader2, MapPin, Phone, Search, Truck, Hammer, FileText, FileSpreadsheet, AlertTriangle, LogOut, Eye, ChevronDown, ChevronUp, Copy, Check, Briefcase } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../../supabase/client';
+import { generateDanfeBase64 } from '../../utils/danfe/generateDanfe';
 import { formatDateTimeBR } from '../../utils/dateBR';
 import { useAuthStore } from '../../stores/authStore';
 import type { Order, OrderWithdrawal, StoreReleaseAssignment, StoreReleaseHistory } from '../../types/database';
@@ -545,23 +546,6 @@ export default function OrderLookup() {
     }
   };
 
-  const resolveDanfeWebhookUrl = async () => {
-    const fallbackUrl = 'https://n8n.lojaodosmoveis.shop/webhook/gera_nf_devolucao';
-
-    try {
-      const { data } = await supabase
-        .from('webhook_settings')
-        .select('url')
-        .eq('key', 'gera_nf_devolucao')
-        .eq('active', true)
-        .single();
-
-      if (data?.url) return String(data.url);
-    } catch { }
-
-    return fallbackUrl;
-  };
-
   const openBase64Pdf = async (base64: string) => {
     const bytes = Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
     const source = await PDFDocument.load(bytes);
@@ -589,7 +573,7 @@ export default function OrderLookup() {
         return data;
       };
 
-      let orderData = await fetchReturnDanfeState();
+      const orderData = await fetchReturnDanfeState();
 
       let base64 = String(orderData?.return_danfe_base64 || '');
       const xml = String(orderData?.return_nfe_xml || '');
@@ -606,44 +590,20 @@ export default function OrderLookup() {
           return;
         }
 
-        const webhookUrl = await resolveDanfeWebhookUrl();
-        const response = await fetch(webhookUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            route_id: `DEVOLUCAO-${selectedOrder.order_id_erp || selectedOrder.id}`,
-            documentos: [{
-              order_id: selectedOrder.id,
-              numero: orderData?.return_nfe_number || selectedOrder.order_id_erp || selectedOrder.id,
-              xml,
-            }],
-            count: 1,
-            tipo: 'devolucao',
-          }),
-        });
-
-        if (!response.ok) {
-          throw new Error(`Erro ao gerar DANFE de devolução: ${response.status}`);
-        }
-
-        // O webhook persiste o PDF no banco. Após a chamada, reconsulta o pedido
-        // em pequenas tentativas para abrir a versão gravada, sem depender do body HTTP.
-        for (let attempt = 0; attempt < 3; attempt += 1) {
-          if (attempt > 0) {
-            await new Promise((resolve) => setTimeout(resolve, 500));
-          }
-
-          orderData = await fetchReturnDanfeState();
-          base64 = String(orderData?.return_danfe_base64 || '');
-          if (base64.startsWith('JVBER')) {
-            break;
-          }
-        }
-
-        if (!base64.startsWith('JVBER')) {
-          toast.error('Não foi possível gerar a nota de devolução.');
+        // Gera a DANFE de devolução pelo endpoint do próprio projeto (/api/danfe),
+        // a partir do XML de devolução, e salva em return_danfe_base64 pra
+        // reaproveitar nas próximas impressões.
+        const generated = await generateDanfeBase64(xml);
+        if (!generated.startsWith('JVBER')) {
+          toast.error('Não foi possível gerar a nota de devolução (verifique o XML / serviço de DANFE).');
           return;
         }
+
+        await supabase
+          .from('orders')
+          .update({ return_danfe_base64: generated, danfe_gerada_em: new Date().toISOString() })
+          .eq('id', selectedOrder.id);
+        base64 = generated;
       }
 
       await openBase64Pdf(base64);

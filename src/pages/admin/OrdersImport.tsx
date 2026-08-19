@@ -21,6 +21,7 @@ import {
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { supabase } from '../../supabase/client';
+import { generateDanfeBase64 } from '../../utils/danfe/generateDanfe';
 
 export default function OrdersImport() {
   const [loading, setLoading] = useState(false);
@@ -217,74 +218,10 @@ export default function OrdersImport() {
 
 
 
-  const normalizePdfBase64 = (value: unknown): string => {
-    if (typeof value !== 'string') return '';
-    const trimmed = value.trim();
-    if (!trimmed) return '';
-    const withoutPrefix = trimmed.startsWith('data:application/pdf;base64,')
-      ? trimmed.slice('data:application/pdf;base64,'.length)
-      : trimmed;
-    const compact = withoutPrefix.replace(/\s+/g, '');
-    return compact.startsWith('JVBER') ? compact : '';
-  };
-
-  const parseDanfeWebhookPayload = (payload: any) => {
-    const base64List: string[] = [];
-    const byOrderId = new Map<string, string>();
-    const byNumero = new Map<string, string>();
-
-    const push = (raw: unknown, orderId?: unknown, numero?: unknown) => {
-      const b64 = normalizePdfBase64(raw);
-      if (!b64) return;
-      base64List.push(b64);
-      if (orderId !== undefined && orderId !== null && String(orderId).trim()) {
-        byOrderId.set(String(orderId), b64);
-      }
-      if (numero !== undefined && numero !== null && String(numero).trim()) {
-        byNumero.set(String(numero), b64);
-      }
-    };
-
-    const readEntry = (entry: any) => {
-      if (!entry) return;
-      if (typeof entry === 'string') {
-        push(entry);
-        return;
-      }
-      if (typeof entry !== 'object') return;
-
-      const orderId = entry.order_id ?? entry.orderId ?? entry.id;
-      const numero = entry.numero ?? entry.order_id_erp ?? entry.pedido ?? entry.lancamento;
-
-      push(entry.pdf_base64, orderId, numero);
-      push(entry.base64, orderId, numero);
-      push(entry.pdf, orderId, numero);
-      push(entry.danfe_base64, orderId, numero);
-      push(entry.data, orderId, numero);
-    };
-
-    readEntry(payload);
-    if (Array.isArray(payload)) payload.forEach(readEntry);
-    if (payload && typeof payload === 'object') {
-      const nestedArrays = [payload.documentos, payload.arquivos, payload.items, payload.results, payload.resultados, payload.data];
-      nestedArrays.forEach((arr: any) => {
-        if (Array.isArray(arr)) arr.forEach(readEntry);
-      });
-    }
-
-    return { base64List: Array.from(new Set(base64List)), byOrderId, byNumero };
-  };
-
   const generateDanfeInBackground = async (insertedOrders: any[], importedOrders: any[]) => {
     if (!insertedOrders.length || !importedOrders.length) return;
 
     try {
-      let nfWebhook = 'https://n8n.lojaodosmoveis.shop/webhook/gera_nf';
-      try {
-        const { data: s } = await supabase.from('webhook_settings').select('url').eq('key', 'gera_nf').eq('active', true).single();
-        if (s?.url) nfWebhook = s.url;
-      } catch { }
-
       const xmlByNumero = new Map<string, string>(
         importedOrders
           .map((o: any) => [String(o.order_id_erp || '').trim(), String(o.xml_documento || '').trim()] as const)
@@ -304,70 +241,34 @@ export default function OrdersImport() {
         return;
       }
 
-      console.log(`[Import] Enviando ${docs.length} pedidos para geracao de DANFE em background`);
+      console.log(`[Import] Gerando DANFE de ${docs.length} pedido(s) via /api/danfe`);
 
-      const response = await fetch(nfWebhook, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ documentos: docs, count: docs.length })
-      });
-
-      const text = await response.text();
-      let payload: any = null;
-      try {
-        payload = JSON.parse(text);
-      } catch {
-        payload = { raw: text };
-      }
-
-      if (!response.ok) {
-        console.warn('[Import] Webhook gera_nf retornou erro:', response.status, payload);
-        return;
-      }
-
-      const { base64List, byOrderId, byNumero } = parseDanfeWebhookPayload(payload);
-      if (base64List.length === 0) {
-        console.warn('[Import] Webhook gera_nf nao retornou DANFE em base64.');
-        return;
-      }
-
-      const updates = new Map<string, string>();
-      docs.forEach((doc: any, idx: number) => {
-        if (byOrderId.has(doc.order_id)) {
-          updates.set(doc.order_id, byOrderId.get(doc.order_id)!);
-          return;
-        }
-        if (byNumero.has(doc.numero)) {
-          updates.set(doc.order_id, byNumero.get(doc.numero)!);
-          return;
-        }
-        if (base64List.length === docs.length && base64List[idx]) {
-          updates.set(doc.order_id, base64List[idx]);
-        }
-      });
-
-      if (updates.size === 0 && docs.length === 1 && base64List[0]) {
-        updates.set(docs[0].order_id, base64List[0]);
-      }
-
+      // Gera 1 DANFE por pedido, em lotes (nao sobrecarrega Vercel/DanfeHub).
+      // Se um pedido falhar, os outros seguem.
+      const CONCURRENCY = 4;
       let savedCount = 0;
-      for (const [orderId, b64] of updates.entries()) {
-        const { error } = await supabase
-          .from('orders')
-          .update({ danfe_base64: b64, danfe_gerada_em: new Date().toISOString() })
-          .eq('id', orderId);
-        if (error) {
-          console.warn(`[Import] Falha ao salvar DANFE do pedido ${orderId}:`, error);
-        } else {
-          savedCount++;
-        }
+      for (let i = 0; i < docs.length; i += CONCURRENCY) {
+        const batch = docs.slice(i, i + CONCURRENCY);
+        await Promise.all(batch.map(async (doc: any) => {
+          try {
+            const b64 = await generateDanfeBase64(doc.xml);
+            if (!b64.startsWith('JVBER')) {
+              console.warn(`[Import] DANFE nao gerada para o pedido ${doc.numero}`);
+              return;
+            }
+            const { error } = await supabase
+              .from('orders')
+              .update({ danfe_base64: b64, danfe_gerada_em: new Date().toISOString() })
+              .eq('id', doc.order_id);
+            if (error) console.warn(`[Import] Falha ao salvar DANFE do pedido ${doc.order_id}:`, error);
+            else savedCount++;
+          } catch (e) {
+            console.warn(`[Import] Erro ao gerar DANFE do pedido ${doc.numero}:`, e);
+          }
+        }));
       }
 
-      if (savedCount > 0) {
-        console.log(`[Import] DANFE em background concluida: ${savedCount} pedido(s) atualizado(s).`);
-      } else {
-        console.warn('[Import] Nenhuma DANFE foi salva apos retorno do webhook.');
-      }
+      console.log(`[Import] DANFE concluida: ${savedCount}/${docs.length} salvo(s).`);
     } catch (e) {
       console.warn('[Import] Erro ao gerar/salvar DANFE em background:', e);
     }
