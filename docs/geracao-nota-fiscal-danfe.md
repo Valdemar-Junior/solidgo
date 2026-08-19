@@ -73,6 +73,8 @@ Pontos que chamam:
 
 ## O que sobrou do n8n
 
-Os workflows **`gera_nf`** e **`gera_nf_devolucao`** deixaram de ser usados e podem ser **desativados** depois de validar em produção. Os campos correspondentes na tela de Configurações → Integrações ficaram sem uso (não fazem mal, mas também não fazem nada).
+Os workflows **`gera_nf`** e **`gera_nf_devolucao`** não são mais chamados por nenhuma tela e podem ser **desativados no n8n**.
+
+Do lado do SolidGo a limpeza já foi feita: os dois campos saíram de Configurações → Integrações, e a migração `20260819120000_remove_danfe_webhook_settings.sql` apaga as linhas correspondentes de `webhook_settings`.
 
 Isso tira do n8n a chave `service_role` do Supabase que ele usava para salvar a DANFE — o segredo mais perigoso que estava lá.
