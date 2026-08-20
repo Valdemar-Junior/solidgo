@@ -24,8 +24,8 @@ export default function FirstLogin() {
       return;
     }
 
-    if (newPassword.length < 6) {
-      setError('A senha deve ter pelo menos 6 caracteres');
+    if (newPassword.length < 8) {
+      setError('A senha deve ter pelo menos 8 caracteres');
       return;
     }
 
@@ -70,6 +70,7 @@ export default function FirstLogin() {
             name: refreshed.name,
             role: refreshed.role,
             phone: refreshed.phone,
+            active: refreshed.active ?? true,
             must_change_password: refreshed.must_change_password,
             created_at: refreshed.created_at,
           }

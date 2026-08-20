@@ -1,7 +1,12 @@
 import { createClient } from '@supabase/supabase-js'
+import { requireUser } from './_lib/auth.js'
 
 export default async function handler(req: any, res: any) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' })
+
+  // Exige usuário logado (grava coordenadas em pedidos).
+  const caller = await requireUser(req, res)
+  if (!caller) return
   const { orderId, debug } = req.body || {}
   if (!orderId) return res.status(400).json({ error: 'Missing orderId' })
 

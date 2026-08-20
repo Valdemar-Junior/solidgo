@@ -2,13 +2,27 @@ import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { supabase } from '../supabase/client';
 import { toLoginEmailFromName } from '../lib/utils';
+import { getRequireAdmin2fa, getTwoFactorStatus, isDeviceTrusted } from '../utils/security/twoFactor';
 import type { User } from '../types/database';
+
+// Decide se o usuário precisa passar pelo 2FA agora (só admin, e só se a chave
+// estiver ligada). Um dispositivo confiável pula o CÓDIGO (mas cadastrar é sempre
+// obrigatório). A senha continua sendo pedida sempre, no login normal.
+async function computeTwoFactorPending(user: { id: string; role: string }): Promise<boolean> {
+  if (user.role !== 'admin') return false;
+  if (!(await getRequireAdmin2fa())) return false;
+  const status = await getTwoFactorStatus();
+  if (status === 'satisfied') return false;
+  if (status === 'needs_verify' && isDeviceTrusted(user.id)) return false;
+  return true;
+}
 
 interface AuthState {
   user: User | null;
   isAuthenticated: boolean;
   isLoading: boolean;
   error: string | null;
+  twoFactorPending: boolean;
   login: (identifier: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   checkAuth: () => Promise<void>;
@@ -22,6 +36,7 @@ export const useAuthStore = create<AuthState>()(
       isAuthenticated: false,
       isLoading: false,
       error: null,
+      twoFactorPending: false,
 
       login: async (identifier: string, password: string) => {
         console.log('Starting login process for:', identifier);
@@ -101,7 +116,7 @@ export const useAuthStore = create<AuthState>()(
                 must_change_password: newProfile!.must_change_password,
                 created_at: newProfile!.created_at,
               };
-              set({ user, isAuthenticated: true, isLoading: false, error: null });
+              set({ user, isAuthenticated: true, isLoading: false, error: null, twoFactorPending: false });
             } else {
               if (profile.active === false) {
                 await supabase.auth.signOut({ scope: 'local' });
@@ -120,7 +135,8 @@ export const useAuthStore = create<AuthState>()(
               };
 
               console.log('Setting user in store:', user);
-              set({ user, isAuthenticated: true, isLoading: false, error: null });
+              const twoFactorPending = await computeTwoFactorPending(user);
+              set({ user, isAuthenticated: true, isLoading: false, error: null, twoFactorPending });
               console.log('Login process completed successfully');
             }
           } else {
@@ -144,7 +160,7 @@ export const useAuthStore = create<AuthState>()(
         } catch (error: any) {
           console.warn('Logout warning:', error?.message || error);
         } finally {
-          set({ user: null, isAuthenticated: false, isLoading: false, error: null });
+          set({ user: null, isAuthenticated: false, isLoading: false, error: null, twoFactorPending: false });
           try { sessionStorage.removeItem('auth-storage'); } catch { }
           try { sessionStorage.removeItem('sb-auth-token'); } catch { }
           try { sessionStorage.removeItem('auth_lock'); } catch { }
@@ -213,11 +229,13 @@ export const useAuthStore = create<AuthState>()(
                 return;
               }
 
+              const twoFactorPending = await computeTwoFactorPending(user);
               set({
                 user,
                 isAuthenticated: true,
                 isLoading: false,
                 error: null,
+                twoFactorPending,
               });
               console.log('User authenticated successfully:', user);
             } else {
@@ -250,6 +268,7 @@ export const useAuthStore = create<AuthState>()(
                     isAuthenticated: true,
                     isLoading: false,
                     error: null,
+                    twoFactorPending: false,
                   });
                   return;
                 }

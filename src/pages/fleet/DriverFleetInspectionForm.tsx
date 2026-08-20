@@ -55,7 +55,7 @@ export default function DriverFleetInspectionForm() {
         .from('fleet_inspections')
         .select(`
           *,
-          vehicle:fleet_vehicles(*),
+          vehicle:vehicles(*),
           items:fleet_inspection_items(*),
           photos:fleet_inspection_photos(*)
         `)
@@ -95,7 +95,7 @@ export default function DriverFleetInspectionForm() {
     } catch (error: any) {
       console.error(error);
       toast.error(error.message || 'Falha ao carregar inspeção');
-      navigate('/fleet/driver');
+      navigate('/inspecao');
     } finally {
       setLoading(false);
     }
@@ -175,7 +175,7 @@ export default function DriverFleetInspectionForm() {
       }
 
       toast.success('Inspeção enviada com sucesso');
-      navigate('/fleet/driver');
+      navigate('/inspecao');
     } catch (error: any) {
       console.error(error);
       if (uploadedPaths.length > 0) {
@@ -203,7 +203,7 @@ export default function DriverFleetInspectionForm() {
       <header className="sticky top-0 z-10 border-b border-slate-200 bg-white/95 backdrop-blur">
         <div className="mx-auto flex max-w-md items-center gap-3 px-4 py-4">
           <button
-            onClick={() => navigate('/fleet/driver')}
+            onClick={() => navigate('/inspecao')}
             className="rounded-xl border border-slate-200 p-2 text-slate-600"
           >
             <ArrowLeft className="h-5 w-5" />

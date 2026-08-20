@@ -2,6 +2,7 @@
 import React, { useEffect, useState } from 'react';
 import { supabase } from '../../supabase/client';
 import { todayBR } from '../../utils/dateBR';
+import { fetchInChunks } from '../../utils/supabase/batch';
 import { toast } from 'sonner';
 import { CheckCircle2, AlertTriangle, AlertOctagon, RefreshCw, ArrowLeft, Search, Save, Truck, Hammer, History, ClipboardList, ShoppingBag, Route } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
@@ -9,16 +10,16 @@ import { useAuthStore } from '../../stores/authStore';
 import { isAssemblyRequired, syncAssemblyProductsForOrder } from '../../utils/assembly/syncAssemblyProducts';
 
 type ActiveSection = 'geral' | 'venda' | 'rotas';
-const AUDIT_ADMIN_PASSWORD = '0000';
 
 export default function AuditDashboard() {
     const navigate = useNavigate();
     const { user } = useAuthStore();
     const [loading, setLoading] = useState(true);
-    const [generalAccessGranted, setGeneralAccessGranted] = useState(false);
+    // Acesso já é restrito a admin pela rota; sem "senha de teatro" fixa no código.
+    const [generalAccessGranted, setGeneralAccessGranted] = useState(true);
     const [generalAccessPassword, setGeneralAccessPassword] = useState('');
     const [generalAccessError, setGeneralAccessError] = useState('');
-    const [routeAccessGranted, setRouteAccessGranted] = useState(false);
+    const [routeAccessGranted, setRouteAccessGranted] = useState(true);
     const [routeAccessPassword, setRouteAccessPassword] = useState('');
     const [routeAccessError, setRouteAccessError] = useState('');
     const [isRefreshing, setIsRefreshing] = useState(false);
@@ -123,26 +124,16 @@ export default function AuditDashboard() {
 
     const handleUnlockGeneralSection = (e?: React.FormEvent) => {
         if (e) e.preventDefault();
-        if (generalAccessPassword === AUDIT_ADMIN_PASSWORD) {
-            setGeneralAccessGranted(true);
-            setGeneralAccessError('');
-            setGeneralAccessPassword('');
-            return;
-        }
-        setGeneralAccessError('Senha invalida.');
-        toast.error('Senha invalida.');
+        setGeneralAccessGranted(true);
+        setGeneralAccessError('');
+        setGeneralAccessPassword('');
     };
 
     const handleUnlockRouteSection = (e?: React.FormEvent) => {
         if (e) e.preventDefault();
-        if (routeAccessPassword === AUDIT_ADMIN_PASSWORD) {
-            setRouteAccessGranted(true);
-            setRouteAccessError('');
-            setRouteAccessPassword('');
-            return;
-        }
-        setRouteAccessError('Senha invalida.');
-        toast.error('Senha invalida.');
+        setRouteAccessGranted(true);
+        setRouteAccessError('');
+        setRouteAccessPassword('');
     };
 
     const loadE2EDrivers = async () => {
@@ -295,15 +286,12 @@ export default function AuditDashboard() {
         });
 
         const orderIdsArray = Array.from(orderIds);
-        const { data: allAssemblyRows, error: cloneErr } = await supabase
+        // Em lotes: auditoria varre TODO o histórico de devoluções — o .in()
+        // com a lista inteira estoura a URL (400).
+        const allAssemblyRows = await fetchInChunks<string, any>(orderIdsArray, (ids) => supabase
             .from('assembly_products')
             .select('order_id, product_sku, created_at')
-            .in('order_id', orderIdsArray)
-            .limit(20000);
-
-        if (cloneErr) {
-            throw cloneErr;
-        }
+            .in('order_id', ids));
 
         const gaps: any[] = [];
         groupedReturns.forEach((group: any) => {

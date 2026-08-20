@@ -15,6 +15,7 @@ try {
   }
 } catch {}
 import { createClient } from '@supabase/supabase-js'
+import { requireAdmin } from './_lib/auth.js'
 
 async function getUserRouteLinks(supa: any, userId: string) {
   const { data: driverRows, error: driverError } = await supa
@@ -68,6 +69,11 @@ async function getUserRouteLinks(supa: any, userId: string) {
 
 export default async function handler(req: any, res: any) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' })
+
+  // Só admin autenticado pode excluir usuários.
+  const caller = await requireAdmin(req, res)
+  if (!caller) return
+
   const { userId } = req.body || {}
   if (!userId) return res.status(400).json({ error: 'Missing userId' })
 

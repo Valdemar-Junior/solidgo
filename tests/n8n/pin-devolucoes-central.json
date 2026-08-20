@@ -1,0 +1,152 @@
+[
+  {
+    "numero_pedido": 140710,
+    "status_pedido": "devolvido",
+    "codigo_cliente": "99999",
+    "nome_cliente": "Yasmin Heloa Almeida Morreira",
+    "data_emissao": "2026-07-16T03:00:00.000Z",
+    "data_atualizacao_status": "2026-07-16T23:00:00.000Z",
+    "filial_origem": "ATACADO LOJA ASSU",
+    "produtos": [
+      {
+        "codigo": "3585-2",
+        "produto": "CABECEIRA BOX PRISCILA QUEEN - 55702 - TUBOARTE",
+        "qtd": 1,
+        "valor_unit": 459.0
+      }
+    ],
+    "xml_retorno": {
+      "tipo": "NOTA DE DEVOLUCAO",
+      "numero_nota_devolucao": 990010,
+      "chave_acesso": "24260746033823000203550010000934851267998362",
+      "xml": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<nfeProc xmlns=\"http://www.portalfiscal.inf.br/nfe\" versao=\"4.00\"><NFe xmlns=\"http://www.portalfiscal.inf.br/nfe\"><infNFe Id=\"NFe24260746033823000203550010000934851267998362\" versao=\"4.00\"><ide><cUF>24</cUF><cNF>26799836</cNF><natOp>Devolucao de Venda com Entrega Com Credito Cliente</natOp><mod>55</mod><serie>1</serie><nNF>990010</nNF><dhEmi>2026-07-16T14:16:10-03:00</dhEmi><tpNF>0</tpNF><idDest>1</idDest><cMunFG>2400208</cMunFG><tpImp>1</tpImp><tpEmis>1</tpEmis><cDV>2</cDV><tpAmb>1</tpAmb><finNFe>4</finNFe><indFinal>1</indFinal><indPres>1</indPres><procEmi>0</procEmi><verProc>4.00</verProc><NFref><refNFe>24260746033823000203550010000934741593420889</refNFe></NFref></ide><emit><CNPJ>46033823000203</CNPJ><xNome>F NADJA DA SILVA BARBOSA LTDA</xNome><xFant>ATACADAO DOS MOVEIS (LOJA)</xFant><enderEmit><xLgr>RUA: SAO JOAO</xLgr><nro>50</nro><xBairro>CENTRO</xBairro><cMun>2400208</cMun><xMun>Assu</xMun><UF>RN</UF><CEP>59650000</CEP><cPais>1058</cPais><xPais>Brasil</xPais><fone>84999616620</fone></enderEmit><IE>206130627</IE><CRT>3</CRT></emit><dest><CPF>10407092498</CPF><xNome>CLIENTE TESTE</xNome><enderDest><xLgr>RUA JOAO MARCIEL DA COSTA</xLgr><nro>212</nro><xBairro>QUINTA DO FAROL</xBairro><cMun>2400208</cMun><xMun>Assu</xMun><UF>RN</UF><CEP>59650000</CEP><cPais>1058</cPais><xPais>Brasil</xPais><fone>84996576872</fone></enderDest><indIEDest>9</indIEDest></dest><det nItem=\"1\"><prod><cProd>3585-2</cProd><xProd>CABECEIRA BOX PRISCILA QUEEN - 55702 - TUBOARTE</xProd><NCM>94036000</NCM><CFOP>1202</CFOP><uCom>UN</uCom><qCom>1.0000</qCom><vUnCom>459.00</vUnCom><vProd>459.00</vProd><indTot>1</indTot></prod><imposto><ICMS><ICMS40><orig>0</orig><CST>41</CST></ICMS40></ICMS></imposto></det><total><ICMSTot><vBC>0.00</vBC><vICMS>0.00</vICMS><vBCST>0.00</vBCST><vST>0.00</vST><vProd>459.00</vProd><vFrete>0.00</vFrete><vSeg>0.00</vSeg><vDesc>0.00</vDesc><vII>0.00</vII><vIPI>0.00</vIPI><vPIS>0.00</vPIS><vCOFINS>0.00</vCOFINS><vOutro>0.00</vOutro><vNF>459.00</vNF></ICMSTot></total><transp><modFrete>9</modFrete></transp><infAdic><infCpl>Devolucao da NFE:93474 E CHAVE DE ACESSO:24260746033823000203550010000934741593420889 , MOTIVO DA DEVOLUCAO:CENARIO 1 - PARCIAL na fila (devolve 1 item, sobram colchao e boxes)</infCpl></infAdic></infNFe></NFe><protNFe versao=\"4.00\"><infProt><tpAmb>1</tpAmb><chNFe>24260746033823000203550010000934851267998362</chNFe><dhRecbto>2026-07-16T14:16:14-03:00</dhRecbto><nProt>224260021469985</nProt><cStat>100</cStat><xMotivo>Autorizado o uso da NF-e</xMotivo></infProt></protNFe></nfeProc>"
+    }
+  },
+  {
+    "numero_pedido": 140780,
+    "status_pedido": "cancelado",
+    "codigo_cliente": "99999",
+    "nome_cliente": "Jussara Maria Barbosa Lopes",
+    "data_emissao": "2026-07-16T03:00:00.000Z",
+    "data_atualizacao_status": "2026-07-16T23:00:00.000Z",
+    "filial_origem": "ATACADO LOJA ASSU",
+    "produtos": [
+      {
+        "codigo": "2628-2",
+        "produto": "RACK POLIANA - 50413 - TUBOARTE",
+        "qtd": 1,
+        "valor_unit": 399.0
+      },
+      {
+        "codigo": "3049-2",
+        "produto": "MESA DE CENTRO SIBELE - 62640 - TUBOARTE",
+        "qtd": 1,
+        "valor_unit": 259.0
+      },
+      {
+        "codigo": "3493",
+        "produto": "MICRO-ONDAS PMO38E 220V - PHILCO",
+        "qtd": 1,
+        "valor_unit": 699.0
+      }
+    ],
+    "xml_retorno": {
+      "tipo": "NOTA DE DEVOLUCAO",
+      "numero_nota_devolucao": 990011,
+      "chave_acesso": "24260746033823000203550010000934851267998362",
+      "xml": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<nfeProc xmlns=\"http://www.portalfiscal.inf.br/nfe\" versao=\"4.00\"><NFe xmlns=\"http://www.portalfiscal.inf.br/nfe\"><infNFe Id=\"NFe24260746033823000203550010000934851267998362\" versao=\"4.00\"><ide><cUF>24</cUF><cNF>26799836</cNF><natOp>Devolucao de Venda com Entrega Com Credito Cliente</natOp><mod>55</mod><serie>1</serie><nNF>990011</nNF><dhEmi>2026-07-16T14:16:10-03:00</dhEmi><tpNF>0</tpNF><idDest>1</idDest><cMunFG>2400208</cMunFG><tpImp>1</tpImp><tpEmis>1</tpEmis><cDV>2</cDV><tpAmb>1</tpAmb><finNFe>4</finNFe><indFinal>1</indFinal><indPres>1</indPres><procEmi>0</procEmi><verProc>4.00</verProc><NFref><refNFe>24260746033823000203550010000934741593420889</refNFe></NFref></ide><emit><CNPJ>46033823000203</CNPJ><xNome>F NADJA DA SILVA BARBOSA LTDA</xNome><xFant>ATACADAO DOS MOVEIS (LOJA)</xFant><enderEmit><xLgr>RUA: SAO JOAO</xLgr><nro>50</nro><xBairro>CENTRO</xBairro><cMun>2400208</cMun><xMun>Assu</xMun><UF>RN</UF><CEP>59650000</CEP><cPais>1058</cPais><xPais>Brasil</xPais><fone>84999616620</fone></enderEmit><IE>206130627</IE><CRT>3</CRT></emit><dest><CPF>10407092498</CPF><xNome>CLIENTE TESTE</xNome><enderDest><xLgr>RUA JOAO MARCIEL DA COSTA</xLgr><nro>212</nro><xBairro>QUINTA DO FAROL</xBairro><cMun>2400208</cMun><xMun>Assu</xMun><UF>RN</UF><CEP>59650000</CEP><cPais>1058</cPais><xPais>Brasil</xPais><fone>84996576872</fone></enderDest><indIEDest>9</indIEDest></dest><det nItem=\"1\"><prod><cProd>2628-2</cProd><xProd>RACK POLIANA - 50413 - TUBOARTE</xProd><NCM>94036000</NCM><CFOP>1202</CFOP><uCom>UN</uCom><qCom>1.0000</qCom><vUnCom>399.00</vUnCom><vProd>399.00</vProd><indTot>1</indTot></prod><imposto><ICMS><ICMS40><orig>0</orig><CST>41</CST></ICMS40></ICMS></imposto></det><det nItem=\"2\"><prod><cProd>3049-2</cProd><xProd>MESA DE CENTRO SIBELE - 62640 - TUBOARTE</xProd><NCM>94036000</NCM><CFOP>1202</CFOP><uCom>UN</uCom><qCom>1.0000</qCom><vUnCom>259.00</vUnCom><vProd>259.00</vProd><indTot>1</indTot></prod><imposto><ICMS><ICMS40><orig>0</orig><CST>41</CST></ICMS40></ICMS></imposto></det><det nItem=\"3\"><prod><cProd>3493</cProd><xProd>MICRO-ONDAS PMO38E 220V - PHILCO</xProd><NCM>94036000</NCM><CFOP>1202</CFOP><uCom>UN</uCom><qCom>1.0000</qCom><vUnCom>699.00</vUnCom><vProd>699.00</vProd><indTot>1</indTot></prod><imposto><ICMS><ICMS40><orig>0</orig><CST>41</CST></ICMS40></ICMS></imposto></det><total><ICMSTot><vBC>0.00</vBC><vICMS>0.00</vICMS><vBCST>0.00</vBCST><vST>0.00</vST><vProd>1357.00</vProd><vFrete>0.00</vFrete><vSeg>0.00</vSeg><vDesc>0.00</vDesc><vII>0.00</vII><vIPI>0.00</vIPI><vPIS>0.00</vPIS><vCOFINS>0.00</vCOFINS><vOutro>0.00</vOutro><vNF>1357.00</vNF></ICMSTot></total><transp><modFrete>9</modFrete></transp><infAdic><infCpl>Devolucao da NFE:93474 E CHAVE DE ACESSO:24260746033823000203550010000934741593420889 , MOTIVO DA DEVOLUCAO:CENARIO 2 - TOTAL na fila (cancelou tudo, pedido sai da fila)</infCpl></infAdic></infNFe></NFe><protNFe versao=\"4.00\"><infProt><tpAmb>1</tpAmb><chNFe>24260746033823000203550010000934851267998362</chNFe><dhRecbto>2026-07-16T14:16:14-03:00</dhRecbto><nProt>224260021469985</nProt><cStat>100</cStat><xMotivo>Autorizado o uso da NF-e</xMotivo></infProt></protNFe></nfeProc>"
+    }
+  },
+  {
+    "numero_pedido": 140789,
+    "status_pedido": "devolvido",
+    "codigo_cliente": "99999",
+    "nome_cliente": "Debora Daiane Da Costa Oliveira",
+    "data_emissao": "2026-07-16T03:00:00.000Z",
+    "data_atualizacao_status": "2026-07-16T23:00:00.000Z",
+    "filial_origem": "ATACADO LOJA ASSU",
+    "produtos": [
+      {
+        "codigo": "3742",
+        "produto": "BOX DESTAK 1,98X0,78X0,30 - UMAFLEX",
+        "qtd": 1,
+        "valor_unit": 258.8
+      }
+    ],
+    "xml_retorno": {
+      "tipo": "NOTA DE DEVOLUCAO",
+      "numero_nota_devolucao": 990012,
+      "chave_acesso": "24260746033823000203550010000934851267998362",
+      "xml": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<nfeProc xmlns=\"http://www.portalfiscal.inf.br/nfe\" versao=\"4.00\"><NFe xmlns=\"http://www.portalfiscal.inf.br/nfe\"><infNFe Id=\"NFe24260746033823000203550010000934851267998362\" versao=\"4.00\"><ide><cUF>24</cUF><cNF>26799836</cNF><natOp>Devolucao de Venda com Entrega Com Credito Cliente</natOp><mod>55</mod><serie>1</serie><nNF>990012</nNF><dhEmi>2026-07-16T14:16:10-03:00</dhEmi><tpNF>0</tpNF><idDest>1</idDest><cMunFG>2400208</cMunFG><tpImp>1</tpImp><tpEmis>1</tpEmis><cDV>2</cDV><tpAmb>1</tpAmb><finNFe>4</finNFe><indFinal>1</indFinal><indPres>1</indPres><procEmi>0</procEmi><verProc>4.00</verProc><NFref><refNFe>24260746033823000203550010000934741593420889</refNFe></NFref></ide><emit><CNPJ>46033823000203</CNPJ><xNome>F NADJA DA SILVA BARBOSA LTDA</xNome><xFant>ATACADAO DOS MOVEIS (LOJA)</xFant><enderEmit><xLgr>RUA: SAO JOAO</xLgr><nro>50</nro><xBairro>CENTRO</xBairro><cMun>2400208</cMun><xMun>Assu</xMun><UF>RN</UF><CEP>59650000</CEP><cPais>1058</cPais><xPais>Brasil</xPais><fone>84999616620</fone></enderEmit><IE>206130627</IE><CRT>3</CRT></emit><dest><CPF>10407092498</CPF><xNome>CLIENTE TESTE</xNome><enderDest><xLgr>RUA JOAO MARCIEL DA COSTA</xLgr><nro>212</nro><xBairro>QUINTA DO FAROL</xBairro><cMun>2400208</cMun><xMun>Assu</xMun><UF>RN</UF><CEP>59650000</CEP><cPais>1058</cPais><xPais>Brasil</xPais><fone>84996576872</fone></enderDest><indIEDest>9</indIEDest></dest><det nItem=\"1\"><prod><cProd>3742</cProd><xProd>BOX DESTAK 1,98X0,78X0,30 - UMAFLEX</xProd><NCM>94036000</NCM><CFOP>1202</CFOP><uCom>UN</uCom><qCom>1.0000</qCom><vUnCom>258.80</vUnCom><vProd>258.80</vProd><indTot>1</indTot></prod><imposto><ICMS><ICMS40><orig>0</orig><CST>41</CST></ICMS40></ICMS></imposto></det><total><ICMSTot><vBC>0.00</vBC><vICMS>0.00</vICMS><vBCST>0.00</vBCST><vST>0.00</vST><vProd>258.80</vProd><vFrete>0.00</vFrete><vSeg>0.00</vSeg><vDesc>0.00</vDesc><vII>0.00</vII><vIPI>0.00</vIPI><vPIS>0.00</vPIS><vCOFINS>0.00</vCOFINS><vOutro>0.00</vOutro><vNF>258.80</vNF></ICMSTot></total><transp><modFrete>9</modFrete></transp><infAdic><infCpl>Devolucao da NFE:93474 E CHAVE DE ACESSO:24260746033823000203550010000934741593420889 , MOTIVO DA DEVOLUCAO:CENARIO 3 - PARCIAL por QUANTIDADE (devolve 1 box de 2, sobra 1 box)</infCpl></infAdic></infNFe></NFe><protNFe versao=\"4.00\"><infProt><tpAmb>1</tpAmb><chNFe>24260746033823000203550010000934851267998362</chNFe><dhRecbto>2026-07-16T14:16:14-03:00</dhRecbto><nProt>224260021469985</nProt><cStat>100</cStat><xMotivo>Autorizado o uso da NF-e</xMotivo></infProt></protNFe></nfeProc>"
+    }
+  },
+  {
+    "numero_pedido": 140848,
+    "status_pedido": "cancelado",
+    "codigo_cliente": "99999",
+    "nome_cliente": "Francisco Reginaldo Camilo",
+    "data_emissao": "2026-07-16T03:00:00.000Z",
+    "data_atualizacao_status": "2026-07-16T23:00:00.000Z",
+    "filial_origem": "ATACADO LOJA ASSU",
+    "produtos": [
+      {
+        "codigo": "1495",
+        "produto": "COLCHAO NEW FREEDOM 193X203X32 - 1793 - ORTOBOM",
+        "qtd": 1,
+        "valor_unit": 3863.0
+      }
+    ],
+    "xml_retorno": {
+      "tipo": "NOTA DE DEVOLUCAO",
+      "numero_nota_devolucao": 990013,
+      "chave_acesso": "24260746033823000203550010000934851267998362",
+      "xml": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<nfeProc xmlns=\"http://www.portalfiscal.inf.br/nfe\" versao=\"4.00\"><NFe xmlns=\"http://www.portalfiscal.inf.br/nfe\"><infNFe Id=\"NFe24260746033823000203550010000934851267998362\" versao=\"4.00\"><ide><cUF>24</cUF><cNF>26799836</cNF><natOp>Devolucao de Venda com Entrega Com Credito Cliente</natOp><mod>55</mod><serie>1</serie><nNF>990013</nNF><dhEmi>2026-07-16T14:16:10-03:00</dhEmi><tpNF>0</tpNF><idDest>1</idDest><cMunFG>2400208</cMunFG><tpImp>1</tpImp><tpEmis>1</tpEmis><cDV>2</cDV><tpAmb>1</tpAmb><finNFe>4</finNFe><indFinal>1</indFinal><indPres>1</indPres><procEmi>0</procEmi><verProc>4.00</verProc><NFref><refNFe>24260746033823000203550010000934741593420889</refNFe></NFref></ide><emit><CNPJ>46033823000203</CNPJ><xNome>F NADJA DA SILVA BARBOSA LTDA</xNome><xFant>ATACADAO DOS MOVEIS (LOJA)</xFant><enderEmit><xLgr>RUA: SAO JOAO</xLgr><nro>50</nro><xBairro>CENTRO</xBairro><cMun>2400208</cMun><xMun>Assu</xMun><UF>RN</UF><CEP>59650000</CEP><cPais>1058</cPais><xPais>Brasil</xPais><fone>84999616620</fone></enderEmit><IE>206130627</IE><CRT>3</CRT></emit><dest><CPF>10407092498</CPF><xNome>CLIENTE TESTE</xNome><enderDest><xLgr>RUA JOAO MARCIEL DA COSTA</xLgr><nro>212</nro><xBairro>QUINTA DO FAROL</xBairro><cMun>2400208</cMun><xMun>Assu</xMun><UF>RN</UF><CEP>59650000</CEP><cPais>1058</cPais><xPais>Brasil</xPais><fone>84996576872</fone></enderDest><indIEDest>9</indIEDest></dest><det nItem=\"1\"><prod><cProd>1495</cProd><xProd>COLCHAO NEW FREEDOM 193X203X32 - 1793 - ORTOBOM</xProd><NCM>94036000</NCM><CFOP>1202</CFOP><uCom>UN</uCom><qCom>1.0000</qCom><vUnCom>3863.00</vUnCom><vProd>3863.00</vProd><indTot>1</indTot></prod><imposto><ICMS><ICMS40><orig>0</orig><CST>41</CST></ICMS40></ICMS></imposto></det><total><ICMSTot><vBC>0.00</vBC><vICMS>0.00</vICMS><vBCST>0.00</vBCST><vST>0.00</vST><vProd>3863.00</vProd><vFrete>0.00</vFrete><vSeg>0.00</vSeg><vDesc>0.00</vDesc><vII>0.00</vII><vIPI>0.00</vIPI><vPIS>0.00</vPIS><vCOFINS>0.00</vCOFINS><vOutro>0.00</vOutro><vNF>3863.00</vNF></ICMSTot></total><transp><modFrete>9</modFrete></transp><infAdic><infCpl>Devolucao da NFE:93474 E CHAVE DE ACESSO:24260746033823000203550010000934741593420889 , MOTIVO DA DEVOLUCAO:CENARIO 4 - pedido EM SEPARACAO (remover da rota antes de sair)</infCpl></infAdic></infNFe></NFe><protNFe versao=\"4.00\"><infProt><tpAmb>1</tpAmb><chNFe>24260746033823000203550010000934851267998362</chNFe><dhRecbto>2026-07-16T14:16:14-03:00</dhRecbto><nProt>224260021469985</nProt><cStat>100</cStat><xMotivo>Autorizado o uso da NF-e</xMotivo></infProt></protNFe></nfeProc>"
+    }
+  },
+  {
+    "numero_pedido": 140941,
+    "status_pedido": "devolvido",
+    "codigo_cliente": "99999",
+    "nome_cliente": "Luana Fernandes Carreiro",
+    "data_emissao": "2026-07-16T03:00:00.000Z",
+    "data_atualizacao_status": "2026-07-16T23:00:00.000Z",
+    "filial_origem": "ATACADO LOJA ASSU",
+    "produtos": [
+      {
+        "codigo": "3645-1",
+        "produto": "FOGAO ESMALTEC F4IA 4121 - ESMALTEC - BRANCO",
+        "qtd": 1,
+        "valor_unit": 899.0
+      }
+    ],
+    "xml_retorno": {
+      "tipo": "NOTA DE DEVOLUCAO",
+      "numero_nota_devolucao": 990014,
+      "chave_acesso": "24260746033823000203550010000934851267998362",
+      "xml": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<nfeProc xmlns=\"http://www.portalfiscal.inf.br/nfe\" versao=\"4.00\"><NFe xmlns=\"http://www.portalfiscal.inf.br/nfe\"><infNFe Id=\"NFe24260746033823000203550010000934851267998362\" versao=\"4.00\"><ide><cUF>24</cUF><cNF>26799836</cNF><natOp>Devolucao de Venda com Entrega Com Credito Cliente</natOp><mod>55</mod><serie>1</serie><nNF>990014</nNF><dhEmi>2026-07-16T14:16:10-03:00</dhEmi><tpNF>0</tpNF><idDest>1</idDest><cMunFG>2400208</cMunFG><tpImp>1</tpImp><tpEmis>1</tpEmis><cDV>2</cDV><tpAmb>1</tpAmb><finNFe>4</finNFe><indFinal>1</indFinal><indPres>1</indPres><procEmi>0</procEmi><verProc>4.00</verProc><NFref><refNFe>24260746033823000203550010000934741593420889</refNFe></NFref></ide><emit><CNPJ>46033823000203</CNPJ><xNome>F NADJA DA SILVA BARBOSA LTDA</xNome><xFant>ATACADAO DOS MOVEIS (LOJA)</xFant><enderEmit><xLgr>RUA: SAO JOAO</xLgr><nro>50</nro><xBairro>CENTRO</xBairro><cMun>2400208</cMun><xMun>Assu</xMun><UF>RN</UF><CEP>59650000</CEP><cPais>1058</cPais><xPais>Brasil</xPais><fone>84999616620</fone></enderEmit><IE>206130627</IE><CRT>3</CRT></emit><dest><CPF>10407092498</CPF><xNome>CLIENTE TESTE</xNome><enderDest><xLgr>RUA JOAO MARCIEL DA COSTA</xLgr><nro>212</nro><xBairro>QUINTA DO FAROL</xBairro><cMun>2400208</cMun><xMun>Assu</xMun><UF>RN</UF><CEP>59650000</CEP><cPais>1058</cPais><xPais>Brasil</xPais><fone>84996576872</fone></enderDest><indIEDest>9</indIEDest></dest><det nItem=\"1\"><prod><cProd>3645-1</cProd><xProd>FOGAO ESMALTEC F4IA 4121 - ESMALTEC - BRANCO</xProd><NCM>94036000</NCM><CFOP>1202</CFOP><uCom>UN</uCom><qCom>1.0000</qCom><vUnCom>899.00</vUnCom><vProd>899.00</vProd><indTot>1</indTot></prod><imposto><ICMS><ICMS40><orig>0</orig><CST>41</CST></ICMS40></ICMS></imposto></det><total><ICMSTot><vBC>0.00</vBC><vICMS>0.00</vICMS><vBCST>0.00</vBCST><vST>0.00</vST><vProd>899.00</vProd><vFrete>0.00</vFrete><vSeg>0.00</vSeg><vDesc>0.00</vDesc><vII>0.00</vII><vIPI>0.00</vIPI><vPIS>0.00</vPIS><vCOFINS>0.00</vCOFINS><vOutro>0.00</vOutro><vNF>899.00</vNF></ICMSTot></total><transp><modFrete>9</modFrete></transp><infAdic><infCpl>Devolucao da NFE:93474 E CHAVE DE ACESSO:24260746033823000203550010000934741593420889 , MOTIVO DA DEVOLUCAO:CENARIO 5 - pedido em ROTA INICIADA com motorista (NAO ENTREGAR o fogao)</infCpl></infAdic></infNFe></NFe><protNFe versao=\"4.00\"><infProt><tpAmb>1</tpAmb><chNFe>24260746033823000203550010000934851267998362</chNFe><dhRecbto>2026-07-16T14:16:14-03:00</dhRecbto><nProt>224260021469985</nProt><cStat>100</cStat><xMotivo>Autorizado o uso da NF-e</xMotivo></infProt></protNFe></nfeProc>"
+    }
+  },
+  {
+    "numero_pedido": 65226,
+    "status_pedido": "cancelado",
+    "codigo_cliente": "99999",
+    "nome_cliente": "Luana Isabella Costa Lacerda",
+    "data_emissao": "2026-07-16T03:00:00.000Z",
+    "data_atualizacao_status": "2026-07-16T23:00:00.000Z",
+    "filial_origem": "ATACADO LOJA MOSSORO",
+    "produtos": [
+      {
+        "codigo": "1137-6",
+        "produto": "SOFA PRIME 1.80 - 3965/3966/3967 - CONCEITO",
+        "qtd": 1,
+        "valor_unit": 1999.0
+      }
+    ],
+    "xml_retorno": {
+      "tipo": "NOTA DE DEVOLUCAO",
+      "numero_nota_devolucao": 990015,
+      "chave_acesso": "24260746033823000203550010000934851267998362",
+      "xml": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<nfeProc xmlns=\"http://www.portalfiscal.inf.br/nfe\" versao=\"4.00\"><NFe xmlns=\"http://www.portalfiscal.inf.br/nfe\"><infNFe Id=\"NFe24260746033823000203550010000934851267998362\" versao=\"4.00\"><ide><cUF>24</cUF><cNF>26799836</cNF><natOp>Devolucao de Venda com Entrega Com Credito Cliente</natOp><mod>55</mod><serie>1</serie><nNF>990015</nNF><dhEmi>2026-07-16T14:16:10-03:00</dhEmi><tpNF>0</tpNF><idDest>1</idDest><cMunFG>2400208</cMunFG><tpImp>1</tpImp><tpEmis>1</tpEmis><cDV>2</cDV><tpAmb>1</tpAmb><finNFe>4</finNFe><indFinal>1</indFinal><indPres>1</indPres><procEmi>0</procEmi><verProc>4.00</verProc><NFref><refNFe>24260746033823000203550010000934741593420889</refNFe></NFref></ide><emit><CNPJ>46033823000203</CNPJ><xNome>F NADJA DA SILVA BARBOSA LTDA</xNome><xFant>ATACADAO DOS MOVEIS (LOJA)</xFant><enderEmit><xLgr>RUA: SAO JOAO</xLgr><nro>50</nro><xBairro>CENTRO</xBairro><cMun>2400208</cMun><xMun>Assu</xMun><UF>RN</UF><CEP>59650000</CEP><cPais>1058</cPais><xPais>Brasil</xPais><fone>84999616620</fone></enderEmit><IE>206130627</IE><CRT>3</CRT></emit><dest><CPF>10407092498</CPF><xNome>CLIENTE TESTE</xNome><enderDest><xLgr>RUA JOAO MARCIEL DA COSTA</xLgr><nro>212</nro><xBairro>QUINTA DO FAROL</xBairro><cMun>2400208</cMun><xMun>Assu</xMun><UF>RN</UF><CEP>59650000</CEP><cPais>1058</cPais><xPais>Brasil</xPais><fone>84996576872</fone></enderDest><indIEDest>9</indIEDest></dest><det nItem=\"1\"><prod><cProd>1137-6</cProd><xProd>SOFA PRIME 1.80 - 3965/3966/3967 - CONCEITO</xProd><NCM>94036000</NCM><CFOP>1202</CFOP><uCom>UN</uCom><qCom>1.0000</qCom><vUnCom>1999.00</vUnCom><vProd>1999.00</vProd><indTot>1</indTot></prod><imposto><ICMS><ICMS40><orig>0</orig><CST>41</CST></ICMS40></ICMS></imposto></det><total><ICMSTot><vBC>0.00</vBC><vICMS>0.00</vICMS><vBCST>0.00</vBCST><vST>0.00</vST><vProd>1999.00</vProd><vFrete>0.00</vFrete><vSeg>0.00</vSeg><vDesc>0.00</vDesc><vII>0.00</vII><vIPI>0.00</vIPI><vPIS>0.00</vPIS><vCOFINS>0.00</vCOFINS><vOutro>0.00</vOutro><vNF>1999.00</vNF></ICMSTot></total><transp><modFrete>9</modFrete></transp><infAdic><infCpl>Devolucao da NFE:93474 E CHAVE DE ACESSO:24260746033823000203550010000934741593420889 , MOTIVO DA DEVOLUCAO:CENARIO 6 - pedido JA ENTREGUE (gerar coleta)</infCpl></infAdic></infNFe></NFe><protNFe versao=\"4.00\"><infProt><tpAmb>1</tpAmb><chNFe>24260746033823000203550010000934851267998362</chNFe><dhRecbto>2026-07-16T14:16:14-03:00</dhRecbto><nProt>224260021469985</nProt><cStat>100</cStat><xMotivo>Autorizado o uso da NF-e</xMotivo></infProt></protNFe></nfeProc>"
+    }
+  }
+]

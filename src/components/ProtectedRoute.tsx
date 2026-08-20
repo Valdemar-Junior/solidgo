@@ -8,7 +8,7 @@ interface ProtectedRouteProps {
 }
 
 export default function ProtectedRoute({ children, allowedRoles }: ProtectedRouteProps) {
-  const { user, isAuthenticated, isLoading, checkAuth } = useAuthStore();
+  const { user, isAuthenticated, isLoading, checkAuth, twoFactorPending } = useAuthStore();
   const location = useLocation();
   const isOffline = typeof navigator !== 'undefined' && navigator.onLine === false;
 
@@ -40,6 +40,11 @@ export default function ProtectedRoute({ children, allowedRoles }: ProtectedRout
 
   if (user?.must_change_password) {
     return <Navigate to="/first-login" replace />;
+  }
+
+  // 2FA obrigatório para admin (quando a chave está ligada e ainda não confirmou).
+  if (twoFactorPending && user?.role === 'admin') {
+    return <Navigate to="/ativar-2fa" replace />;
   }
 
   if (allowedRoles && !allowedRoles.includes(user?.role || '')) {

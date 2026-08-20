@@ -131,19 +131,14 @@ export default async function handler(req: any, res: any) {
     const payload = normalizeBody(rawBody);
 
     stage = 'resolve-user';
-    let authenticatedUserId = '';
-    try {
-      const authHeader = req.headers?.authorization || req.headers?.Authorization || '';
-      const token = String(authHeader).startsWith('Bearer ') ? String(authHeader).slice(7).trim() : '';
-      if (token) {
-        const { data, error } = await admin.auth.getUser(token);
-        if (!error && data?.user?.id) authenticatedUserId = data.user.id;
-      }
-    } catch {
-      // Non-blocking: token verification is best-effort for shadow mode.
-    }
-
-    const deliveredByUserId = asString(authenticatedUserId || payload.deliveredByUserId) || null;
+    // Identidade OBRIGATÓRIA e confiável: vem do token validado, nunca do corpo
+    // (senão qualquer um forja comprovante em nome de outro).
+    const authHeader = req.headers?.authorization || req.headers?.Authorization || '';
+    const token = String(authHeader).startsWith('Bearer ') ? String(authHeader).slice(7).trim() : '';
+    if (!token) return res.status(401).json({ ok: false, error: 'Não autenticado' });
+    const { data: authData, error: authError } = await admin.auth.getUser(token);
+    if (authError || !authData?.user?.id) return res.status(401).json({ ok: false, error: 'Sessão inválida ou expirada' });
+    const deliveredByUserId = authData.user.id;
 
     stage = 'validate-payload';
     if (!payload.orderId || !payload.routeId || !payload.routeOrderId) {

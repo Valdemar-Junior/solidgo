@@ -2,13 +2,21 @@
 import { supabase } from '../supabase/client';
 import { OfflineStorage, SyncQueue, NetworkStatus } from '../utils/offline/storage';
 import { backgroundSync } from '../utils/offline/backgroundSync';
-import type { RouteOrderWithDetails, Order, ReturnReason } from '../types/database';
-import { Package, CheckCircle, XCircle, MapPin, Users, Search } from 'lucide-react';
+import type { RouteOrderItem, RouteOrderWithDetails, Order, ReturnReason } from '../types/database';
+import { Package, CheckCircle, XCircle, MapPin, Users, Search, Camera } from 'lucide-react';
 import { buildFullAddress, geocodeAddress, openWazeWithLL } from '../utils/maps';
 import { toast } from 'sonner';
 import { useDeliveryPhotos } from '../hooks/useDeliveryPhotos';
 import { syncAssemblyProductsForRoute } from '../utils/assembly/syncAssemblyProducts';
 import ProcessingOverlay from './ProcessingOverlay';
+import {
+  getRouteOrderItemStatusLabel,
+  getRouteOrderItemStatusClasses,
+  isBlockedRouteOrderItem,
+  isDeliverableRouteOrderItem,
+  isVisibleRouteOrderItem,
+  computeDeliverableOrderValue,
+} from '../utils/delivery/itemLogic';
 
 const FALLBACK_RETURN_REASONS: ReturnReason[] = [
   { id: '1', reason: 'Cliente ausente', type: 'both' },
@@ -55,6 +63,7 @@ type StatusFilter = 'pending' | 'delivered' | 'returned';
 
 export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingProps) {
   const [routeOrders, setRouteOrders] = useState<RouteOrderWithDetails[]>([]);
+  const [routeOrderItemsByRouteOrder, setRouteOrderItemsByRouteOrder] = useState<Record<string, RouteOrderItem[]>>({});
   const [returnReasons, setReturnReasons] = useState<ReturnReason[]>([]);
   const [loading, setLoading] = useState(true);
   const [isOnline, setIsOnline] = useState(NetworkStatus.isOnline());
@@ -70,6 +79,15 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
   const [recipientNameByOrder, setRecipientNameByOrder] = useState<Record<string, string>>({});
   const [recipientRelationByOrder, setRecipientRelationByOrder] = useState<Record<string, string>>({});
   const [recipientNotesByOrder, setRecipientNotesByOrder] = useState<Record<string, string>>({});
+  // Entrega parcial: itens que o motorista marcou para RETORNAR (nao coube). Chave: routeOrderId -> { itemId: true }.
+  // Decisão do motorista por item: 'deliver' (entregar) ou 'return' (não coube, volta pra fila).
+  // Um item só está "decidido" quando tem entrada aqui — é assim que a tela sabe que a parada
+  // ficou pronta pra concluir (todos os itens decididos) e dispara a foto sozinha.
+  const [itemDecisionByOrder, setItemDecisionByOrder] = useState<Record<string, Record<string, 'deliver' | 'return'>>>({});
+  // Paradas que já dispararam a foto automática (pra não reabrir a câmera em loop).
+  const autoConcludedRef = useRef<Record<string, boolean>>({});
+  // Pedido com o modal de "Retornar pedido completo" (motivo) aberto.
+  const [returnAllModalOrderId, setReturnAllModalOrderId] = useState<string | null>(null);
   const [gpsDataByOrder, setGpsDataByOrder] = useState<Record<string, CapturedGps>>({});
   const [gpsFailureReasonByOrder, setGpsFailureReasonByOrder] = useState<Record<string, string>>({});
   const [gpsStatusByOrder, setGpsStatusByOrder] = useState<Record<string, GpsCaptureStatus>>({});
@@ -85,6 +103,7 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
 
   useEffect(() => {
     loadRouteOrders();
+    loadRouteOrderItems();
     loadReturnReasons();
     loadDeliveryProofConfig();
     loadRouteDetails();
@@ -170,6 +189,46 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
     }
   };
 
+  const loadRouteOrderItems = async () => {
+    try {
+      if (NetworkStatus.isOnline()) {
+        try {
+          const { data, error } = await supabase
+            .from('route_order_items')
+            .select('*')
+            .eq('route_id', routeId)
+            .order('created_at', { ascending: true });
+
+          if (error) throw error;
+
+          const grouped = ((data || []) as RouteOrderItem[]).reduce<Record<string, RouteOrderItem[]>>((acc, item: any) => {
+            const key = String(item.route_order_id || '');
+            if (!key) return acc;
+            if (!acc[key]) acc[key] = [];
+            acc[key].push(item as RouteOrderItem);
+            return acc;
+          }, {});
+
+          setRouteOrderItemsByRouteOrder(grouped);
+          await OfflineStorage.setItem(`route_order_items_${routeId}`, grouped);
+          return;
+        } catch (onlineError) {
+          console.warn('[DeliveryMarking] Online route_order_items fetch failed, falling back to cache:', onlineError);
+        }
+      }
+
+      const cached = await OfflineStorage.getItem(`route_order_items_${routeId}`);
+      if (cached) {
+        setRouteOrderItemsByRouteOrder(cached as Record<string, RouteOrderItem[]>);
+      } else {
+        setRouteOrderItemsByRouteOrder({});
+      }
+    } catch (error) {
+      console.error('Error loading route order items:', error);
+      setRouteOrderItemsByRouteOrder({});
+    }
+  };
+
   const loadReturnReasons = async () => {
     try {
       // Tenta cache primeiro para funcionar offline
@@ -210,6 +269,89 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
         await OfflineStorage.setItem('return_reasons', FALLBACK_RETURN_REASONS);
       }
     }
+  };
+
+  const buildDeliveredRouteOrderItems = (items: RouteOrderItem[], returnSelection: Record<string, boolean> = {}) =>
+    items.map((item) => {
+      if (!isDeliverableRouteOrderItem(item)) return item;
+      if (returnSelection[item.id]) {
+        // Item marcado "nao coube": retornado nesta rota (volta pra fila na finalizacao).
+        return {
+          ...item,
+          delivered_quantity: 0,
+          returned_quantity: item.deliverable_quantity_snapshot,
+          status: 'returned' as const,
+        };
+      }
+      return {
+        ...item,
+        delivered_quantity: item.deliverable_quantity_snapshot,
+        status: 'delivered' as const,
+      };
+    });
+
+  // Alterna a marcacao de RETORNAR ("nao coube") de um item na entrega parcial.
+  // Marca UM item como entregue ou retornado (na hora, reversível). Muda a marcação
+  // re-arma a foto automática (a parada pode ter deixado de estar pronta).
+  const setItemDecision = (routeOrderId: string, itemId: string, decision: 'deliver' | 'return') => {
+    autoConcludedRef.current[routeOrderId] = false;
+    setItemDecisionByOrder((prev) => {
+      const cur = { ...(prev[routeOrderId] || {}) };
+      cur[itemId] = decision;
+      return { ...prev, [routeOrderId]: cur };
+    });
+  };
+
+  // Marca TODOS os itens entregáveis de uma parada de uma vez (só pro visual;
+  // o "Entregar/Retornar pedido completo" conclui direto).
+  const setAllItemsDecision = (order: RouteOrderWithDetails, decision: 'deliver' | 'return') => {
+    const items = (routeOrderItemsByRouteOrder[order.id] || []).filter(isDeliverableRouteOrderItem);
+    autoConcludedRef.current[order.id] = false;
+    setItemDecisionByOrder((prev) => {
+      const cur: Record<string, 'deliver' | 'return'> = { ...(prev[order.id] || {}) };
+      for (const it of items) cur[it.id] = decision;
+      return { ...prev, [order.id]: cur };
+    });
+  };
+
+  // A parada está pronta pra concluir? (todos os itens decididos + motivo, se houver retorno)
+  const getStopReadyInfo = (order: RouteOrderWithDetails) => {
+    const items = (routeOrderItemsByRouteOrder[order.id] || []).filter(isDeliverableRouteOrderItem);
+    const decisions = itemDecisionByOrder[order.id] || {};
+    const decidedCount = items.filter((it) => decisions[it.id]).length;
+    const allDecided = items.length > 0 && decidedCount === items.length;
+    const returns = items.filter((it) => decisions[it.id] === 'return');
+    const hasReturn = returns.length > 0;
+    const allReturn = hasReturn && returns.length === items.length;
+    const reason = returnReasonByOrder[order.id] || '';
+    const isOther = reason === 'other' || reason === 'Outro' || reason === '99';
+    const obs = returnObservationsByOrder[order.id] || '';
+    const reasonOk = !hasReturn || (isOther ? obs.trim().length > 0 : reason.length > 0);
+    return { items, allDecided, hasReturn, allReturn, reasonOk, ready: allDecided && reasonOk };
+  };
+
+  const buildPendingRouteOrderItemsAfterUndo = (items: RouteOrderItem[]) =>
+    items.map((item) => {
+      if (isBlockedRouteOrderItem(item)) {
+        return {
+          ...item,
+          delivered_quantity: 0,
+          status: 'returned' as const,
+        };
+      }
+
+      return {
+        ...item,
+        delivered_quantity: 0,
+        status: item.returned_quantity_snapshot > 0 ? 'partial' as const : 'pending' as const,
+      };
+    });
+
+  const replaceRouteOrderItems = (routeOrderId: string, nextItems: RouteOrderItem[]) => {
+    setRouteOrderItemsByRouteOrder((prev) => ({
+      ...prev,
+      [routeOrderId]: nextItems,
+    }));
   };
 
   const loadRouteDetails = async () => {
@@ -255,7 +397,8 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
     toast.info('Buscando coordenadas...');
 
     try {
-      const svc = await fetch('/api/geocode-order', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ orderId: routeOrder.order_id, debug: true }) })
+      const { data: geoSession } = await supabase.auth.getSession();
+      const svc = await fetch('/api/geocode-order', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${geoSession.session?.access_token ?? ''}` }, body: JSON.stringify({ orderId: routeOrder.order_id, debug: true }) })
       if (svc.ok) {
         const js = await svc.json()
         if (js && js.ok && typeof js.lat === 'number' && typeof js.lng === 'number') {
@@ -481,6 +624,71 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
       // (GPS pode levar segundos) deixava um segundo toque disparar o fluxo de novo.
       setProcessingIds(prev => { const n = new Set(prev); n.add(order.id); return n; });
 
+      let routeOrderItems = routeOrderItemsByRouteOrder[order.id] || [];
+
+      // Antes de confirmar online, compara com o snapshot atual do banco.
+      // Se uma devolução chegou enquanto a tela estava aberta, atualiza a
+      // lista e pede que o motorista revise os produtos antes de continuar.
+      if (isOnline && routeOrderItems.length > 0) {
+        const { data: currentServerItems, error: currentServerItemsError } = await supabase
+          .from('route_order_items')
+          .select('*')
+          .eq('route_order_id', order.id)
+          .order('created_at', { ascending: true });
+
+        if (currentServerItemsError) throw currentServerItemsError;
+
+        const serverItems = (currentServerItems || []) as RouteOrderItem[];
+        const localSignature = routeOrderItems
+          .map((item) => `${item.id}:${item.status}:${item.deliverable_quantity_snapshot}:${item.returned_quantity_snapshot}`)
+          .sort()
+          .join('|');
+        const serverSignature = serverItems
+          .map((item) => `${item.id}:${item.status}:${item.deliverable_quantity_snapshot}:${item.returned_quantity_snapshot}`)
+          .sort()
+          .join('|');
+
+        if (localSignature !== serverSignature) {
+          await loadRouteOrderItems();
+          toast.warning('Atenção: houve alteração ou devolução no ERP. Confira os produtos e marque a entrega novamente.');
+          return;
+        }
+
+        routeOrderItems = serverItems;
+      }
+
+      const deliverableItems = routeOrderItems.filter(isDeliverableRouteOrderItem);
+      const hasStructuredItems = routeOrderItems.length > 0;
+      const hasBlockedItems = routeOrderItems.some(isBlockedRouteOrderItem);
+
+      // Entrega parcial: separa os itens marcados para RETORNAR ("nao coube") dos que serao entregues.
+      // O retorno por item reaproveita o MOTIVO do pedido (mesmo campo do retorno total).
+      const decisions = itemDecisionByOrder[order.id] || {};
+      const returnSelection: Record<string, boolean> = {};
+      for (const it of deliverableItems) if (decisions[it.id] === 'return') returnSelection[it.id] = true;
+      const itemsToReturnList = deliverableItems.filter((item) => returnSelection[item.id]);
+      const itemsToDeliver = deliverableItems.filter((item) => !returnSelection[item.id]);
+      const hasPartialReturn = itemsToReturnList.length > 0;
+
+      if (hasStructuredItems && deliverableItems.length === 0) {
+        toast.error('Não existe item disponível para entrega neste pedido.');
+        return;
+      }
+
+      if (hasStructuredItems && itemsToDeliver.length === 0) {
+        toast.error('Nenhum item para entregar. Para devolver tudo, use "Retornar pedido completo".');
+        return;
+      }
+
+      const partialReturnReasonRaw = returnReasonByOrder[order.id] || '';
+      const partialReturnIsOther = partialReturnReasonRaw === 'other' || partialReturnReasonRaw === 'Outro' || partialReturnReasonRaw === '99';
+      const partialReturnNotes = returnObservationsByOrder[order.id] || '';
+      const partialReturnReason = partialReturnIsOther ? partialReturnNotes.trim() : partialReturnReasonRaw;
+      if (hasPartialReturn && !partialReturnReason) {
+        toast.error('Selecione o motivo para os itens que não couberam (voltam pra fila).');
+        return;
+      }
+
       const recipientName = String(recipientNameByOrder[order.id] || '').trim();
       const recipientRelation = String(recipientRelationByOrder[order.id] || '').trim();
       const recipientNotes = String(recipientNotesByOrder[order.id] || '').trim();
@@ -534,6 +742,7 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
       const confirmation = {
         order_id: order.order_id,
         route_id: routeId,
+        route_order_id: order.id,
         action: 'delivered' as const,
         local_timestamp: new Date().toISOString(),
         user_id: (await supabase.auth.getUser()).data.user?.id || '',
@@ -545,34 +754,77 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
         gps_lat: gpsData?.lat ?? null,
         gps_lng: gpsData?.lng ?? null,
         gps_accuracy_m: gpsData?.accuracy ?? null,
+        route_order_item_delivery: hasStructuredItems ? {
+          delivered_item_ids: itemsToDeliver.map((item) => item.id),
+          returned_item_ids: itemsToReturnList.map((item) => item.id),
+          blocked_item_ids: routeOrderItems.filter(isBlockedRouteOrderItem).map((item) => item.id),
+          partial_return_reason: hasPartialReturn ? partialReturnReason : null,
+          partial_return_notes: hasPartialReturn ? partialReturnNotes : null,
+        } : null,
       };
 
       if (isOnline) {
         try {
+          if (hasStructuredItems) {
+            for (const item of itemsToDeliver) {
+              const { error: routeOrderItemsError } = await supabase
+                .from('route_order_items')
+                .update({
+                  status: 'delivered',
+                  delivered_quantity: item.deliverable_quantity_snapshot,
+                })
+                .eq('id', item.id);
+
+              if (routeOrderItemsError) throw routeOrderItemsError;
+            }
+            // Itens que nao couberam: marcados como retornados NESTA rota (delivered=0).
+            // Nao cria order_returns (nao e devolucao do ERP) — o item volta pra fila na finalizacao.
+            for (const item of itemsToReturnList) {
+              const { error: returnItemError } = await supabase
+                .from('route_order_items')
+                .update({
+                  status: 'returned',
+                  delivered_quantity: 0,
+                  returned_quantity: item.deliverable_quantity_snapshot,
+                })
+                .eq('id', item.id);
+
+              if (returnItemError) throw returnItemError;
+            }
+          }
+
           const { error } = await supabase
             .from('route_orders')
             .update({
               status: 'delivered',
               delivered_at: confirmation.local_timestamp,
+              ...(hasPartialReturn ? { return_reason: partialReturnReason, return_notes: partialReturnNotes || null } : {}),
             })
             .eq('id', order.id);
           if (error) throw error;
 
           // ATUALIZAÇÃO NO MOMENTO DA ENTREGA (ONLINE)
+          // Entrega parcial: marca return_flag para a finalizacao re-enfileirar o item que nao coube.
           const { error: orderError } = await supabase
             .from('orders')
             .update({
               status: 'delivered',
-              return_flag: false,
-              last_return_reason: null,
-              last_return_notes: null
+              ...(hasPartialReturn ? { return_flag: true, last_return_reason: partialReturnReason, last_return_notes: partialReturnNotes || null } : {}),
             })
             .eq('id', order.order_id);
 
-          if (orderError) console.warn('[DeliveryMarking] Falha ao atualizar status do pedido principal:', orderError);
+          if (orderError) throw orderError;
 
-          toast.success('Pedido marcado como entregue!');
+          const { error: reconcileReturnError } = await supabase.rpc('reconcile_order_return_state', {
+            p_order_id: order.order_id,
+          });
+          if (reconcileReturnError) throw reconcileReturnError;
+
+          toast.success(hasBlockedItems ? 'Itens disponíveis marcados como entregues!' : 'Pedido marcado como entregue!');
           setRouteOrders(prev => prev.map(ro => ro.id === order.id ? { ...ro, status: 'delivered', delivered_at: confirmation.local_timestamp } : ro));
+          if (hasStructuredItems) {
+            replaceRouteOrderItems(order.id, buildDeliveredRouteOrderItems(routeOrderItems, returnSelection));
+          }
 
           if (deliveryProofConfig.enabled) {
             void saveDeliveryReceiptShadow(order, confirmation.user_id, confirmation.local_timestamp, {
@@ -597,8 +849,11 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
           await SyncQueue.addItem({ type: 'delivery_confirmation', data: confirmation });
           const updated = routeOrders.map(ro => ro.id === order.id ? { ...ro, status: 'delivered' as const, delivered_at: confirmation.local_timestamp } : ro);
           setRouteOrders(updated);
+          if (hasStructuredItems) {
+            replaceRouteOrderItems(order.id, buildDeliveredRouteOrderItems(routeOrderItems, returnSelection));
+          }
           await OfflineStorage.setItem(`route_orders_${routeId}`, updated);
-          toast.success('Pedido marcado como entregue (será sincronizado)!');
+          toast.success(hasBlockedItems ? 'Itens disponíveis marcados como entregues (será sincronizado)!' : 'Pedido marcado como entregue (será sincronizado)!');
           if (deliveryProofConfig.enabled) {
             clearDeliveryProofState(order.id);
           }
@@ -607,8 +862,11 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
         await SyncQueue.addItem({ type: 'delivery_confirmation', data: confirmation });
         const updated = routeOrders.map(ro => ro.id === order.id ? { ...ro, status: 'delivered' as const, delivered_at: confirmation.local_timestamp } : ro);
         setRouteOrders(updated);
+        if (hasStructuredItems) {
+          replaceRouteOrderItems(order.id, buildDeliveredRouteOrderItems(routeOrderItems, returnSelection));
+        }
         await OfflineStorage.setItem(`route_orders_${routeId}`, updated);
-        toast.success('Pedido marcado como entregue (offline)!');
+        toast.success(hasBlockedItems ? 'Itens disponíveis marcados como entregues (offline)!' : 'Pedido marcado como entregue (offline)!');
         if (deliveryProofConfig.enabled) {
           clearDeliveryProofState(order.id);
         }
@@ -619,13 +877,14 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
     } finally {
       setSavingLabel(null);
       setProcessingIds(prev => { const n = new Set(prev); n.delete(order.id); return n; });
+      setItemDecisionByOrder((prev) => { const copy = { ...prev }; delete copy[order.id]; return copy; });
     }
   };
 
 
-  const markAsReturned = async (order: RouteOrderWithDetails) => {
-    const currentReason = returnReasonByOrder[order.id] || '';
-    const currentObs = returnObservationsByOrder[order.id] || '';
+  const markAsReturned = async (order: RouteOrderWithDetails, reasonOverride?: string, obsOverride?: string) => {
+    const currentReason = reasonOverride ?? (returnReasonByOrder[order.id] || '');
+    const currentObs = obsOverride ?? (returnObservationsByOrder[order.id] || '');
 
     if (!currentReason) {
       toast.error('Por favor, selecione um motivo para o retorno');
@@ -643,6 +902,7 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
       if (processingIds.has(order.id)) return;
       // Trava já no primeiro toque, como na entrega.
       setProcessingIds(prev => { const n = new Set(prev); n.add(order.id); return n; });
+      const routeOrderItems = routeOrderItemsByRouteOrder[order.id] || [];
 
       // 1. Capturar Fotos (Opcional, mas oferecido)
       const photosCaptured = await capturePhotos('returned', order.order_id, order.id);
@@ -663,6 +923,21 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
 
       if (isOnline) {
         try {
+          if (routeOrderItems.length > 0) {
+            for (const item of routeOrderItems) {
+              const { error: routeOrderItemsError } = await supabase
+                .from('route_order_items')
+                .update({
+                  delivered_quantity: 0,
+                  returned_quantity: item.deliverable_quantity_snapshot,
+                  status: 'returned',
+                })
+                .eq('id', item.id);
+
+              if (routeOrderItemsError) throw routeOrderItemsError;
+            }
+          }
+
           const { error } = await supabase
             .from('route_orders')
             .update({
@@ -691,6 +966,14 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
 
           toast.success('Pedido marcado como retornado!');
           setRouteOrders(prev => prev.map(ro => ro.id === order.id ? { ...ro, status: 'returned', returned_at: confirmation.local_timestamp, return_reason: { reason: reasonValue } as any, return_notes: currentObs } : ro));
+          if (routeOrderItems.length > 0) {
+            replaceRouteOrderItems(order.id, routeOrderItems.map((item) => ({
+              ...item,
+              delivered_quantity: 0,
+              returned_quantity: item.deliverable_quantity_snapshot,
+              status: 'returned',
+            })));
+          }
 
           if (onUpdated) onUpdated();
         } catch (onlineError) {
@@ -709,6 +992,14 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
               : ro
           );
           setRouteOrders(updatedOrders);
+          if (routeOrderItems.length > 0) {
+            replaceRouteOrderItems(order.id, routeOrderItems.map((item) => ({
+              ...item,
+              delivered_quantity: 0,
+              returned_quantity: item.deliverable_quantity_snapshot,
+              status: 'returned',
+            })));
+          }
           await OfflineStorage.setItem(`route_orders_${routeId}`, updatedOrders);
           toast.success('Pedido marcado como retornado (será sincronizado)!');
         }
@@ -733,6 +1024,14 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
             : ro
         );
         setRouteOrders(updatedOrders);
+        if (routeOrderItems.length > 0) {
+          replaceRouteOrderItems(order.id, routeOrderItems.map((item) => ({
+            ...item,
+            delivered_quantity: 0,
+            returned_quantity: item.deliverable_quantity_snapshot,
+            status: 'returned',
+          })));
+        }
 
         // Cache offline
         await OfflineStorage.setItem(`route_orders_${routeId}`, updatedOrders);
@@ -767,16 +1066,48 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
     } finally {
       setSavingLabel(null);
       setProcessingIds(prev => { const n = new Set(prev); n.delete(order.id); return n; });
+      setItemDecisionByOrder((prev) => { const copy = { ...prev }; delete copy[order.id]; return copy; });
     }
   };
+
+  // Conclui a parada com base nas marcações: tudo retornado → retorno total;
+  // caso contrário → entrega (com os itens que não couberam voltando pra fila).
+  // Ambos abrem a câmera (foto obrigatória) por dentro.
+  const concludeStop = (order: RouteOrderWithDetails) => {
+    const info = getStopReadyInfo(order);
+    if (!info.ready || processingIds.has(order.id)) return;
+    if (info.allReturn) void markAsReturned(order);
+    else void markAsDelivered(order);
+  };
+
+  // FOTO AUTOMÁTICA: assim que a parada fica pronta (todos os itens decididos e,
+  // se houver retorno, o motivo preenchido), abre a câmera sozinha — sem o antigo
+  // "Confirmar entrega". Cada parada só dispara uma vez (autoConcludedRef); mudar
+  // uma marcação re-arma. Se o motorista cancelar a foto, o botão "Concluir e tirar
+  // foto" fica disponível pra tentar de novo.
+  useEffect(() => {
+    // Uma foto por vez: se já tem câmera aberta ou parada processando, espera.
+    if (isPhotoProcessing || processingIds.size > 0) return;
+    for (const ro of routeOrders) {
+      if (ro.status !== 'pending') continue;
+      if (autoConcludedRef.current[ro.id]) continue;
+      if (getStopReadyInfo(ro).ready) {
+        autoConcludedRef.current[ro.id] = true;
+        concludeStop(ro);
+        break; // dispara uma parada por vez
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [itemDecisionByOrder, returnReasonByOrder, returnObservationsByOrder, routeOrders, processingIds, isPhotoProcessing]);
 
   const undoReturn = async (routeOrderId: string) => {
     const current = routeOrders.find(ro => ro.id === routeOrderId);
     if (!current) return;
+    const routeOrderItems = routeOrderItemsByRouteOrder[routeOrderId] || [];
 
     try {
       if (processingIds.has(routeOrderId)) return;
-      const next = new Set(processingIds); next.add(routeOrderId); setProcessingIds(next);
+      setProcessingIds(prev => { const n = new Set(prev); n.add(routeOrderId); return n; });
 
       if (isOnline) {
         // ReCheck global status to prevent double processing
@@ -812,6 +1143,21 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
           // Não interrompe o fluxo, apenas loga o erro
         }
 
+        if (routeOrderItems.length > 0) {
+          for (const item of routeOrderItems) {
+            const { error: routeOrderItemsError } = await supabase
+              .from('route_order_items')
+              .update({
+                delivered_quantity: 0,
+                returned_quantity: 0,
+                status: isBlockedRouteOrderItem(item) ? 'returned' : (item.returned_quantity_snapshot > 0 ? 'partial' : 'pending'),
+              })
+              .eq('id', item.id);
+
+            if (routeOrderItemsError) throw routeOrderItemsError;
+          }
+        }
+
         const { error } = await supabase
           .from('route_orders')
           .update({
@@ -823,7 +1169,7 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
           .eq('id', routeOrderId);
         if (error) throw error;
 
-        await supabase
+        const { error: orderUpdateError } = await supabase
           .from('orders')
           .update({
             status: 'assigned', // LOCK: Back to driver, removed from admin routing list
@@ -832,9 +1178,18 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
             last_return_notes: null,
           })
           .eq('id', current.order_id);
+        if (orderUpdateError) throw orderUpdateError;
+
+        const { error: reconcileReturnError } = await supabase.rpc('reconcile_order_return_state', {
+          p_order_id: current.order_id,
+        });
+        if (reconcileReturnError) throw reconcileReturnError;
 
         const updated = routeOrders.map(ro => ro.id === routeOrderId ? { ...ro, status: 'pending' as const, returned_at: null, return_reason: null } : ro);
         setRouteOrders(updated);
+        if (routeOrderItems.length > 0) {
+          replaceRouteOrderItems(routeOrderId, buildPendingRouteOrderItemsAfterUndo(routeOrderItems));
+        }
         await OfflineStorage.setItem(`route_orders_${routeId}`, updated);
         setReturnReasonByOrder(prev => { const copy = { ...prev }; delete copy[routeOrderId]; return copy; });
         setReturnObservationsByOrder(prev => { const copy = { ...prev }; delete copy[routeOrderId]; return copy; });
@@ -846,6 +1201,9 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
         });
         const updated = routeOrders.map(ro => ro.id === routeOrderId ? { ...ro, status: 'pending' as const, returned_at: null, return_reason: null } : ro);
         setRouteOrders(updated);
+        if (routeOrderItems.length > 0) {
+          replaceRouteOrderItems(routeOrderId, buildPendingRouteOrderItemsAfterUndo(routeOrderItems));
+        }
         await OfflineStorage.setItem(`route_orders_${routeId}`, updated);
         setReturnReasonByOrder(prev => { const copy = { ...prev }; delete copy[routeOrderId]; return copy; });
         setReturnObservationsByOrder(prev => { const copy = { ...prev }; delete copy[routeOrderId]; return copy; });
@@ -855,19 +1213,37 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
       console.error('Error undoing return:', error);
       toast.error('Erro ao desfazer retorno');
     } finally {
-      const next2 = new Set(processingIds); next2.delete(routeOrderId); setProcessingIds(next2);
+      setProcessingIds(prev => { const n = new Set(prev); n.delete(routeOrderId); return n; });
+      setItemDecisionByOrder(prev => { const copy = { ...prev }; delete copy[routeOrderId]; return copy; });
+      autoConcludedRef.current[routeOrderId] = false;
     }
   };
 
   const undoDelivery = async (routeOrderId: string) => {
     const current = routeOrders.find(ro => ro.id === routeOrderId);
     if (!current) return;
+    const routeOrderItems = routeOrderItemsByRouteOrder[routeOrderId] || [];
 
     try {
       if (processingIds.has(routeOrderId)) return;
-      const next = new Set(processingIds); next.add(routeOrderId); setProcessingIds(next);
+      setProcessingIds(prev => { const n = new Set(prev); n.add(routeOrderId); return n; });
 
       if (isOnline) {
+        if (routeOrderItems.length > 0) {
+          for (const item of routeOrderItems) {
+            const { error: routeOrderItemsError } = await supabase
+              .from('route_order_items')
+              .update({
+                delivered_quantity: 0,
+                returned_quantity: 0,
+                status: isBlockedRouteOrderItem(item) ? 'returned' : (item.returned_quantity_snapshot > 0 ? 'partial' : 'pending'),
+              })
+              .eq('id', item.id);
+
+            if (routeOrderItemsError) throw routeOrderItemsError;
+          }
+        }
+
         const { error } = await supabase
           .from('route_orders')
           .update({
@@ -878,13 +1254,19 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
           .eq('id', routeOrderId);
         if (error) throw error;
 
-        await supabase
+        const { error: orderUpdateError } = await supabase
           .from('orders')
           .update({
             status: 'assigned', // LOCK: Back to driver
             return_flag: false
           })
           .eq('id', current.order_id);
+        if (orderUpdateError) throw orderUpdateError;
+
+        const { error: reconcileReturnError } = await supabase.rpc('reconcile_order_return_state', {
+          p_order_id: current.order_id,
+        });
+        if (reconcileReturnError) throw reconcileReturnError;
 
         // Audit: undo delivery
         try {
@@ -928,6 +1310,9 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
 
         const updated = routeOrders.map(ro => ro.id === routeOrderId ? { ...ro, status: 'pending' as const, delivered_at: null } : ro);
         setRouteOrders(updated);
+        if (routeOrderItems.length > 0) {
+          replaceRouteOrderItems(routeOrderId, buildPendingRouteOrderItemsAfterUndo(routeOrderItems));
+        }
         await OfflineStorage.setItem(`route_orders_${routeId}`, updated);
         toast.success('Entrega desfeita');
 
@@ -938,6 +1323,9 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
         });
         const updated = routeOrders.map(ro => ro.id === routeOrderId ? { ...ro, status: 'pending' as const, delivered_at: null } : ro);
         setRouteOrders(updated);
+        if (routeOrderItems.length > 0) {
+          replaceRouteOrderItems(routeOrderId, buildPendingRouteOrderItemsAfterUndo(routeOrderItems));
+        }
         await OfflineStorage.setItem(`route_orders_${routeId}`, updated);
         toast.success('Entrega desfeita (offline)');
       }
@@ -945,7 +1333,9 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
       console.error('Error undoing delivery:', error);
       toast.error('Erro ao desfazer entrega');
     } finally {
-      const next2 = new Set(processingIds); next2.delete(routeOrderId); setProcessingIds(next2);
+      setProcessingIds(prev => { const n = new Set(prev); n.delete(routeOrderId); return n; });
+      setItemDecisionByOrder(prev => { const copy = { ...prev }; delete copy[routeOrderId]; return copy; });
+      autoConcludedRef.current[routeOrderId] = false;
     }
   };
 
@@ -1018,6 +1408,45 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
         const deliveredRouteOrders = routeOrdersFromDb.filter((ro) => ro.status === 'delivered');
         const deliveredIds = deliveredRouteOrders.map((ro) => ro.order_id);
 
+        // Se uma devolução entrou depois da última atualização da tela,
+        // avisa antes do encerramento para o motorista poder desfazer Entregue.
+        if (deliveredRouteOrders.length > 0) {
+          const deliveredRouteOrderIds = deliveredRouteOrders.map((ro) => ro.id);
+          const { data: currentBlockedItems, error: currentBlockedItemsError } = await supabase
+            .from('route_order_items')
+            .select('id, route_order_id, product_name_snapshot, returned_quantity_snapshot, deliverable_quantity_snapshot')
+            .in('route_order_id', deliveredRouteOrderIds)
+            .gt('returned_quantity_snapshot', 0)
+            .lte('deliverable_quantity_snapshot', 0);
+
+          if (currentBlockedItemsError) throw currentBlockedItemsError;
+
+          const knownBlockedIds = new Set(
+            Object.values(routeOrderItemsByRouteOrder)
+              .flat()
+              .filter(isBlockedRouteOrderItem)
+              .map((item) => String(item.id)),
+          );
+          const newlyBlockedItems = (currentBlockedItems || []).filter(
+            (item: any) => !knownBlockedIds.has(String(item.id)),
+          );
+
+          if (newlyBlockedItems.length > 0) {
+            await loadRouteOrderItems();
+            const productNames = newlyBlockedItems
+              .map((item: any) => String(item.product_name_snapshot || 'Produto'))
+              .slice(0, 3)
+              .join(', ');
+            const keepDelivered = window.confirm(
+              `Atenção: houve devolução no ERP durante a rota (${productNames}).\n\n` +
+              'Se esses produtos foram realmente entregues, confirme para finalizar e gerar a pendência de coleta. ' +
+              'Se não foram entregues, cancele e desfaça a marcação de entrega.'
+            );
+
+            if (!keepDelivered) return;
+          }
+        }
+
         // Garante o status final do pedido antes de concluir a rota e rodar a sincronizacao central de montagem.
         if (deliveredIds.length > 0) {
           await supabase
@@ -1063,6 +1492,15 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
             .in('id', returnedIds);
         }
 
+        // Último passo operacional: restaura a verdade fiscal e consolida
+        // as coletas somente depois dos resultados definitivos da rota.
+        for (const routeOrder of routeOrdersFromDb) {
+          const { error: reconcileReturnError } = await supabase.rpc('reconcile_order_return_state', {
+            p_order_id: routeOrder.order_id,
+          });
+          if (reconcileReturnError) throw reconcileReturnError;
+        }
+
         // 4. Gerar tarefas de montagem pela RPC única do banco
         try {
           const assemblySyncResult = await syncAssemblyProductsForRoute(routeId);
@@ -1070,6 +1508,35 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
         } catch (assemblyError) {
           console.error('[FinalizeRoute] Erro ao sincronizar tarefas de montagem:', assemblyError);
           toast.error('Rota finalizada, mas houve falha ao gerar as tarefas de montagem.');
+        }
+
+        // ENTREGA PARCIAL: pedidos entregues que ainda tem item faltando (o que "nao coube")
+        // voltam pra fila (status pending). O item entregue ja gerou montagem acima; o snapshot
+        // da proxima rota (Fase 1B) traz so o item que falta.
+        if (deliveredIds.length > 0) {
+          const { data: partialBalances, error: partialBalancesError } = await supabase
+            .from('order_item_shadow_balances')
+            .select('order_id')
+            .in('order_id', deliveredIds)
+            .eq('source_present', true)
+            .gt('remaining_deliverable_quantity', 0);
+
+          if (partialBalancesError) {
+            console.warn('[FinalizeRoute] Falha ao detectar pedidos parciais:', partialBalancesError);
+          } else {
+            const partialOrderIds = Array.from(new Set((partialBalances || []).map((b: any) => String(b.order_id))));
+            if (partialOrderIds.length > 0) {
+              const { error: requeueError } = await supabase
+                .from('orders')
+                .update({ status: 'pending', return_flag: true })
+                .in('id', partialOrderIds);
+              if (requeueError) {
+                console.warn('[FinalizeRoute] Falha ao re-enfileirar pedidos parciais:', requeueError);
+              } else {
+                console.log('[FinalizeRoute] Pedidos parciais re-enfileirados:', partialOrderIds);
+              }
+            }
+          }
         }
 
         toast.success('Rota finalizada com sucesso!');
@@ -1252,6 +1719,7 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
       {filteredRouteOrders.map((routeOrder) => {
         const order = routeOrder.order;
         if (!order) return null;
+        const routeOrderItems = routeOrderItemsByRouteOrder[routeOrder.id] || [];
         const selectedReason = returnReasonByOrder[routeOrder.id] || '';
         const selectedObs = returnObservationsByOrder[routeOrder.id] || '';
         const recipientName = recipientNameByOrder[routeOrder.id] || '';
@@ -1260,6 +1728,10 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
         const gpsData = gpsDataByOrder[routeOrder.id];
         const gpsStatus = gpsStatusByOrder[routeOrder.id] || 'idle';
         const gpsFailureReason = gpsFailureReasonByOrder[routeOrder.id] || '';
+        const visibleRouteOrderItems = routeOrderItems.filter(isVisibleRouteOrderItem);
+        const hasBlockedItems = visibleRouteOrderItems.some(
+          isBlockedRouteOrderItem
+        );
 
         return (
           <div key={routeOrder.id} className="bg-white rounded-lg shadow p-4">
@@ -1301,8 +1773,7 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
                     <span className="font-bold text-blue-600">{order.order_id_erp}</span>
                   </div>
                   {(() => {
-                    const items: any[] = Array.isArray(order.items_json) ? order.items_json as any[] : [];
-                    const v = items.reduce((sum: number, it: any) => sum + Number(it.total_price_real ?? it.total_price ?? (Number(it.unit_price_real ?? it.unit_price ?? 0) * Number(it.purchased_quantity ?? 1))), 0);
+                    const v = computeDeliverableOrderValue(order, routeOrderItems);
                     return <div>Valor: R$ {v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>;
                   })()}
                   {(() => {
@@ -1315,8 +1786,105 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
                   })()}
                 </div>
 
-                {/* Return Form for Pending Orders */}
-                {routeOrder.status === 'pending' && (
+                {hasBlockedItems && (
+                  <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                    Existe produto devolvido no ERP nesta entrega. Não entregue esse item ao cliente.
+                  </div>
+                )}
+
+                <div className="mt-4 rounded-lg border border-gray-200 bg-gray-50 p-3">
+                  <div className="flex items-center justify-between gap-2 mb-2">
+                    <p className="text-sm font-semibold text-gray-800">Itens desta entrega</p>
+                    <span className="text-xs text-gray-500">
+                      {visibleRouteOrderItems.length > 0 ? `${visibleRouteOrderItems.length} item(ns) estruturado(s)` : 'Modo legado'}
+                    </span>
+                  </div>
+
+                  {visibleRouteOrderItems.length > 0 ? (
+                    <div className="space-y-2">
+                      {visibleRouteOrderItems.map((item) => (
+                        <div key={item.id} className="rounded-md border border-gray-200 bg-white px-3 py-2">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <p className="text-sm font-medium text-gray-900">{item.product_name_snapshot}</p>
+                              <div className="mt-1 flex flex-wrap gap-2 text-[11px] text-gray-500">
+                                <span>SKU: {item.sku_snapshot || '-'}</span>
+                                <span>Chave: {item.source_line_key}</span>
+                                <span>Local: {item.storage_location_snapshot || '-'}</span>
+                              </div>
+                            </div>
+                            <div className="text-right text-xs text-gray-700">
+                              <p>Alocado: <span className="font-semibold">{item.allocated_quantity}</span></p>
+                              <p>Saldo entrega: <span className="font-semibold">{item.deliverable_quantity_snapshot}</span></p>
+                            </div>
+                          </div>
+
+                          {isBlockedRouteOrderItem(item) && (
+                            <div className="mt-2 rounded-md border border-red-200 bg-red-50 px-2 py-2 text-xs font-medium text-red-700">
+                              Produto devolvido no ERP e bloqueado para entrega nesta rota.
+                            </div>
+                          )}
+
+                          <div className="mt-2 flex flex-wrap gap-2 text-xs">
+                            <span className="rounded-full border border-gray-200 bg-gray-50 px-2 py-1 text-gray-700">
+                              Comprado: {item.purchased_quantity}
+                            </span>
+                            <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-1 text-amber-700">
+                              Devolvido antes da rota: {item.returned_quantity_snapshot}
+                            </span>
+                            <span className={`rounded-full border px-2 py-1 ${getRouteOrderItemStatusClasses(item)}`}>
+                              {getRouteOrderItemStatusLabel(item)}
+                            </span>
+                          </div>
+
+                          {routeOrder.status === 'pending' && isDeliverableRouteOrderItem(item) && (() => {
+                            const decision = itemDecisionByOrder[routeOrder.id]?.[item.id];
+                            return (
+                              <div className="mt-2 flex items-center gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => setItemDecision(routeOrder.id, item.id, 'deliver')}
+                                  className={`text-xs px-3 py-1 rounded-md border font-medium transition-colors ${decision === 'deliver' ? 'border-green-500 bg-green-50 text-green-700' : 'border-gray-300 bg-white text-gray-500 hover:bg-gray-50'}`}
+                                >
+                                  {decision === 'deliver' ? '✓ Entregar' : 'Entregar'}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setItemDecision(routeOrder.id, item.id, 'return')}
+                                  className={`text-xs px-3 py-1 rounded-md border font-medium transition-colors ${decision === 'return' ? 'border-red-500 bg-red-50 text-red-700' : 'border-gray-300 bg-white text-gray-500 hover:bg-gray-50'}`}
+                                >
+                                  {decision === 'return' ? '✓ Retornar' : 'Retornar'}
+                                </button>
+                                {!decision && (
+                                  <span className="text-[11px] text-gray-400">marque este item</span>
+                                )}
+                              </div>
+                            );
+                          })()}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-xs text-gray-500">
+                      Este pedido ainda está usando somente os dados legados de itens nesta tela.
+                    </div>
+                  )}
+                </div>
+
+                {routeOrder.status === 'pending' && (() => {
+                  const returnCount = Object.values(itemDecisionByOrder[routeOrder.id] || {}).filter((d) => d === 'return').length;
+                  if (returnCount === 0) return null;
+                  return (
+                    <div className="mt-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                      Você marcou {returnCount} item(ns) para <strong>retornar</strong>.
+                      Selecione o <strong>Motivo do Retorno</strong> abaixo. Quando todos os itens estiverem
+                      marcados, a <strong>câmera abre sozinha</strong> pra você tirar a foto e concluir.
+                    </div>
+                  );
+                })()}
+
+                {/* Formulário só aparece quando precisa: comprovante ligado OU há item marcado pra retornar. */}
+                {routeOrder.status === 'pending' && (deliveryProofConfig.enabled || Object.values(itemDecisionByOrder[routeOrder.id] || {}).some((d) => d === 'return')) && (
                   <div className="mt-4 p-3 bg-gray-50 rounded-lg">
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                       {deliveryProofConfig.enabled && (
@@ -1401,39 +1969,43 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
                           </div>
                         </>
                       )}
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">
-                          Motivo do Retorno
-                        </label>
-                        <select
-                          value={selectedReason}
-                          onChange={(e) => setReturnReasonByOrder(prev => ({ ...prev, [routeOrder.id]: e.target.value }))}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                        >
-                          <option value="">Selecione um motivo</option>
-                          {returnReasons.map((reason) => {
-                            const label = (reason as any).reason_text || (reason as any).reason || reason.id;
-                            const value = (reason as any).reason || (reason as any).reason_text || reason.id;
-                            return (
-                              <option key={reason.id || value} value={value}>
-                                {label}
-                              </option>
-                            );
-                          })}
-                        </select>
-                      </div>
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">
-                          Observacoes {(selectedReason === 'Outro' || selectedReason === '99' || selectedReason === 'other') ? '(obrigatorio para "Outro")' : ''}
-                        </label>
-                        <input
-                          type="text"
-                          value={selectedObs}
-                          onChange={(e) => setReturnObservationsByOrder(prev => ({ ...prev, [routeOrder.id]: e.target.value }))}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                          placeholder="Observacoes adicionais..."
-                        />
-                      </div>
+                      {Object.values(itemDecisionByOrder[routeOrder.id] || {}).some((d) => d === 'return') && (
+                        <>
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">
+                              Motivo do Retorno
+                            </label>
+                            <select
+                              value={selectedReason}
+                              onChange={(e) => setReturnReasonByOrder(prev => ({ ...prev, [routeOrder.id]: e.target.value }))}
+                              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            >
+                              <option value="">Selecione um motivo</option>
+                              {returnReasons.map((reason) => {
+                                const label = (reason as any).reason_text || (reason as any).reason || reason.id;
+                                const value = (reason as any).reason || (reason as any).reason_text || reason.id;
+                                return (
+                                  <option key={reason.id || value} value={value}>
+                                    {label}
+                                  </option>
+                                );
+                              })}
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">
+                              Observacoes {(selectedReason === 'Outro' || selectedReason === '99' || selectedReason === 'other') ? '(obrigatorio para "Outro")' : ''}
+                            </label>
+                            <input
+                              type="text"
+                              value={selectedObs}
+                              onChange={(e) => setReturnObservationsByOrder(prev => ({ ...prev, [routeOrder.id]: e.target.value }))}
+                              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                              placeholder="Observacoes adicionais..."
+                            />
+                          </div>
+                        </>
+                      )}
                     </div>
                   </div>
                 )}
@@ -1466,28 +2038,47 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
 
               {/* Action Buttons */}
               <div className="w-full md:w-auto ml-0 flex gap-2 md:ml-4 md:flex-col md:space-y-2 md:gap-0">
-                {/* GPS removido */}
-                {routeOrder.status === 'pending' && (
-                  <>
-                    <button
-                      onClick={() => markAsDelivered(routeOrder)}
-                      disabled={processingIds.has(routeOrder.id)}
-                      className="flex flex-1 md:flex-none items-center justify-center px-3 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm"
-                    >
-                      <CheckCircle className="h-4 w-4 mr-1" />
-                      Entregue
-                    </button>
+                {routeOrder.status === 'pending' && (() => {
+                  const info = getStopReadyInfo(routeOrder);
+                  const busy = processingIds.has(routeOrder.id) || isPhotoProcessing;
+                  return (
+                    <>
+                      {/* Botão de concluir (foto). Aparece quando a parada está pronta —
+                          normalmente a câmera já abriu sozinha; este fica de reserva
+                          (ex.: se cancelou a foto) e pra quem prefere um toque. */}
+                      {info.ready && (
+                        <button
+                          onClick={() => concludeStop(routeOrder)}
+                          disabled={busy}
+                          className="flex flex-1 md:flex-none items-center justify-center px-3 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm"
+                        >
+                          <Camera className="h-4 w-4 mr-1" />
+                          Concluir e tirar foto
+                        </button>
+                      )}
 
-                    <button
-                      onClick={() => markAsReturned(routeOrder)}
-                      disabled={!selectedReason || processingIds.has(routeOrder.id)}
-                      className="flex flex-1 md:flex-none items-center justify-center px-3 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm"
-                    >
-                      <XCircle className="h-4 w-4 mr-1" />
-                      Retornado
-                    </button>
-                  </>
-                )}
+                      {/* Atalho: entregar tudo de uma vez */}
+                      <button
+                        onClick={() => markAsDelivered(routeOrder)}
+                        disabled={busy}
+                        className="flex flex-1 md:flex-none items-center justify-center px-3 py-2 bg-white border border-green-600 text-green-700 rounded-md hover:bg-green-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm"
+                      >
+                        <CheckCircle className="h-4 w-4 mr-1" />
+                        Entregar pedido completo
+                      </button>
+
+                      {/* Atalho: retornar tudo (abre o modal do motivo) */}
+                      <button
+                        onClick={() => setReturnAllModalOrderId(routeOrder.id)}
+                        disabled={busy}
+                        className="flex flex-1 md:flex-none items-center justify-center px-3 py-2 bg-white border border-red-600 text-red-700 rounded-md hover:bg-red-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm"
+                      >
+                        <XCircle className="h-4 w-4 mr-1" />
+                        Retornar pedido completo
+                      </button>
+                    </>
+                  );
+                })()}
 
 
               </div>
@@ -1526,18 +2117,78 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
         )}
       </div>
 
+      {/* Modal do "Retornar pedido completo": pede UM motivo pra devolver o pedido inteiro. */}
+      {returnAllModalOrderId && (() => {
+        const order = routeOrders.find((ro) => ro.id === returnAllModalOrderId);
+        if (!order) return null;
+        const reason = returnReasonByOrder[order.id] || '';
+        const isOther = reason === 'other' || reason === 'Outro' || reason === '99';
+        const obs = returnObservationsByOrder[order.id] || '';
+        const canConfirm = !!reason && (!isOther || obs.trim().length > 0) && !processingIds.has(order.id);
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+            <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
+              <div className="flex items-center gap-2">
+                <XCircle className="h-5 w-5 text-red-600" />
+                <h3 className="text-lg font-bold text-gray-900">Retornar pedido completo</h3>
+              </div>
+              <p className="mt-1 text-sm text-gray-600">
+                Pedido <span className="font-semibold">{order.order?.order_id_erp}</span> — {order.order?.customer_name}
+              </p>
+              <p className="mt-2 text-xs text-gray-500">
+                Todos os itens deste pedido voltam. Depois de confirmar, a câmera abre pra você tirar a foto.
+              </p>
+
+              <label className="mt-4 block text-sm font-medium text-gray-700">Motivo do retorno</label>
+              <select
+                value={reason}
+                onChange={(e) => setReturnReasonByOrder((prev) => ({ ...prev, [order.id]: e.target.value }))}
+                className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm outline-none focus:border-red-500 focus:ring-2 focus:ring-red-100"
+              >
+                <option value="">Selecione um motivo</option>
+                {returnReasons.map((r) => {
+                  const label = (r as any).reason_text || (r as any).reason || r.id;
+                  const value = (r as any).reason || (r as any).reason_text || r.id;
+                  return <option key={r.id || value} value={value}>{label}</option>;
+                })}
+              </select>
+
+              <label className="mt-3 block text-sm font-medium text-gray-700">
+                Observações {isOther ? '(obrigatório para "Outro")' : '(opcional)'}
+              </label>
+              <input
+                type="text"
+                value={obs}
+                onChange={(e) => setReturnObservationsByOrder((prev) => ({ ...prev, [order.id]: e.target.value }))}
+                className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm outline-none focus:border-red-500 focus:ring-2 focus:ring-red-100"
+                placeholder="Ex.: cliente ausente, endereço errado..."
+              />
+
+              <div className="mt-5 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setReturnAllModalOrderId(null)}
+                  className="rounded-xl border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  disabled={!canConfirm}
+                  onClick={() => { const o = order; setReturnAllModalOrderId(null); void markAsReturned(o); }}
+                  className="flex items-center gap-2 rounded-xl bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Camera className="h-4 w-4" />
+                  Confirmar e tirar foto
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {renderModal()}
       {savingLabel && <ProcessingOverlay message={savingLabel} />}
     </div>
   );
 }
-
-
-
-
-
-
-
-
-
-

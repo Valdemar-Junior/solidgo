@@ -1,0 +1,42 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(bash:*)",
+      "Bash(psql:*)",
+      "Bash(cd:*)",
+      "Bash(grep:*)",
+      "Bash(npm:*)",
+      "Bash(npx:*)",
+      "Bash(git:*)",
+      "Bash(find:*)",
+      "Bash(sed:*)",
+      "Bash(awk:*)",
+      "Bash(head:*)",
+      "Bash(tail:*)",
+      "Bash(cat:*)",
+      "Bash(echo:*)",
+      "Bash(mkdir:*)",
+      "Bash(cp:*)",
+      "Bash(ls:*)",
+      "Bash(which:*)",
+      "Bash(python3:*)",
+      "Bash(initdb:*)",
+      "Bash(pg_ctl:*)",
+      "Bash(pg_isready:*)",
+      "Bash(createdb:*)",
+      "Bash(dropdb:*)",
+      "Edit",
+      "Write",
+      "Read",
+      "mcp__supabase__execute_sql",
+      "mcp__supabase__get_advisors",
+      "mcp__supabase__list_tables"
+    ],
+    "ask": [
+      "Bash(git push:*)",
+      "Bash(rm -rf:*)",
+      "Bash(rm -fr:*)",
+      "Bash(git reset --hard:*)"
+    ]
+  }
+}

@@ -16,14 +16,15 @@ try {
   }
 } catch {}
 import { createClient } from '@supabase/supabase-js'
+import { requireAdmin } from './_lib/auth.js'
 
 export default async function handler(req: any, res: any) {
-  if (req.method === 'GET') {
-    const url = process.env.SUPABASE_URL || ''
-    const serviceKey = process.env.SUPABASE_SERVICE_KEY || ''
-    return res.status(200).json({ ok: true, hasUrl: Boolean(url), hasServiceKey: Boolean(serviceKey) })
-  }
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' })
+
+  // Só admin autenticado pode resetar senha de usuários.
+  const caller = await requireAdmin(req, res)
+  if (!caller) return
+
   const { userId, newPassword } = req.body || {}
   if (!userId || !newPassword) return res.status(400).json({ error: 'Missing userId or newPassword' })
 

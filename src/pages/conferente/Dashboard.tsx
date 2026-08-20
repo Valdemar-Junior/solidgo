@@ -20,7 +20,20 @@ export default function ConferenteDashboard() {
           .select('*, route_orders:route_orders(*, order:orders!order_id(*))')
           .or("status.eq.pending,status.eq.in_progress")
           .order('created_at', { ascending: false });
-        const mine = (data || []).filter((r: any) => String(r.conferente || '').trim() === String(user?.name || '').trim());
+
+        // Casa por id (confiável) e, por compatibilidade com rotas antigas,
+        // também pelo nome escrito — ignorando acento, caixa e espaço extra.
+        const slug = (s: any) => String(s || '')
+          .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+          .trim().toLowerCase().replace(/\s+/g, ' ');
+        const myId = String(user?.id || '');
+        const myName = slug(user?.name);
+        const isAdmin = user?.role === 'admin';
+        const mine = (data || []).filter((r: any) => (
+          isAdmin
+          || (myId && String(r.conferente_id || '') === myId)
+          || (myName && slug(r.conferente) === myName)
+        ));
 
         const routeIds = mine.map((r:any)=>r.id).filter(Boolean);
         if (routeIds.length > 0) {

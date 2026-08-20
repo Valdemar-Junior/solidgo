@@ -29,6 +29,14 @@ export interface Vehicle {
   capacity?: number;
   active?: boolean;
   name?: string;
+  // Campos fiscais do MDF-e (opcionais) — usados quando o veículo emite MDF-e.
+  renavam?: string | null;
+  tara_kg?: number | null;
+  capacity_kg?: number | null;
+  capacity_m3?: number | null;
+  body_type?: string | null;
+  rodado_type?: string | null;
+  licensing_uf?: string | null;
 }
 
 export type FleetVehicleStatus = 'available' | 'maintenance' | 'inactive';
@@ -194,6 +202,8 @@ export interface OrderWithdrawal {
   registered_by_name?: string | null;
   source?: 'manual' | 'legacy_route';
   legacy_route_id?: string | null;
+  // Snapshot dos itens retirados (null/ausente = pedido inteiro).
+  items?: any[] | null;
   created_at: string;
   updated_at: string;
 }
@@ -263,6 +273,116 @@ export interface OrderItem {
   produto_e_montavel?: string | boolean;
 }
 
+export type ItemFulfillmentMode = 'off' | 'shadow' | 'pilot' | 'enabled';
+export type RouteFulfillmentMode = 'legacy' | 'itemized';
+
+export interface ItemFulfillmentControl {
+  enabled: boolean;
+  mode: ItemFulfillmentMode;
+  partial_returns_enabled: boolean;
+  item_route_allocation_enabled: boolean;
+  item_delivery_enabled: boolean;
+  item_scheduling_enabled: boolean;
+  pilot_route_ids: string[];
+}
+
+export interface StructuredOrderItem {
+  id: string;
+  order_id: string;
+  source_line_key: string;
+  sku?: string | null;
+  product_name: string;
+  purchased_quantity: number;
+  volume_quantity?: number | null;
+  storage_location?: string | null;
+  kit_code?: string | null;
+  source_payload: unknown[];
+  source_present: boolean;
+  source_synced_at: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface OrderReturn {
+  id: string;
+  order_id: string;
+  external_key?: string | null;
+  return_nfe_number?: string | null;
+  return_nfe_key?: string | null;
+  return_date?: string | null;
+  return_type?: string | null;
+  return_xml?: string | null;
+  reason?: string | null;
+  processing_status: 'pending' | 'processed' | 'divergent' | 'cancelled';
+  processing_notes?: string | null;
+  requires_pickup?: boolean;
+  pickup_created_at?: string | null;
+  pickup_order_id?: string | null;
+  pickup_route_id?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface OrderReturnItem {
+  id: string;
+  return_id: string;
+  order_item_id?: string | null;
+  source_item_key: string;
+  sku_snapshot?: string | null;
+  product_name_snapshot?: string | null;
+  returned_quantity: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface OrderItemShadowBalance {
+  order_item_id: string;
+  order_id: string;
+  source_line_key: string;
+  sku?: string | null;
+  product_name: string;
+  storage_location?: string | null;
+  kit_code?: string | null;
+  source_present: boolean;
+  purchased_quantity: number;
+  returned_quantity: number;
+  shadow_deliverable_quantity: number;
+  has_over_return: boolean;
+  // Entrega parcial: quanto ja foi entregue e o que ainda falta (saldo - entregue).
+  delivered_quantity?: number;
+  remaining_deliverable_quantity?: number;
+}
+
+// "Em Espera": item tirado da fila de roteirizacao (agendamento / espera / retirada).
+export type OrderItemHoldType = 'manual' | 'scheduled' | 'retirada';
+// 'picked_up' = item efetivamente retirado pelo cliente (terminal).
+export type OrderItemHoldStatus = 'active' | 'released' | 'picked_up';
+
+export interface OrderItemHold {
+  id: string;
+  order_id: string;
+  order_item_id?: string | null;
+  source_line_key?: string | null;
+  sku?: string | null;
+  storage_location?: string | null;
+  product_name?: string | null;
+  hold_type: OrderItemHoldType;
+  scheduled_date?: string | null; // 'YYYY-MM-DD' (so quando hold_type='scheduled')
+  reason?: string | null;
+  status: OrderItemHoldStatus;
+  created_by?: string | null;
+  created_at: string;
+  released_by?: string | null;
+  released_at?: string | null;
+  updated_at: string;
+}
+
+// Config das regras de move automatico para "Em Espera" (app_settings key 'waiting_auto_rules').
+export interface WaitingAutoRules {
+  keywords: string[];   // casam como texto solto dentro de observacoes_internas
+  operations: string[]; // casam com raw_json.operacoes
+}
+
 export interface Route {
   id: string;
   name: string;
@@ -278,6 +398,8 @@ export interface Route {
   helper_id?: string;
   conferente_id?: string;
   route_code?: string;
+  fulfillment_mode?: RouteFulfillmentMode;
+  fulfillment_version?: number;
 }
 
 export interface DeliveryRouteCatalog {
@@ -307,6 +429,28 @@ export interface RouteOrder {
   signature_url?: string;
   delivered_at?: string;
   returned_at?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RouteOrderItem {
+  id: string;
+  route_order_id: string;
+  route_id: string;
+  order_id: string;
+  order_item_id?: string | null;
+  source_line_key: string;
+  sku_snapshot?: string | null;
+  product_name_snapshot: string;
+  storage_location_snapshot?: string | null;
+  kit_code_snapshot?: string | null;
+  purchased_quantity: number;
+  allocated_quantity: number;
+  returned_quantity_snapshot: number;
+  deliverable_quantity_snapshot: number;
+  delivered_quantity: number;
+  returned_quantity: number;
+  status: 'pending' | 'partial' | 'delivered' | 'returned' | 'cancelled';
   created_at: string;
   updated_at: string;
 }
@@ -360,19 +504,19 @@ export interface WebhookResponse {
 export interface AssemblyRoute {
   id: string;
   name: string;
-  admin_id: string;
-  status: 'pending' | 'in_progress' | 'completed';
+  status: 'pending' | 'assigned' | 'in_progress' | 'completed' | 'cancelled';
   deadline?: string;
   observations?: string;
   assembler_id?: string;
   vehicle_id?: string;
+  route_code?: string | null;
   created_at: string;
   updated_at: string;
 }
 
 export interface AssemblyProduct {
   id: string;
-  assembly_route_id: string;
+  assembly_route_id: string | null;
   order_id: string;
   product_name: string;
   product_sku?: string;
@@ -389,6 +533,8 @@ export interface AssemblyProduct {
   observations?: string;
   returned_at?: string;
   was_returned?: boolean;
+  return_reason?: string | null;
+  import_source?: string | null;
   created_at: string;
   updated_at: string;
 }

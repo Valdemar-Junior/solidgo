@@ -3,7 +3,7 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { supabase } from '../../supabase/client';
 import { generateDanfeBase64 } from '../../utils/danfe/generateDanfe';
 import { formatDateTimeBR, toDateBR, todayBR } from '../../utils/dateBR';
-import type { CarrierCity, DeliveryRouteCatalog, Order, DriverWithUser, Vehicle, RouteWithDetails, OrderWithdrawal } from '../../types/database';
+import type { CarrierCity, DeliveryRouteCatalog, ItemFulfillmentControl, Order, OrderReturn, DriverWithUser, Vehicle, RouteWithDetails, OrderWithdrawal, RouteOrderItem, OrderItemShadowBalance, OrderItemHold, OrderItemHoldType, WaitingAutoRules } from '../../types/database';
 import {
   Truck,
   Package,
@@ -48,7 +48,8 @@ import {
   ArrowUp,
   ArrowDown,
   ArrowUpDown,
-  Replace
+  Replace,
+  Lock
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { DeliverySheetGenerator } from '../../utils/pdf/deliverySheetGenerator';
@@ -56,19 +57,67 @@ import { RouteReportGenerator } from '../../utils/pdf/routeReportGenerator';
 import { SeparationSheetGenerator } from '../../utils/pdf/separationSheetGenerator';
 import { PDFDocument } from 'pdf-lib';
 import { useAuthStore } from '../../stores/authStore';
-import { useRouteDataStore } from '../../stores/routeDataStore';
+import { fetchInChunks, fetchAllPages, chunkArray } from '../../utils/supabase/batch';
+import { createPickupFromReturn } from '../../utils/pickup/createPickupFromReturn';
 import { saveUserPreference, loadUserPreference, mergeColumnsConfig, type ColumnConfig } from '../../utils/userPreferences';
 import MdfeIssueModal from '../../components/mdfe/MdfeIssueModal';
+import ConferenceDivergenceModal from '../../components/conference/ConferenceDivergenceModal';
 import DatePicker, { registerLocale } from 'react-datepicker';
 import { ptBR } from 'date-fns/locale';
 import 'react-datepicker/dist/react-datepicker.css';
-import { syncAssemblyProductsForPickup } from '../../utils/assembly/syncAssemblyProducts';
+import { registerPickupForOrder } from '../../utils/pickup/pickupCore';
 import { getStoreReleaseStatusLabel, isStoreReleaseBlocked } from '../../utils/storeRelease';
+import { createUuid } from '../../utils/uuid';
+import {
+  DEFAULT_ITEM_FULFILLMENT_CONTROL,
+  hasDeliverableBalance,
+  normalizeItemFulfillmentControl,
+  shouldCreateRouteOrderItemSnapshots,
+  shouldEnforceRouteOrderItemSnapshots,
+} from '../../utils/itemFulfillment';
+import { getOperationalItemsForOrder, orderMatchesAutoWaiting, isHoldActiveOn } from '../../utils/delivery/queueLogic';
 
 registerLocale('pt-BR', ptBR);
 
 const FULL_URGENT_ALERT_STORAGE_KEY = 'rc_fullUrgentAlertDismissedAt';
 const FULL_URGENT_ALERT_SNOOZE_MS = 2 * 60 * 60 * 1000;
+
+// Colunas ancoradas na esquerda da fila de pedidos: nao somem na rolagem horizontal.
+// Ficam sempre visiveis e fora do reordenamento da engrenagem (senao o sticky desalinha,
+// porque so da pra congelar colunas coladas na borda esquerda).
+const PINNED_COLUMN_IDS = ['pedido', 'cliente'];
+
+// O `left` de cada coluna congelada e a soma das larguras das anteriores, entao as
+// larguras precisam ser fixas e casar com os offsets abaixo: 0 / 48 / 172 / 268 (total 452px).
+const FROZEN_COL = {
+  check: 'sticky left-0 w-[48px] min-w-[48px] max-w-[48px]',
+  acoes: 'sticky left-[48px] w-[124px] min-w-[124px] max-w-[124px]',
+  pedido: 'sticky left-[172px] w-[96px] min-w-[96px] max-w-[96px]',
+  cliente: 'sticky left-[268px] w-[184px] min-w-[184px] max-w-[184px]',
+} as const;
+
+// Sombra que marca onde termina o bloco congelado e comeca a area que rola.
+const FROZEN_EDGE_SHADOW = 'shadow-[2px_0_5px_-2px_rgba(0,0,0,0.18)]';
+
+// Numa tabela, a coluna nasce da linha mais larga: um unico "JOSE CARLOS SEVERO JUNIOR"
+// estica Vendedor pra todas as 800+ linhas e abre aquele vazio enorme. Teto por coluna
+// dimensionado pra maioria dos valores; quem passar disso quebra pra baixo em vez de
+// cortar. Custa pouco porque a linha ja e alta por causa do cliente e das observacoes.
+const COLUMN_WIDTH_CAP: Record<string, string> = {
+  produto: 'min-w-[200px] max-w-[260px]',
+  operacao: 'min-w-[120px] max-w-[160px]',
+  vendedor: 'min-w-[120px] max-w-[160px]',
+  bairro: 'min-w-[110px] max-w-[150px]',
+  cidade: 'min-w-[110px] max-w-[140px]',
+  localEstocagem: 'min-w-[100px] max-w-[130px]',
+  filialVenda: 'min-w-[90px] max-w-[120px]',
+  department: 'min-w-[90px] max-w-[120px]',
+  brand: 'min-w-[90px] max-w-[110px]',
+};
+
+type PickupPendingReturn = OrderReturn & {
+  order: Order;
+};
 
 function normalizeLegacyDisplayText(value: string | null | undefined): string {
   const text = String(value || '');
@@ -117,12 +166,53 @@ type PickupPrintBundle = {
   orders: Order[];
 };
 
+type InsertedRouteOrderRow = {
+  id: string;
+  order_id: string;
+};
+
+type RouteOrderItemsByRouteOrder = Record<string, RouteOrderItem[]>;
+
 type RouteMdfeManifest = {
   id: string;
   status: 'draft' | 'processing' | 'issued' | 'closed' | 'cancelled' | 'error';
   pdf_url: string | null;
   focus_reference: string | null;
   environment: 'homologation' | 'production' | null;
+};
+
+const loadItemFulfillmentControlForRouting = async (): Promise<ItemFulfillmentControl> => {
+  const { data, error } = await supabase
+    .from('app_settings')
+    .select('value')
+    .eq('key', 'item_fulfillment_control')
+    .maybeSingle();
+
+  if (error) throw error;
+  return normalizeItemFulfillmentControl((data as any)?.value);
+};
+
+const syncRouteOrderItemSnapshots = async (routeOrders: InsertedRouteOrderRow[], contextLabel: string) => {
+  if (!routeOrders.length) return;
+
+  const control = await loadItemFulfillmentControlForRouting();
+  if (!shouldCreateRouteOrderItemSnapshots(control)) return;
+
+  const routeOrderIds = routeOrders.map((row) => row.id).filter(Boolean);
+  if (!routeOrderIds.length) return;
+
+  const { error } = await supabase.rpc('sync_route_order_item_snapshots_bulk', {
+    p_route_order_ids: routeOrderIds,
+  });
+
+  if (!error) return;
+
+  if (shouldEnforceRouteOrderItemSnapshots(control)) {
+    throw error;
+  }
+
+  console.warn(`[RouteCreation] Falha ao sincronizar snapshots por item em ${contextLabel}:`, error);
+  toast.warning(`Rota criada, mas a estrutura por item não foi sincronizada em ${contextLabel}.`);
 };
 
 const ACTIVE_MDFE_STATUSES = new Set<RouteMdfeManifest['status']>(['draft', 'processing', 'issued']);
@@ -210,6 +300,41 @@ function RouteCreationContent() {
 
   // --- LOCAL STATE ---
   const [orders, setOrders] = useState<Order[]>([]);
+  const [orderBalancesByOrderId, setOrderBalancesByOrderId] = useState<Record<string, OrderItemShadowBalance[]>>({});
+
+  // "Em Espera": itens pausados (agendamento / espera / retirada) + regras de move automatico.
+  const [holdsByOrderId, setHoldsByOrderId] = useState<Record<string, OrderItemHold[]>>({});
+  const [waitingAutoRules, setWaitingAutoRules] = useState<WaitingAutoRules | null>(null);
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const holdCtx = useMemo(
+    () => ({ holdsByOrderId, autoRules: waitingAutoRules, today: todayStr }),
+    [holdsByOrderId, waitingAutoRules, todayStr]
+  );
+
+  const loadHoldsAndRules = React.useCallback(async () => {
+    try {
+      const [{ data: holdsData }, { data: rulesData }] = await Promise.all([
+        // 'picked_up' TEM que vir aqui: é ele que esconde da fila o item já retirado
+        // (senão o admin conseguiria roteirizar um item retirado -> entrega em dobro).
+        supabase.from('order_item_holds').select('*').in('status', ['active', 'released', 'picked_up']),
+        supabase.from('app_settings').select('value').eq('key', 'waiting_auto_rules').maybeSingle(),
+      ]);
+      const map: Record<string, OrderItemHold[]> = {};
+      (holdsData || []).forEach((h: any) => {
+        const key = String(h.order_id);
+        (map[key] = map[key] || []).push(h as OrderItemHold);
+      });
+      setHoldsByOrderId(map);
+      const rules = (rulesData as any)?.value;
+      setWaitingAutoRules(rules && typeof rules === 'object'
+        ? { keywords: Array.isArray(rules.keywords) ? rules.keywords : [], operations: Array.isArray(rules.operations) ? rules.operations : [] }
+        : { keywords: [], operations: [] });
+    } catch (e) {
+      console.warn('Falha ao carregar itens em espera:', e);
+    }
+  }, []);
+
+  useEffect(() => { void loadHoldsAndRules(); }, [loadHoldsAndRules]);
   const [drivers, setDrivers] = useState<DriverWithUser[]>([]);
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [conferentes, setConferentes] = useState<{ id: string, name: string }[]>([]);
@@ -324,8 +449,12 @@ function RouteCreationContent() {
   const fetchRoutesRef = useRef<any>(null);
   const loadDataRef = useRef<any>(null);
 
-  // Tabs State - expandido para incluir bloqueados e coletas
+  // Tabs State. "Bloqueados" e "Coletas Pendentes" foram aposentadas: tudo
+  // isso agora vive na Central de Devoluções (/admin/returns), com mais
+  // contexto (motivo, rota, motorista). Aqui ficam só as rotas de fato.
   const [activeRoutesTab, setActiveRoutesTab] = useState<'deliveries' | 'blocked' | 'pickupOrders' | 'pickupRoutes'>('deliveries');
+  const [showWaitingTab, setShowWaitingTab] = useState(false);
+  const [waitingSearch, setWaitingSearch] = useState('');
 
   // Sorting State
   const [sortColumn, setSortColumn] = useState<string>('');
@@ -487,7 +616,7 @@ function RouteCreationContent() {
 
     // 2. Expand to Rows (Order + Item)
     for (const o of filteredOrders) {
-      const items = Array.isArray(o.items_json) ? o.items_json : [];
+      const items = getOperationalItemsForOrder(o, orderBalancesByOrderId, holdCtx);
       let itemsFiltered = items;
 
       if (strictLocal && filterLocalEstocagem) {
@@ -570,7 +699,6 @@ function RouteCreationContent() {
         v['filialVenda'] = o.filial_venda || raw?.filial_venda || '-';
         v['operacao'] = raw?.operacoes || '-';
         v['vendedor'] = (o as any).vendedor_nome || raw?.vendedor || '-';
-        v['situacao'] = o.status || '-';
         v['obsPublicas'] = (o as any).observacoes_publicas || raw?.observacoes || '-';
         v['obsInternas'] = o.observacoes_internas || raw?.observacoes_internas || '-';
 
@@ -582,13 +710,6 @@ function RouteCreationContent() {
         const num = (addr as any)?.number || raw?.destinatario_numero || '';
         v['endereco'] = `${str}, ${num}`;
 
-        // Other locations
-        // Logic for otherLocs 
-        // (Assuming simple logic or empty if not easily replicated here without more context)
-        // Original logic was doing a complex mapping. 
-        // For sorting purposes, we might just store a string representation if needed.
-        // For rendering, we will access 'items' again.
-
         rows.push({ order: o, item: it, values: v });
       }
     }
@@ -597,7 +718,8 @@ function RouteCreationContent() {
     orders, filterCity, filterCarrierCitiesOnly, filterCarrierTaggedOnly, filterNeighborhood, clientQuery, filterFreightFull, filterOperation,
     filterFilialVenda, filterSeller, filterSaleDateStart, filterSaleDateEnd, filterReturnedOnly,
     filterDeadline, filterServiceType, strictLocal, filterLocalEstocagem, strictDepartment,
-    filterDepartment, filterBrand, filterHasAssembly, filterRetirada, carrierCityNameSet
+    filterDepartment, filterBrand, filterHasAssembly, filterRetirada, carrierCityNameSet,
+    orderBalancesByOrderId, holdCtx
   ]);
 
   const sortedRows = useMemo(() => {
@@ -638,6 +760,203 @@ function RouteCreationContent() {
     });
   }, [filteredRows, sortColumn, sortDirection]);
 
+  // Quantas linhas (itens) cada pedido tem na fila — pra saber se mostra "item x pedido".
+  const rowsCountByOrderId = useMemo(() => {
+    const counts: Record<string, number> = {};
+    sortedRows.forEach(({ order }) => {
+      const k = String(order.id);
+      counts[k] = (counts[k] || 0) + 1;
+    });
+    return counts;
+  }, [sortedRows]);
+
+  // ============ "Em Espera": itens pausados (o inverso da fila) ============
+  const itemKeyOf = (it: any) =>
+    `${String(it?.source_line_key || '').toLowerCase()}|${String(it?.sku || '').toLowerCase()}|${String(it?.location || it?.storage_location || '').toLowerCase()}`;
+  const holdMatchesItemLocal = (h: OrderItemHold, it: any) => {
+    const hk = String(h.source_line_key || '').toLowerCase();
+    const ik = String(it?.source_line_key || '').toLowerCase();
+    if (hk && ik && hk === ik) return true;
+    const hs = String(h.sku || '').toLowerCase();
+    const is = String(it?.sku || '').toLowerCase();
+    if (hs && hs === is) {
+      const hl = String(h.storage_location || '').toLowerCase();
+      const il = String(it?.location || it?.storage_location || '').toLowerCase();
+      return hl && il ? hl === il : true;
+    }
+    return false;
+  };
+
+  type WaitingReason = 'manual' | 'scheduled' | 'retirada' | 'operacao';
+  const waitingRows = useMemo(() => {
+    const rows: Array<{ order: any; item: any; hold: OrderItemHold | null; reason: WaitingReason; scheduledDate: string | null }> = [];
+    (orders || []).forEach((o: any) => {
+      const full = getOperationalItemsForOrder(o, orderBalancesByOrderId); // sem contexto = todos os itens da fila cheia
+      const visible = getOperationalItemsForOrder(o, orderBalancesByOrderId, holdCtx); // com contexto = o que sobra na fila
+      const visibleKeys = new Set(visible.map(itemKeyOf));
+      const held = full.filter((it: any) => !visibleKeys.has(itemKeyOf(it)));
+      if (held.length === 0) return;
+      const holds = holdsByOrderId[String(o.id)] || [];
+      const activeHolds = holds.filter((h) => isHoldActiveOn(h, todayStr));
+      const pickedUpHolds = holds.filter((h) => h.status === 'picked_up');
+      const autoMatch = orderMatchesAutoWaiting(o, waitingAutoRules);
+      held.forEach((it: any) => {
+        // item ja retirado nao e "em espera" — nao aparece nesta aba
+        if (pickedUpHolds.some((hh) => holdMatchesItemLocal(hh, it))) return;
+        const h = activeHolds.find((hh) => holdMatchesItemLocal(hh, it)) || null;
+        let reason: WaitingReason = 'manual';
+        let scheduledDate: string | null = null;
+        if (h) {
+          reason = h.hold_type === 'scheduled' ? 'scheduled' : (h.hold_type === 'retirada' ? 'retirada' : 'manual');
+          scheduledDate = h.scheduled_date || null;
+        } else if (autoMatch) {
+          reason = 'operacao';
+        }
+        rows.push({ order: o, item: it, hold: h, reason, scheduledDate });
+      });
+    });
+    return rows;
+  }, [orders, orderBalancesByOrderId, holdsByOrderId, waitingAutoRules, holdCtx, todayStr]);
+
+  const buildHoldPayload = (order: any, item: any, extra: Record<string, any>) => ({
+    order_id: order.id,
+    order_item_id: item?.order_item_id || null,
+    source_line_key: item?.source_line_key || null,
+    sku: item?.sku || null,
+    storage_location: item?.location || item?.storage_location || null,
+    product_name: item?.name || item?.descricao || null,
+    ...extra,
+  });
+
+  // Insere holds so para os itens que ainda NAO estao em espera (evita conflito/duplicidade).
+  const moveItemsToWaiting = async (order: any, items: any[]) => {
+    const existing = (holdsByOrderId[String(order.id)] || []).filter((h) => isHoldActiveOn(h, todayStr));
+    const toInsert = items.filter((it) => !existing.some((h) => holdMatchesItemLocal(h, it)));
+    if (toInsert.length === 0) return 0;
+    const rows = toInsert.map((it) => buildHoldPayload(order, it, { hold_type: 'manual', status: 'active' }));
+    const { error } = await supabase.from('order_item_holds').insert(rows);
+    if (error) throw error;
+    return toInsert.length;
+  };
+
+  const moveItemToWaiting = async (order: any, item: any) => {
+    try {
+      const n = await moveItemsToWaiting(order, [item]);
+      if (n) toast.success('Item movido para Em Espera.'); else toast.info('Esse item ja esta em espera.');
+      await loadHoldsAndRules();
+    } catch { toast.error('Nao foi possivel mover para Em Espera.'); }
+  };
+
+  const moveOrderToWaiting = async (order: any) => {
+    try {
+      const items = getOperationalItemsForOrder(order, orderBalancesByOrderId);
+      const n = await moveItemsToWaiting(order, items);
+      if (n) toast.success(`Pedido movido para Em Espera (${n} ${n === 1 ? 'item' : 'itens'}).`);
+      else toast.info('Esse pedido ja esta em espera.');
+      await loadHoldsAndRules();
+    } catch { toast.error('Nao foi possivel mover o pedido para Em Espera.'); }
+  };
+
+  const moveOrdersToWaiting = async (orderIds: string[]) => {
+    if (orderIds.length === 0) { toast.error('Selecione ao menos um pedido.'); return; }
+    try {
+      let total = 0;
+      const byId = new Map((orders || []).map((o: any) => [String(o.id), o]));
+      for (const id of orderIds) {
+        const o = byId.get(String(id));
+        if (!o) continue;
+        total += await moveItemsToWaiting(o, getOperationalItemsForOrder(o, orderBalancesByOrderId));
+      }
+      if (total) toast.success(`${total} ${total === 1 ? 'item movido' : 'itens movidos'} para Em Espera.`);
+      else toast.info('Nada novo para mover (ja estavam em espera).');
+      setSelectedOrders(new Set());
+      await loadHoldsAndRules();
+    } catch { toast.error('Nao foi possivel mover para Em Espera.'); }
+  };
+
+  // Agrupa os itens em espera por PEDIDO (retirada e uma acao do pedido, nao do item).
+  const waitingGroups = useMemo(() => {
+    const map = new Map<string, { order: any; items: typeof waitingRows }>();
+    waitingRows.forEach((r) => {
+      const k = String(r.order.id);
+      if (!map.has(k)) map.set(k, { order: r.order, items: [] as any });
+      map.get(k)!.items.push(r);
+    });
+    return Array.from(map.values());
+  }, [waitingRows]);
+
+  const waitingGroupsFiltered = useMemo(() => {
+    const q = waitingSearch.trim().toLowerCase();
+    if (!q) return waitingGroups;
+    return waitingGroups.filter((g) =>
+      String(g.order.order_id_erp || g.order.id || '').toLowerCase().includes(q) ||
+      String(g.order.customer_name || '').toLowerCase().includes(q)
+    );
+  }, [waitingGroups, waitingSearch]);
+
+  const setItemSchedule = async (
+    row: { order: any; item: any; hold: OrderItemHold | null },
+    date: string
+  ) => {
+    try {
+      if (row.hold) {
+        const { error } = await supabase.from('order_item_holds')
+          .update({ hold_type: 'scheduled' as OrderItemHoldType, scheduled_date: date, status: 'active', updated_at: new Date().toISOString() })
+          .eq('id', row.hold.id);
+        if (error) throw error;
+      } else {
+        const { error } = await supabase.from('order_item_holds')
+          .insert(buildHoldPayload(row.order, row.item, { hold_type: 'scheduled', scheduled_date: date, status: 'active' }));
+        if (error) throw error;
+      }
+      toast.success('Data de agendamento salva.');
+      await loadHoldsAndRules();
+    } catch {
+      toast.error('Nao foi possivel salvar a data.');
+    }
+  };
+
+  const releaseItemFromWaiting = async (row: { order: any; item: any; hold: OrderItemHold | null }) => {
+    try {
+      if (row.hold) {
+        const { error } = await supabase.from('order_item_holds')
+          .update({ status: 'released', released_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+          .eq('id', row.hold.id);
+        if (error) throw error;
+      } else {
+        // Item em espera pela regra automatica: grava um override 'released' so pra ele.
+        const { error } = await supabase.from('order_item_holds')
+          .insert(buildHoldPayload(row.order, row.item, { hold_type: 'manual', status: 'released', released_at: new Date().toISOString() }));
+        if (error) throw error;
+      }
+      toast.success('Item liberado para a fila.');
+      await loadHoldsAndRules();
+    } catch {
+      toast.error('Nao foi possivel liberar o item.');
+    }
+  };
+
+  const releaseGroupFromWaiting = async (group: { order: any; items: Array<{ order: any; item: any; hold: OrderItemHold | null }> }) => {
+    try {
+      for (const row of group.items) {
+        if (row.hold) {
+          const { error } = await supabase.from('order_item_holds')
+            .update({ status: 'released', released_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+            .eq('id', row.hold.id);
+          if (error) throw error;
+        } else {
+          const { error } = await supabase.from('order_item_holds')
+            .insert(buildHoldPayload(row.order, row.item, { hold_type: 'manual', status: 'released', released_at: new Date().toISOString() }));
+          if (error) throw error;
+        }
+      }
+      toast.success('Pedido liberado para a fila.');
+      await loadHoldsAndRules();
+    } catch {
+      toast.error('Nao foi possivel liberar o pedido.');
+    }
+  };
+
   // Pickup Modal State
   const [showPickupModal, setShowPickupModal] = useState(false);
   const [pickupOrderIds, setPickupOrderIds] = useState<string[]>([]);
@@ -647,7 +966,22 @@ function RouteCreationContent() {
   const [pickupPrinting, setPickupPrinting] = useState(false);
   const [pickupDocumentsPrinted, setPickupDocumentsPrinted] = useState(false);
   const [completedPickupWithdrawals, setCompletedPickupWithdrawals] = useState<OrderWithdrawal[]>([]);
+  // Retirada por item (parcial): itens disponiveis do pedido unico + quais estao marcados.
+  const [pickupItems, setPickupItems] = useState<any[]>([]);
+  const [pickupSelectedKeys, setPickupSelectedKeys] = useState<Set<string>>(new Set());
   const [openOrderActionsId, setOpenOrderActionsId] = useState<string | null>(null);
+  // A caixa da fila tem altura limitada e corta o que passa da borda: nas linhas de baixo
+  // o menu precisa abrir pra cima, senao as ultimas opcoes ficam inalcancaveis.
+  const [orderActionsOpenUpward, setOrderActionsOpenUpward] = useState(false);
+
+  // Itens ainda disponiveis pra retirada de um pedido (exclui os ja retirados).
+  const availableItemsForPickup = (orderId: string): any[] => {
+    const order = (orders || []).find((o: any) => String(o.id) === String(orderId));
+    if (!order) return [];
+    const full = getOperationalItemsForOrder(order, orderBalancesByOrderId);
+    const pickedUp = (holdsByOrderId[String(orderId)] || []).filter((h) => h.status === 'picked_up');
+    return full.filter((it: any) => !pickedUp.some((h) => holdMatchesItemLocal(h, it)));
+  };
   const [storeReleaseControlSettings, setStoreReleaseControlSettings] = useState({
     enabled: false,
     only_block_disassemblable_items: true,
@@ -680,12 +1014,12 @@ function RouteCreationContent() {
   const [blockedOrdersTotal, setBlockedOrdersTotal] = useState(0);
   const [blockedOrdersPage, setBlockedOrdersPage] = useState(1);
   const [blockedOrdersLoading, setBlockedOrdersLoading] = useState(false);
-  const [pickupPendingOrders, setPickupPendingOrders] = useState<Order[]>([]);
+  const [pickupPendingReturns, setPickupPendingReturns] = useState<PickupPendingReturn[]>([]);
   const BLOCKED_ORDERS_PAGE_SIZE = 25;
 
   // Estados para modal de coleta individual
   const [showPickupOrderModal, setShowPickupOrderModal] = useState(false);
-  const [selectedPickupOrder, setSelectedPickupOrder] = useState<Order | null>(null);
+  const [selectedPickupReturn, setSelectedPickupReturn] = useState<PickupPendingReturn | null>(null);
   const [pickupOrderLoading, setPickupOrderLoading] = useState(false);
   const [pickupOrderConferente, setPickupOrderConferente] = useState('');
 
@@ -713,6 +1047,11 @@ function RouteCreationContent() {
         .from('orders')
         .select('id, order_id_erp, customer_name, erp_status, blocked_at, blocked_reason, return_nfe_number', { count: 'exact' })
         .not('blocked_at', 'is', null)
+        // As filas operacionais devem ser exclusivas:
+        // aguardando coleta aparece somente em "Coletas Pendentes";
+        // coleta já criada aparece em "Rotas de Coleta".
+        .or('requires_pickup.is.null,requires_pickup.eq.false')
+        .is('pickup_created_at', null)
         .order('blocked_at', { ascending: false })
         .range(from, to);
 
@@ -1278,8 +1617,6 @@ function RouteCreationContent() {
   };
 
   // Table Config
-
-  // Table Config
   const [columnsConf, setColumnsConf] = useState<Array<{ id: string, label: string, visible: boolean }>>([
     { id: 'data', label: 'Data e Hora', visible: true },
     { id: 'pedido', label: 'Pedido', visible: true },
@@ -1299,12 +1636,21 @@ function RouteCreationContent() {
     { id: 'filialVenda', label: 'Filial', visible: true },
     { id: 'operacao', label: 'Operação', visible: true },
     { id: 'vendedor', label: 'Vendedor', visible: true },
-    { id: 'situacao', label: 'Situação', visible: true },
     { id: 'obsPublicas', label: 'Obs.', visible: true },
     { id: 'obsInternas', label: 'Obs. Int.', visible: true },
     { id: 'endereco', label: 'Endereço', visible: true },
-    { id: 'outrosLocs', label: 'Outros Locais', visible: true },
   ]);
+
+  // Pedido e Cliente vao na frente e sempre visiveis: sao a ancora da linha quando
+  // se rola pro lado. O resto segue a ordem/visibilidade escolhida na engrenagem.
+  const orderedColumns = useMemo(() => {
+    const pinned = PINNED_COLUMN_IDS
+      .map(id => columnsConf.find(c => c.id === id))
+      .filter((c): c is { id: string; label: string; visible: boolean } => Boolean(c))
+      .map(c => ({ ...c, visible: true }));
+    const rest = columnsConf.filter(c => c.visible && !PINNED_COLUMN_IDS.includes(c.id));
+    return [...pinned, ...rest];
+  }, [columnsConf]);
 
   const [viewMode, setViewMode] = useState<'products' | 'orders'>('products');
   const ordersSectionRef = useRef<HTMLDivElement>(null);
@@ -1461,7 +1807,7 @@ function RouteCreationContent() {
         { id: 'pedido', label: 'Pedido', visible: true },
         { id: 'previsaoEntrega', label: 'Prev. Entrega', visible: true },
         { id: 'cliente', label: 'Cliente', visible: true },
-        { id: 'cpf', label: 'CPF', visible: true },
+        { id: 'cpf', label: 'CPF', visible: false },
         { id: 'telefone', label: 'Telefone', visible: true },
         { id: 'sku', label: 'SKU', visible: true },
         { id: 'flags', label: 'Sinais', visible: true },
@@ -1475,11 +1821,9 @@ function RouteCreationContent() {
         { id: 'filialVenda', label: 'Filial', visible: true },
         { id: 'operacao', label: 'Operação', visible: true },
         { id: 'vendedor', label: 'Vendedor', visible: true },
-        { id: 'situacao', label: 'Situação', visible: true },
         { id: 'obsPublicas', label: 'Obs.', visible: true },
         { id: 'obsInternas', label: 'Obs. Int.', visible: true },
         { id: 'endereco', label: 'Endereço', visible: true },
-        { id: 'outrosLocs', label: 'Outros Locais', visible: true },
       ];
 
       try {
@@ -1640,26 +1984,26 @@ function RouteCreationContent() {
   }, [filterNeighborhood, neighborhoodOptions]);
   const filialOptions = useMemo(() => Array.from(new Set((orders || []).map((o: any) => String((o.filial_venda || o.raw_json?.filial_venda || '')).trim()).filter(Boolean))).sort(), [orders]);
   const localOptions = useMemo(() => {
-    const fromItems = (orders || []).flatMap((o: any) => Array.isArray(o.items_json) ? o.items_json.map((it: any) => String(it?.location || '').trim()) : []);
+    const fromItems = (orders || []).flatMap((o: any) => getOperationalItemsForOrder(o, orderBalancesByOrderId, holdCtx).map((it: any) => String(it?.location || '').trim()));
     const fromRaw = (orders || []).flatMap((o: any) => Array.isArray(o.raw_json?.produtos_locais) ? o.raw_json.produtos_locais.map((p: any) => String(p?.local_estocagem || '').trim()) : []);
     return Array.from(new Set([...fromItems, ...fromRaw].filter(Boolean))).sort();
-  }, [orders]);
+  }, [orders, orderBalancesByOrderId]);
   const sellerOptions = useMemo(() => Array.from(new Set((orders || []).map((o: any) => String((o.vendedor_nome || o.raw_json?.vendedor || o.raw_json?.vendedor_nome || '')).trim()).filter(Boolean))).sort(), [orders]);
   const operationOptions = useMemo(() => Array.from(new Set((orders || []).map((o: any) => String((o.raw_json?.operacoes || '')).trim()).filter(Boolean))).sort(), [orders]);
   const clientOptions = useMemo(() => Array.from(new Set((orders || []).map((o: any) => String((o.customer_name || '')).trim()).filter(Boolean))).sort(), [orders]);
   const departmentOptions = useMemo(() => {
-    const fromItems = (orders || []).flatMap((o: any) => Array.isArray(o.items_json) ? o.items_json.map((it: any) => String(it?.department || '').trim()) : []);
+    const fromItems = (orders || []).flatMap((o: any) => getOperationalItemsForOrder(o, orderBalancesByOrderId, holdCtx).map((it: any) => String(it?.department || '').trim()));
     const fromRawLoc = (orders || []).flatMap((o: any) => Array.isArray(o.raw_json?.produtos_locais) ? o.raw_json.produtos_locais.map((p: any) => String(p?.departamento || '').trim()) : []);
     const fromRawProd = (orders || []).flatMap((o: any) => Array.isArray(o.raw_json?.produtos) ? o.raw_json.produtos.map((p: any) => String(p?.departamento || '').trim()) : []);
     return Array.from(new Set([...(fromItems || []), ...(fromRawLoc || []), ...(fromRawProd || [])].filter(Boolean))).sort();
-  }, [orders]);
+  }, [orders, orderBalancesByOrderId]);
   const brandOptions = useMemo(() => {
-    const fromItems = (orders || []).flatMap((o: any) => Array.isArray(o.items_json) ? o.items_json.map((it: any) => String(it?.brand || '').trim()) : []);
+    const fromItems = (orders || []).flatMap((o: any) => getOperationalItemsForOrder(o, orderBalancesByOrderId, holdCtx).map((it: any) => String(it?.brand || '').trim()));
     const fromProdLoc = (orders || []).flatMap((o: any) => Array.isArray(o.raw_json?.produtos_locais) ? o.raw_json.produtos_locais.map((p: any) => String(p?.marca || '').trim()) : []);
     const fromProdRaw = (orders || []).flatMap((o: any) => Array.isArray(o.raw_json?.produtos) ? o.raw_json.produtos.map((p: any) => String(p?.marca || '').trim()) : []);
     const fromRawSingle = (orders || []).map((o: any) => String(o.raw_json?.marca || '').trim());
     return Array.from(new Set([...(fromItems || []), ...(fromProdLoc || []), ...(fromProdRaw || []), ...(fromRawSingle || [])].filter(Boolean))).sort();
-  }, [orders]);
+  }, [orders, orderBalancesByOrderId]);
 
   const filteredClients = useMemo(() => {
     const q = clientQuery.toLowerCase().trim();
@@ -1723,7 +2067,7 @@ function RouteCreationContent() {
   };
 
   const getOrderLocations = (o: any) => {
-    const itemsLocs = Array.isArray(o.items_json) ? o.items_json.map((it: any) => String(it?.location || '').trim()).filter(Boolean) : [];
+    const itemsLocs = getOperationalItemsForOrder(o, orderBalancesByOrderId, holdCtx).map((it: any) => String(it?.location || '').trim()).filter(Boolean);
     const rawLocs = Array.isArray(o.raw_json?.produtos_locais) ? o.raw_json.produtos_locais.map((p: any) => String(p?.local_estocagem || '').trim()).filter(Boolean) : [];
     return Array.from(new Set([...(itemsLocs || []), ...(rawLocs || [])].filter(Boolean)));
   };
@@ -1779,7 +2123,7 @@ function RouteCreationContent() {
       const o: any = (orders || []).find((x: any) => String(x.id) === String(oid));
       if (!o) continue;
       const pedido = String(o.raw_json?.lancamento_venda ?? o.order_id_erp ?? o.id ?? '');
-      let items = Array.isArray(o.items_json) ? o.items_json : [];
+      let items = getOperationalItemsForOrder(o, orderBalancesByOrderId, holdCtx);
 
       if (items.length > 0) {
         const rawProds = Array.isArray(o.raw_json?.produtos_locais) ? o.raw_json.produtos_locais : (Array.isArray(o.raw_json?.produtos) ? o.raw_json.produtos : []);
@@ -1875,6 +2219,222 @@ function RouteCreationContent() {
       .replace(/[\u0300-\u036f]/g, '')
       .toLowerCase()
       .trim();
+  };
+
+  const resolveOrderItemLocation = (order: any, item: any, itemIndex: number) => {
+    if (item?.location) return String(item.location);
+
+    const prodLoc = order?.raw_json?.produtos_locais || [];
+    if (!Array.isArray(prodLoc) || prodLoc.length === 0) return '';
+
+    const byCode = prodLoc.find((product: any) => normalizeLookupText(product?.codigo_produto) === normalizeLookupText(item?.sku));
+    const byName = prodLoc.find((product: any) => normalizeLookupText(product?.nome_produto) === normalizeLookupText(item?.name));
+
+    if (byCode?.local_estocagem) return String(byCode.local_estocagem);
+    if (byName?.local_estocagem) return String(byName.local_estocagem);
+    if (prodLoc[itemIndex]?.local_estocagem) return String(prodLoc[itemIndex].local_estocagem);
+    if (prodLoc[0]?.local_estocagem) return String(prodLoc[0].local_estocagem);
+
+    return '';
+  };
+
+  const withResolvedLocations = (order: any, baseItems: any[]) => {
+    return (Array.isArray(baseItems) ? baseItems : []).map((item: any, index: number) => (
+      item ? { ...item, location: resolveOrderItemLocation(order, item, index) } : item
+    ));
+  };
+
+  const findOriginalOrderItemForRouteSnapshot = (order: any, routeItem: RouteOrderItem, snapshotIndex: number) => {
+    const orderItems = Array.isArray(order?.items_json) ? order.items_json : [];
+
+    const bySourceKey = orderItems.find((candidate: any) => {
+      const candidateKey = String(candidate?.source_line_key || candidate?.source_item_key || '').trim();
+      return candidateKey && candidateKey === routeItem.source_line_key;
+    });
+    if (bySourceKey) return bySourceKey;
+
+    const bySku = orderItems.find((candidate: any) => (
+      normalizeLookupText(candidate?.sku) === normalizeLookupText(routeItem.sku_snapshot)
+    ));
+    if (bySku) return bySku;
+
+    const byName = orderItems.find((candidate: any) => (
+      normalizeLookupText(candidate?.name) === normalizeLookupText(routeItem.product_name_snapshot)
+    ));
+    if (byName) return byName;
+
+    return orderItems[snapshotIndex] || null;
+  };
+
+  const buildOrderItemsForSeparationFromSnapshot = (order: any, routeOrderItems: RouteOrderItem[]) => {
+    const printableItems = (routeOrderItems || [])
+      .filter((item) => Number(item?.allocated_quantity || 0) > 0)
+      .map((routeItem, index) => {
+        const original = findOriginalOrderItemForRouteSnapshot(order, routeItem, index) || {};
+        const quantity = Number(routeItem.allocated_quantity || routeItem.deliverable_quantity_snapshot || routeItem.purchased_quantity || 0);
+        if (!Number.isFinite(quantity) || quantity <= 0) return null;
+
+        return {
+          ...original,
+          sku: routeItem.sku_snapshot || original?.sku || '',
+          name: routeItem.product_name_snapshot || original?.name || 'Item sem nome',
+          quantity,
+          purchased_quantity: quantity,
+          location: routeItem.storage_location_snapshot || original?.location || '',
+          volumes_per_unit: Number(original?.volumes_per_unit || 1) > 0 ? Number(original?.volumes_per_unit || 1) : 1,
+        };
+      })
+      .filter(Boolean);
+
+    return withResolvedLocations(order, printableItems);
+  };
+
+  const buildOrderForSeparationSheet = (
+    order: any,
+    routeOrder: any,
+    routeOrderItemsByRouteOrder: RouteOrderItemsByRouteOrder = {},
+  ) => {
+    const address = order?.address_json || {};
+    const routeOrderItems = routeOrderItemsByRouteOrder[String(routeOrder?.id || '')] || [];
+    const fallbackItems = withResolvedLocations(order, Array.isArray(order?.items_json) ? order.items_json : []);
+    const items = routeOrderItems.length > 0
+      ? buildOrderItemsForSeparationFromSnapshot(order, routeOrderItems)
+      : fallbackItems;
+
+    const saleDate = order?.data_venda
+      || order?.raw_json?.data_venda
+      || order?.raw_json?.data_emissao
+      || order?.sale_date
+      || '';
+
+    return {
+      id: order?.id || routeOrder?.order_id,
+      order_id_erp: String(order?.order_id_erp || routeOrder?.order_id || ''),
+      customer_name: String(order?.customer_name || (order?.raw_json?.nome_cliente ?? '')),
+      phone: String(order?.phone || (order?.raw_json?.cliente_celular ?? '')),
+      address_json: {
+        street: String(address.street || order?.raw_json?.destinatario_endereco || ''),
+        neighborhood: String(address.neighborhood || order?.raw_json?.destinatario_bairro || ''),
+        city: String(address.city || order?.raw_json?.destinatario_cidade || ''),
+        state: String(address.state || ''),
+        zip: String(address.zip || order?.raw_json?.destinatario_cep || ''),
+        complement: address.complement || order?.raw_json?.destinatario_complemento || '',
+      },
+      items_json: items,
+      raw_json: order?.raw_json || null,
+      data_venda: saleDate,
+      sale_date: order?.sale_date || saleDate,
+      previsao_entrega: order?.previsao_entrega || order?.raw_json?.previsao_entrega || order?.raw_json?.data_prevista_entrega,
+      observacoes_publicas: order?.observacoes_publicas ?? order?.raw_json?.observacoes_publicas ?? order?.raw_json?.observacoes ?? '',
+      observacoes_internas: order?.observacoes_internas ?? order?.raw_json?.observacoes_internas ?? '',
+      total: Number(order?.total || 0),
+      status: order?.status || 'imported',
+      observations: order?.observations || '',
+      created_at: order?.created_at || new Date().toISOString(),
+      updated_at: order?.updated_at || new Date().toISOString(),
+    } as Order;
+  };
+
+  const buildSeparationSheetPayload = async (route: any, routeOrders: any[]) => {
+    const normalizedRouteOrders = Array.isArray(routeOrders) ? routeOrders : [];
+    const routeOrderItemsByRouteOrder = await fetchRouteOrderItemsByRouteOrder(
+      String(route?.id || ''),
+      normalizedRouteOrders.map((ro: any) => String(ro?.id || ''))
+    );
+
+    const printableEntries = normalizedRouteOrders
+      .map((ro: any) => {
+        if (!ro?.order) return null;
+        const printableOrder = buildOrderForSeparationSheet(ro.order, ro, routeOrderItemsByRouteOrder);
+        const printableItems = Array.isArray(printableOrder.items_json) ? printableOrder.items_json : [];
+        if (printableItems.length === 0) return null;
+        return { routeOrder: ro, order: printableOrder };
+      })
+      .filter(Boolean) as { routeOrder: any; order: Order }[];
+
+    return {
+      routeOrders: printableEntries.map((entry) => entry.routeOrder),
+      orders: printableEntries.map((entry) => entry.order),
+    };
+  };
+
+  const buildDeliverySheetPayload = async (
+    route: any,
+    routeOrders: any[],
+    pickupSourceXmlByOrderErp?: Map<string, string>
+  ) => {
+    const normalizedRouteOrders = Array.isArray(routeOrders) ? routeOrders : [];
+    const routeOrderItemsByRouteOrder = isCollectionRouteName(route?.name)
+      ? {}
+      : await fetchRouteOrderItemsByRouteOrder(
+        String(route?.id || ''),
+        normalizedRouteOrders.map((ro: any) => String(ro?.id || ''))
+      );
+
+    const printableEntries = normalizedRouteOrders
+      .map((ro: any) => {
+        if (!ro?.order) return null;
+
+        if (isCollectionRouteName(route?.name)) {
+          return {
+            routeOrder: ro,
+            order: mapOrderToDeliverySheetOrder(ro.order, ro, route.name, pickupSourceXmlByOrderErp),
+          };
+        }
+
+        const printableOrder = buildOrderForSeparationSheet(ro.order, ro, routeOrderItemsByRouteOrder);
+        const printableItems = Array.isArray(printableOrder.items_json) ? printableOrder.items_json : [];
+        if (printableItems.length === 0) return null;
+
+        return {
+          routeOrder: ro,
+          order: mapOrderToDeliverySheetOrder(
+            { ...ro.order, items_json: printableOrder.items_json },
+            ro,
+            route.name,
+            pickupSourceXmlByOrderErp
+          ),
+        };
+      })
+      .filter(Boolean) as { routeOrder: any; order: Order }[];
+
+    return {
+      routeOrders: printableEntries.map((entry) => entry.routeOrder),
+      orders: printableEntries.map((entry) => entry.order),
+    };
+  };
+
+  const getEmptyDeliveryPrintMessage = (orderIdErp: string | null | undefined, remainingRouteOrdersCount: number) => {
+    const orderLabel = String(orderIdErp || '').trim();
+    const prefix = orderLabel ? `Pedido ${orderLabel}: ` : '';
+
+    if (remainingRouteOrdersCount <= 1) {
+      return `${prefix}todos os itens foram devolvidos no ERP. Exclua primeiro o pedido da rota. Se a rota ficar vazia depois disso, exclua a rota.`;
+    }
+
+    return `${prefix}todos os itens foram devolvidos no ERP. Exclua o pedido da rota para continuar com os demais pedidos da rota.`;
+  };
+
+  const fetchRouteOrderItemsByRouteOrder = async (routeId: string, routeOrderIds: string[]): Promise<RouteOrderItemsByRouteOrder> => {
+    const normalizedIds = Array.from(new Set(routeOrderIds.map((value) => String(value || '').trim()).filter(Boolean)));
+    if (!routeId || normalizedIds.length === 0) return {};
+
+    const { data, error } = await supabase
+      .from('route_order_items')
+      .select('*')
+      .eq('route_id', routeId)
+      .in('route_order_id', normalizedIds)
+      .order('created_at', { ascending: true });
+
+    if (error) throw error;
+
+    return ((data || []) as RouteOrderItem[]).reduce<RouteOrderItemsByRouteOrder>((acc, item: any) => {
+      const key = String(item?.route_order_id || '').trim();
+      if (!key) return acc;
+      if (!acc[key]) acc[key] = [];
+      acc[key].push(item as RouteOrderItem);
+      return acc;
+    }, {});
   };
 
   const findXmlElementsByLocalName = (root: any, localName: string): Element[] => {
@@ -2005,7 +2565,10 @@ function RouteCreationContent() {
       const cloneOrderErp = String(row?.order?.order_id_erp || '').trim();
       if (!cloneOrderErp.startsWith('C-')) continue;
 
-      const originalOrderErp = cloneOrderErp.slice(2).trim();
+      const originalOrderErp = (
+        cloneOrderErp.match(/^C-(.+?)-RET-[A-F0-9]{8}$/i)?.[1]
+        || cloneOrderErp.slice(2)
+      ).trim();
       if (!originalOrderErp) continue;
       cloneToOriginal.set(cloneOrderErp, originalOrderErp);
     }
@@ -2040,19 +2603,80 @@ function RouteCreationContent() {
     }
   };
 
-  const fetchOrderReturnFields = async (orderId: string) => {
+  const fetchStructuredReturnItemsForPickup = async (returnId: string): Promise<Order['items_json']> => {
     try {
       const { data, error } = await supabase
-        .from('orders')
-        .select('return_nfe_xml, return_nfe_key, return_nfe_number, return_date, return_type, return_danfe_base64')
-        .eq('id', orderId)
-        .single();
+        .from('order_return_items')
+        .select(`
+          source_item_key,
+          returned_quantity,
+          sku_snapshot,
+          product_name_snapshot,
+          return:order_returns!inner (
+            id,
+            processing_status
+          ),
+          order_item:order_items (
+            sku,
+            product_name,
+            storage_location,
+            source_payload
+          )
+        `)
+        .eq('return.id', returnId)
+        .eq('return.processing_status', 'processed');
 
       if (error) throw error;
-      return data;
+      if (!data || data.length === 0) return [];
+
+      const grouped = new Map<string, any>();
+
+      for (const [index, row] of (data as any[]).entries()) {
+        const key = String(row?.source_item_key || row?.sku_snapshot || row?.product_name_snapshot || `return-item-${index}`);
+        const current = grouped.get(key) || {
+          sku: String(row?.sku_snapshot || row?.order_item?.sku || '').trim(),
+          name: String(row?.product_name_snapshot || row?.order_item?.product_name || '').trim(),
+          quantity: 0,
+          purchased_quantity: 0,
+          location: String(row?.order_item?.storage_location || '').trim(),
+          brand: '',
+        };
+
+        const sourcePayload = Array.isArray(row?.order_item?.source_payload)
+          ? row.order_item.source_payload
+          : [];
+        const sourceSample = sourcePayload[0] || {};
+        const returnedQuantity = Number(row?.returned_quantity || 0);
+
+        current.quantity += Number.isFinite(returnedQuantity) ? returnedQuantity : 0;
+        current.purchased_quantity += Number.isFinite(returnedQuantity) ? returnedQuantity : 0;
+
+        if (!current.location) {
+          current.location = String(
+            sourceSample?.location ||
+            sourceSample?.local_estocagem ||
+            row?.order_item?.storage_location ||
+            ''
+          ).trim();
+        }
+
+        if (!current.brand) {
+          current.brand = String(sourceSample?.brand || sourceSample?.marca || '').trim();
+        }
+
+        grouped.set(key, current);
+      }
+
+      return Array.from(grouped.values())
+        .filter((item) => String(item?.sku || item?.name || '').trim().length > 0)
+        .map((item) => ({
+          ...item,
+          quantity: item.quantity > 0 ? item.quantity : 1,
+          purchased_quantity: item.purchased_quantity > 0 ? item.purchased_quantity : 1,
+        })) as Order['items_json'];
     } catch (error) {
-      console.warn('Falha ao buscar dados de devoluÃ§Ã£o do pedido:', error);
-      return null;
+      console.warn('Falha ao buscar itens estruturados da devolução para a coleta:', error);
+      return [];
     }
   };
 
@@ -2111,26 +2735,10 @@ function RouteCreationContent() {
     pickupSourceXmlByOrderErp?: Map<string, string>
   ) => {
     const address = order?.address_json || {};
-    const prodLoc = order?.raw_json?.produtos_locais || [];
     const baseItems = isCollectionRouteName(routeName)
       ? buildPickupItemsForDeliverySheet(order, pickupSourceXmlByOrderErp?.get(String(order?.order_id_erp || '').trim()))
       : (Array.isArray(order?.items_json) ? order.items_json : []);
-
-    const items = baseItems.map((item: any, idx: number) => {
-      if (!item || item.location) return item;
-
-      let location = '';
-      if (Array.isArray(prodLoc) && prodLoc.length > 0) {
-        const byCode = prodLoc.find((product: any) => normalizeLookupText(product?.codigo_produto) === normalizeLookupText(item?.sku));
-        const byName = prodLoc.find((product: any) => normalizeLookupText(product?.nome_produto) === normalizeLookupText(item?.name));
-        if (byCode?.local_estocagem) location = String(byCode.local_estocagem);
-        else if (byName?.local_estocagem) location = String(byName.local_estocagem);
-        else if (prodLoc[idx]?.local_estocagem) location = String(prodLoc[idx].local_estocagem);
-        else if (prodLoc[0]?.local_estocagem) location = String(prodLoc[0].local_estocagem);
-      }
-
-      return { ...item, location };
-    });
+    const items = withResolvedLocations(order, baseItems);
 
     const saleDate = order?.data_venda
       || order?.raw_json?.data_venda
@@ -2221,7 +2829,8 @@ function RouteCreationContent() {
     for (const order of sourceOrders || []) {
       if (!order) continue;
       if (!hasFreteFull(order)) continue;
-      if (String(order.status || '') === 'returned' || Boolean(order.return_flag) || Boolean(order.requires_pickup)) continue;
+      if (String(order.status || '') === 'returned' || Boolean(order.requires_pickup)) continue;
+      if (getOperationalItemsForOrder(order, orderBalancesByOrderId, holdCtx).length === 0) continue;
 
       const previsaoKey = getDateOnlyKey(order.previsao_entrega);
       if (!previsaoKey || previsaoKey > todayKey) continue;
@@ -2303,7 +2912,7 @@ function RouteCreationContent() {
       // Apply per-item filters
       const ids = new Set<string>();
       for (const o of filtered) {
-        let items = Array.isArray(o.items_json) ? o.items_json : [];
+        let items = getOperationalItemsForOrder(o, orderBalancesByOrderId, holdCtx);
 
         // Enrich items with department/brand from raw_json if missing
         if (items.length > 0) {
@@ -2574,12 +3183,21 @@ function RouteCreationContent() {
       ] = await Promise.all([
         // Orders (pending or returned OR assigned) - EXCLUINDO BLOQUEADOS
         // OTIMIZAÃ‡ÃƒO: Excluindo colunas pesadas (danfe_base64=88MB, xml_documento, raw_json, return_nfe_xml, return_danfe_base64)
-        supabase
-          .from('orders')
-          .select('id, order_id_erp, customer_name, phone, address_json, items_json, status, created_at, updated_at, filial_venda, data_venda, previsao_entrega, tem_frete_full, observacoes_publicas, observacoes_internas, customer_cpf, vendedor_nome, return_flag, last_return_reason, last_return_notes, brand, department, service_type, erp_status, blocked_at, blocked_reason, requires_pickup, pickup_created_at, return_nfe_number, return_nfe_key, return_date, return_type, import_source, previsao_montagem, product_group, product_subgroup, danfe_gerada_em, requires_store_release, store_release_status, raw_operacoes:raw_json->>operacoes, raw_lancamento_venda:raw_json->>lancamento_venda')
-          .in('status', ['pending', 'returned', 'assigned'])
-          .is('blocked_at', null)  // SÃ³ pedidos NÃƒO bloqueados
-          .order('created_at', { ascending: false }),
+        // Paginado (fetchAllPages): o PostgREST corta em 1000 linhas em silêncio —
+        // sem isso, com a fila acima de 1000 pedidos os mais antigos SUMIRIAM.
+        (async () => {
+          try {
+            const data = await fetchAllPages<any>((from, to) => supabase
+              .from('orders')
+              .select('id, order_id_erp, customer_name, phone, address_json, items_json, status, created_at, updated_at, filial_venda, data_venda, previsao_entrega, tem_frete_full, observacoes_publicas, observacoes_internas, customer_cpf, vendedor_nome, return_flag, last_return_reason, last_return_notes, brand, department, service_type, erp_status, blocked_at, blocked_reason, requires_pickup, pickup_created_at, return_nfe_number, return_nfe_key, return_date, return_type, import_source, previsao_montagem, product_group, product_subgroup, danfe_gerada_em, requires_store_release, store_release_status, raw_operacoes:raw_json->>operacoes, raw_lancamento_venda:raw_json->>lancamento_venda')
+              .in('status', ['pending', 'returned', 'assigned'])
+              .order('created_at', { ascending: false })
+              .range(from, to));
+            return { data, error: null };
+          } catch (error) {
+            return { data: null, error };
+          }
+        })(),
 
         // Vehicles
         supabase
@@ -2634,13 +3252,32 @@ function RouteCreationContent() {
           .select('order_id, route:routes!inner(id,name,status,route_code)')
           .neq('route.status', 'completed'),
 
-        // Pedidos que precisam de coleta (para aba "Coletas Pendentes") â€” sem colunas pesadas
+        // Eventos de devolução que ainda aguardam criação de coleta
         supabase
-          .from('orders')
-          .select('id, order_id_erp, customer_name, phone, address_json, items_json, status, created_at, updated_at, filial_venda, data_venda, previsao_entrega, tem_frete_full, observacoes_publicas, observacoes_internas, customer_cpf, vendedor_nome, return_flag, last_return_reason, last_return_notes, brand, department, service_type, erp_status, blocked_at, blocked_reason, requires_pickup, pickup_created_at, return_nfe_number, return_nfe_key, return_date, return_type, import_source, previsao_montagem, product_group, product_subgroup, danfe_gerada_em, requires_store_release, store_release_status, raw_operacoes:raw_json->>operacoes, raw_lancamento_venda:raw_json->>lancamento_venda')
+          .from('order_returns')
+          .select(`
+            id,
+            order_id,
+            return_nfe_number,
+            return_nfe_key,
+            return_date,
+            return_type,
+            return_xml,
+            reason,
+            processing_status,
+            processing_notes,
+            requires_pickup,
+            pickup_created_at,
+            pickup_order_id,
+            pickup_route_id,
+            created_at,
+            updated_at
+          `)
+          .eq('processing_status', 'processed')
           .eq('requires_pickup', true)
           .is('pickup_created_at', null)
-          .order('blocked_at', { ascending: false })
+          .order('return_date', { ascending: false })
+          .order('created_at', { ascending: false })
           .limit(100),
       ]);
 
@@ -2652,59 +3289,95 @@ function RouteCreationContent() {
         });
       }
 
+      if (ordersRes.error) {
+        console.error('[RouteCreation] Falha ao carregar a fila de pedidos:', ordersRes.error);
+        toast.error('Falha ao carregar a fila de pedidos. Recarregue a página.');
+      }
+
       let processedOrders: Order[] = [];
       if (ordersRes.data) {
         const rawOrders = ordersRes.data as Order[];
+        let balancesByOrderIdMap: Record<string, OrderItemShadowBalance[]> = {};
         let carrierDeliveryMap = new Map<string, boolean>();
         let withdrawnOrderIds = new Set<string>();
         let releasedNotesMap: Record<string, string> = {};
         if (rawOrders.length > 0) {
+          // O filtro .in() viaja DENTRO da URL. Com muitos pedidos (600+) a URL
+          // estoura o limite e o servidor devolve 400 — os saldos vinham vazios e,
+          // pelo fallback abaixo (`balances.length === 0 -> !return_flag`), TODO
+          // pedido devolvido sumia da fila. Por isso buscamos em lotes (helper
+          // compartilhado em utils/supabase/batch, coberto por teste).
+          const orderIds = rawOrders.map((order) => String(order.id));
+
           try {
-            const { data: carrierFlagsData, error: carrierFlagsError } = await supabase
+            const balancesData = await fetchInChunks<string, any>(orderIds, (ids) => supabase
+              .from('order_item_shadow_balances')
+              .select('order_id, order_item_id, source_line_key, sku, product_name, storage_location, source_present, purchased_quantity, returned_quantity, shadow_deliverable_quantity, delivered_quantity, remaining_deliverable_quantity, has_over_return')
+              .in('order_id', ids));
+
+            balancesByOrderIdMap = balancesData.reduce((acc: Record<string, OrderItemShadowBalance[]>, row: any) => {
+              const orderId = String(row.order_id || '');
+              if (!orderId) return acc;
+              if (!acc[orderId]) acc[orderId] = [];
+              acc[orderId].push(row as OrderItemShadowBalance);
+              return acc;
+            }, {} as Record<string, OrderItemShadowBalance[]>);
+
+            const carrierFlagsData = await fetchInChunks(orderIds, (ids) => supabase
               .from('orders')
               .select('id, is_carrier_delivery')
-              .in('id', rawOrders.map((order) => String(order.id)));
+              .in('id', ids));
 
-            if (!carrierFlagsError) {
-              carrierDeliveryMap = new Map(
-                (carrierFlagsData || []).map((row: any) => [String(row.id), Boolean(row.is_carrier_delivery)])
-              );
-            }
+            carrierDeliveryMap = new Map(
+              carrierFlagsData.map((row: any) => [String(row.id), Boolean(row.is_carrier_delivery)])
+            );
 
-            const { data: withdrawalsData, error: withdrawalsError } = await supabase
+            const withdrawalsData = await fetchInChunks(orderIds, (ids) => supabase
               .from('order_withdrawals')
-              .select('order_id')
-              .in('order_id', rawOrders.map((order) => String(order.id)));
+              .select('order_id, items')
+              .in('order_id', ids));
 
-            if (!withdrawalsError) {
-              withdrawnOrderIds = new Set((withdrawalsData || []).map((row: any) => String(row.order_id)));
-            }
+            // Só exclui da fila quem foi retirado POR INTEIRO (items null/vazio).
+            // Retirada PARCIAL mantém o pedido na fila; os itens retirados são
+            // escondidos por item via order_item_holds (picked_up).
+            withdrawnOrderIds = new Set(
+              withdrawalsData
+                .filter((row: any) => !Array.isArray(row.items) || row.items.length === 0)
+                .map((row: any) => String(row.order_id))
+            );
 
-            const { data: releaseAssignmentsData, error: releaseAssignmentsError } = await supabase
+            const releaseAssignmentsData = await fetchInChunks(orderIds, (ids) => supabase
               .from('store_release_assignments')
               .select('order_id, status, release_notes, updated_at')
-              .in('order_id', rawOrders.map((order) => String(order.id)))
+              .in('order_id', ids)
               .eq('status', 'released')
-              .order('updated_at', { ascending: false });
+              .order('updated_at', { ascending: false }));
 
-            if (!releaseAssignmentsError) {
-              for (const row of releaseAssignmentsData || []) {
-                const orderId = String((row as any).order_id || '');
-                if (!orderId || releasedNotesMap[orderId]) continue;
-                const notes = String((row as any).release_notes || '').trim();
-                if (notes) releasedNotesMap[orderId] = notes;
-              }
+            for (const row of releaseAssignmentsData) {
+              const orderId = String((row as any).order_id || '');
+              if (!orderId || releasedNotesMap[orderId]) continue;
+              const notes = String((row as any).release_notes || '').trim();
+              if (notes) releasedNotesMap[orderId] = notes;
             }
           } catch (error) {
-            console.warn('Carrier delivery flag or withdrawals not available yet:', error);
+            // Falhar aqui esconde pedidos devolvidos da fila — não pode passar batido.
+            console.error('[RouteCreation] Falha ao carregar saldos/retiradas/liberações:', error);
+            toast.error('Falha ao carregar os saldos dos itens. Recarregue a página — a fila pode estar incompleta.');
           }
         }
+        setOrderBalancesByOrderId(balancesByOrderIdMap);
         setStoreReleaseNotesByOrder(releasedNotesMap);
         setFullUrgentAlert(buildFullUrgentAlertSummary(rawOrders, activeRouteOrdersRes.data || []));
         processedOrders = rawOrders
           .filter(o => !lockedOrderIds.has(o.id)) // SAFETY FILTER
           .filter(o => String(o.status) !== 'assigned') // BLOCK VISIBILITY OF INCONSISTENT/STUCK ORDERS
           .filter(o => !withdrawnOrderIds.has(String(o.id))) // Pedidos retirados nao devem voltar para a fila
+          .filter((o: any) => {
+            if (o.requires_pickup) return false;
+            const balances = balancesByOrderIdMap[String(o.id)] || [];
+            if (balances.length === 0) return !Boolean(o.return_flag);
+            return balances.some(hasDeliverableBalance);
+          })
           .map((o: any) => {
             let updated = { ...o };
             updated.is_carrier_delivery = carrierDeliveryMap.get(String(o.id)) || false;
@@ -2744,16 +3417,90 @@ function RouteCreationContent() {
         }
         setOrders(processedOrders);
       } else {
+        setOrderBalancesByOrderId({});
         setFullUrgentAlert(null);
       }
 
-      // Processar pedidos que precisam de coleta
-      if (pickupPendingRes.data) {
-        setPickupPendingOrders(pickupPendingRes.data.map((o: any) => ({
-          ...o,
-          is_carrier_delivery: Boolean((o as any).is_carrier_delivery),
-          raw_json: { operacoes: o.raw_operacoes, lancamento_venda: o.raw_lancamento_venda }
-        })) as Order[]);
+      // Processar devoluções que precisam de coleta
+      if (pickupPendingRes.error) {
+        console.error('Error fetching pickup pending returns:', pickupPendingRes.error);
+        setPickupPendingReturns([]);
+      } else if (pickupPendingRes.data) {
+        const pickupRows = pickupPendingRes.data as any[];
+        const pickupOrderIds = Array.from(new Set(
+          pickupRows
+            .map((row: any) => String(row.order_id || ''))
+            .filter(Boolean)
+        ));
+
+        let pickupOrdersById = new Map<string, any>();
+
+        if (pickupOrderIds.length > 0) {
+          const { data: pickupOrdersData, error: pickupOrdersError } = await supabase
+            .from('orders')
+            .select(`
+              id,
+              order_id_erp,
+              customer_name,
+              phone,
+              address_json,
+              items_json,
+              status,
+              created_at,
+              updated_at,
+              filial_venda,
+              data_venda,
+              previsao_entrega,
+              tem_frete_full,
+              observacoes_publicas,
+              observacoes_internas,
+              customer_cpf,
+              vendedor_nome,
+              return_flag,
+              last_return_reason,
+              last_return_notes,
+              brand,
+              department,
+              service_type,
+              erp_status,
+              blocked_at,
+              blocked_reason,
+              requires_pickup,
+              pickup_created_at,
+              return_nfe_number,
+              return_nfe_key,
+              return_date,
+              return_type,
+              import_source,
+              previsao_montagem,
+              product_group,
+              product_subgroup,
+              danfe_gerada_em,
+              requires_store_release,
+              store_release_status,
+              raw_json
+            `)
+            .in('id', pickupOrderIds);
+
+          if (pickupOrdersError) {
+            console.error('Error fetching orders for pickup pending returns:', pickupOrdersError);
+          } else {
+            pickupOrdersById = new Map(
+              (pickupOrdersData || []).map((row: any) => [String(row.id), row])
+            );
+          }
+        }
+
+        const mappedPickupReturns = pickupRows
+          .map((row: any) => ({
+            ...row,
+            order: pickupOrdersById.get(String(row.order_id || '')) || null,
+          }))
+          .filter((row: any) => row.order);
+
+        setPickupPendingReturns(mappedPickupReturns as PickupPendingReturn[]);
+      } else {
+        setPickupPendingReturns([]);
       }
 
       // Conference setting
@@ -2989,12 +3736,14 @@ function RouteCreationContent() {
     if (!window.confirm(confirmMessage)) return;
 
     try {
-      const { error } = await supabase
-        .from('orders')
-        .update({ is_carrier_delivery: nextValue })
-        .in('id', orderIds);
-
-      if (error) throw error;
+      // Em lotes: com "selecionar todos" (600+ ids) o .in() estoura a URL (400).
+      for (const ids of chunkArray(orderIds, 100)) {
+        const { error } = await supabase
+          .from('orders')
+          .update({ is_carrier_delivery: nextValue })
+          .in('id', ids);
+        if (error) throw error;
+      }
 
       setOrders((prev) => prev.map((order) => (
         orderIds.includes(String(order.id))
@@ -3006,10 +3755,10 @@ function RouteCreationContent() {
           ? { ...order, is_carrier_delivery: nextValue }
           : order
       )));
-      setPickupPendingOrders((prev) => prev.map((order) => (
-        orderIds.includes(String(order.id))
-          ? { ...order, is_carrier_delivery: nextValue }
-          : order
+      setPickupPendingReturns((prev) => prev.map((entry) => (
+        orderIds.includes(String(entry.order.id))
+          ? { ...entry, order: { ...entry.order, is_carrier_delivery: nextValue } }
+          : entry
       )));
 
       toast.success(nextValue ? 'Pedido(s) marcado(s) como transportadora' : 'Marcação de transportadora removida');
@@ -3031,6 +3780,17 @@ function RouteCreationContent() {
     setPickupObservations('');
     setPickupDocumentsPrinted(false);
     setCompletedPickupWithdrawals([]);
+
+    // Um pedido só: permite escolher quais itens o cliente está levando (retirada parcial).
+    if (uniqueOrderIds.length === 1) {
+      const items = availableItemsForPickup(uniqueOrderIds[0]);
+      setPickupItems(items);
+      setPickupSelectedKeys(new Set(items.map(itemKeyOf)));
+    } else {
+      setPickupItems([]);
+      setPickupSelectedKeys(new Set());
+    }
+
     setShowPickupModal(true);
   };
 
@@ -3041,8 +3801,18 @@ function RouteCreationContent() {
     setPickupObservations('');
     setPickupDocumentsPrinted(false);
     setCompletedPickupWithdrawals([]);
+    setPickupItems([]);
+    setPickupSelectedKeys(new Set());
     setPickupSaving(false);
     setPickupPrinting(false);
+  };
+
+  const togglePickupItem = (key: string) => {
+    setPickupSelectedKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
   };
 
   useEffect(() => {
@@ -3103,9 +3873,15 @@ function RouteCreationContent() {
       } as any;
     });
 
-    const mappedOrders = bundle.orders.map((order, index) =>
-      mapOrderToDeliverySheetOrder(order, routeOrders[index], routeName)
-    );
+    const mappedOrders = bundle.orders.map((order, index) => {
+      // Retirada parcial: o comprovante sai só com os itens efetivamente retirados.
+      const withdrawal = bundle.withdrawals.find((entry) => String(entry.order_id) === String(order.id));
+      const pickedItems = (withdrawal as any)?.items;
+      const effectiveOrder = Array.isArray(pickedItems) && pickedItems.length > 0
+        ? { ...order, items_json: pickedItems }
+        : order;
+      return mapOrderToDeliverySheetOrder(effectiveOrder, routeOrders[index], routeName);
+    });
 
     return DeliverySheetGenerator.generateDeliverySheet({
       route: {
@@ -3188,6 +3964,7 @@ function RouteCreationContent() {
     setPickupDocumentsPrinted(true);
   };
 
+  // Marca itens como retirados (terminal). Reaproveita a pausa ativa se o item já estava em espera.
   const createPickup = async () => {
     if (pickupSaving) return;
 
@@ -3205,43 +3982,34 @@ function RouteCreationContent() {
 
     setPickupSaving(true);
     try {
-      const now = new Date().toISOString();
-      const withdrawalsPayload = pickupOrderIds.map((orderId) => ({
-        order_id: orderId,
-        responsible_name: pickupResponsibleName.trim(),
-        notes: pickupObservations.trim() || null,
-        withdrawn_at: now,
-        registered_by_user_id: authUser?.id || null,
-        registered_by_name: authUser?.name || authUser?.email || null,
-        source: 'manual',
-      }));
+      const single = pickupOrderIds.length === 1;
+      const ordersById = new Map((orders || []).map((o: any) => [String(o.id), o]));
+      const completedRows: OrderWithdrawal[] = [];
+      const assemblySyncFailures: unknown[] = [];
 
-      const { data: withdrawalRows, error: withdrawalError } = await supabase
-        .from('order_withdrawals')
-        .upsert(withdrawalsPayload, { onConflict: 'order_id' })
-        .select('*');
+      for (const orderId of pickupOrderIds) {
+        const order = ordersById.get(String(orderId));
+        const fullItems = availableItemsForPickup(String(orderId)); // exclui os ja retirados
+        // Um pedido só: usa os itens marcados no modal. Vários pedidos (lote): pedido inteiro.
+        const pickedItems = single
+          ? fullItems.filter((it: any) => pickupSelectedKeys.has(itemKeyOf(it)))
+          : fullItems;
 
-      if (withdrawalError) throw withdrawalError;
-      if (!withdrawalRows || withdrawalRows.length !== pickupOrderIds.length) {
-        throw new Error('O banco não confirmou todas as retiradas selecionadas. Tente novamente.');
+        const { withdrawal, assemblyError } = await registerPickupForOrder({
+          order,
+          allDeliverableItems: fullItems,
+          pickedItems,
+          responsibleName: pickupResponsibleName.trim(),
+          notes: pickupObservations.trim() || null,
+          registeredByUserId: authUser?.id || null,
+          registeredByName: authUser?.name || authUser?.email || null,
+        });
+        completedRows.push(withdrawal as OrderWithdrawal);
+        if (assemblyError) assemblySyncFailures.push(assemblyError);
       }
 
-      const { error: updateOrdersError } = await supabase
-        .from('orders')
-        .update({
-          status: 'delivered',
-          updated_at: now,
-        })
-        .in('id', pickupOrderIds);
-
-      if (updateOrdersError) throw updateOrdersError;
-
-      setCompletedPickupWithdrawals((withdrawalRows || []) as OrderWithdrawal[]);
-
-      const assemblySyncResults = await Promise.allSettled(
-        pickupOrderIds.map((orderId) => syncAssemblyProductsForPickup(String(orderId)))
-      );
-      const assemblySyncFailures = assemblySyncResults.filter((result) => result.status === 'rejected');
+      setCompletedPickupWithdrawals(completedRows);
+      await loadHoldsAndRules();
 
       setSelectedOrders((prev) => {
         const next = new Set(prev);
@@ -3268,9 +4036,11 @@ function RouteCreationContent() {
     }
   };
 
-  // FunÃ§Ã£o para criar ordem de coleta de devoluÃ§Ã£o
+  // Cria a ordem de coleta da devolução — o fluxo completo vive em
+  // utils/pickup/createPickupFromReturn (compartilhado com a Central de
+  // Devoluções). Aqui só fica a casca de UI (modal, toasts, recarregar).
   const createPickupOrder = async () => {
-    if (!selectedPickupOrder) return;
+    if (!selectedPickupReturn) return;
     if (!pickupTeam) {
       toast.error('Selecione uma equipe');
       return;
@@ -3278,189 +4048,35 @@ function RouteCreationContent() {
 
     setPickupOrderLoading(true);
     try {
-      let order = selectedPickupOrder as any;
-      if (order?.id && (!order?.return_nfe_xml || !order?.return_nfe_key || !order?.return_type || !order?.return_date)) {
-        const returnFields = await fetchOrderReturnFields(String(order.id));
-        if (returnFields) {
-          order = { ...order, ...returnFields };
-        }
-      }
-
-      // Buscar dados da equipe selecionada
-      let teamData = teams.find(t => t.id === pickupTeam);
-
-      // Se nÃ£o achou na lista local (raro), busca no banco
-      if (!teamData) {
-        const { data: t } = await supabase.from('teams_user').select('*').eq('id', pickupTeam).single();
-        if (t) teamData = t;
-      }
-
-      // DefiniÃ§Ã£o de Motorista e Ajudante baseado na equipe
-      let driverIdToUse = null;
-      let helperIdToUse = null;
+      const returnRecord = selectedPickupReturn as PickupPendingReturn;
       let conferenteName = 'Conferente';
-
-      // Se a equipe tem driver_user_id, precisamos achar o driver correspondente na tabela drivers
-      if (teamData?.driver_user_id) {
-        // Tenta achar driver com esse user_id na lista
-        const drv = drivers.find(d => d.user_id === teamData.driver_user_id);
-        if (drv) driverIdToUse = drv.id;
-        else {
-          // Fallback: se nÃ£o achar na lista, pode ser que drivers nÃ£o esteja carregado full, ou o user_id nÃ£o bata. 
-          // Tenta buscar driver pelo user_id
-          const { data: dDB } = await supabase.from('drivers').select('id').eq('user_id', teamData.driver_user_id).single();
-          if (dDB) driverIdToUse = dDB.id;
-        }
-      }
-
-      helperIdToUse = teamData?.helper_user_id || null;
-
-      // Se nÃ£o achou motorista na equipe, usa o placeholder OU avisa (decisÃ£o: avisar/falhar Ã© mais seguro, mas vou manter fallback para placeholder se crÃ­tico)
-      if (!driverIdToUse) {
-        console.warn('Motorista da equipe não encontrado na tabela drivers. Usando placeholder.');
-        driverIdToUse = PICKUP_PLACEHOLDER_DRIVER_ID;
-      }
-
-      // Conferente Name (apenas visual para observaÃ§Ã£o)
       if (pickupOrderConferente) {
         const c = conferentes.find(x => x.id === pickupOrderConferente);
         if (c) conferenteName = c.name;
       }
 
-      // 1. Gerar DANFE da nota de devolução (desativado: a DANFE sai na rota de coleta)
-      toast.info('Gerando nota fiscal de devolução...');
-
-      // Usar o XML de devolução que veio do ERP
-      const xmlDevolucao = String(order.return_nfe_xml || '');
-      if (!xmlDevolucao) {
-        toast.warning('XML de devolução não encontrado. Continuando sem DANFE.');
-      }
-
-      let danfeBase64 = String(order.return_danfe_base64 || '');
-      const shouldGenerateDanfeOnPickupCreation = false;
-      if (shouldGenerateDanfeOnPickupCreation && xmlDevolucao && !danfeBase64.startsWith('JVBER')) {
-        const gerada = await generateDanfeBase64(xmlDevolucao);
-        if (gerada.startsWith('JVBER')) danfeBase64 = gerada;
-      }
-
-      // 2. CRIAR NOVO PEDIDO DE COLETA (Prefixo C-)
-      // Isso Ã© necessÃ¡rio para evitar conflito com o pedido original que jÃ¡ estÃ¡ Entregue
-      // e para ter um ciclo de vida independente na rota de coleta.
-
-      const newOrderErpId = `C-${order.order_id_erp}`;
-
-      // Preparar objeto do novo pedido copiando dados do original
-      const newOrderPayload = {
-        order_id_erp: newOrderErpId,
-        customer_name: order.customer_name,
-        phone: order.phone,
-        customer_cpf: order.customer_cpf,
-        address_json: order.address_json,
-        items_json: (order.items_json || []).map((item: any) => ({
-          ...item,
-          // Importante: remover flags de montagem para que um pedido de coleta nao gere tarefas de montagem
-          tem_montagem: false,
-          has_assembly: false,
-          assembly_status: null
-        })),
-        status: 'pending', // Nasce pendente para poder ser roteirizado
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-        raw_json: order.raw_json, // MantÃ©m raw_json para referÃªncia
-
-        // Campos especÃ­ficos da coleta
-        xml_documento: null, // Limpa XML de venda para evitar confusÃ£o
-        return_nfe_xml: order.return_nfe_xml || null, // XML da devoluÃ§Ã£o no campo correto
-        return_nfe_number: order.return_nfe_number,
-        return_nfe_key: order.return_nfe_key || null,
-        return_date: order.return_date || null,
-        return_type: order.return_type || null,
-
-        danfe_base64: null,
-        return_danfe_base64: danfeBase64 || null, // Salva DANFE gerada no campo de retorno
-        danfe_gerada_em: danfeBase64 ? new Date().toISOString() : null,
-
-        filial_venda: order.filial_venda,
-        data_venda: order.data_venda,
-
-        observacoes_internas: `PEDIDO DE COLETA GERADO AUTOMATICAMENTE.\nOrigem: ${order.order_id_erp}\nMotivo: ${order.blocked_reason || 'Devolução'}`.slice(0, 1000),
-
-        // Limpar flags de controle anteriores
-        return_flag: false,
-        requires_pickup: false, // Este pedido JÃ Ã‰ a execuÃ§Ã£o da pickup
-        pickup_created_at: null,
-        blocked_at: null
-      };
-
-
-
-      // Inserir novo pedido
-      const { data: newOrderData, error: newOrderError } = await supabase
-        .from('orders')
-        .insert(newOrderPayload)
-        .select()
-        .single();
-
-      if (newOrderError) throw newOrderError;
-
-      // 3. Criar rota de coleta
-      const routeName = `COLETA-${order.return_nfe_number || order.order_id_erp}-${new Date().toLocaleDateString('pt-BR').replace(/\//g, '')}`;
-
-      const { data: routeData, error: routeError } = await supabase
-        .from('routes')
-        .insert({
-          name: routeName,
-          team_id: pickupTeam, // ID da equipe
-          driver_id: driverIdToUse, // ID do motorista da equipe
-          helper_id: helperIdToUse, // ID do ajudante (user_id)
-          vehicle_id: null,
-          status: 'pending',
-          observations: `Coleta de devolução. NF: ${order.return_nfe_number || '-'}. Resp: ${conferenteName}. ${pickupOrderObservations}`.trim()
-        })
-        .select()
-        .single();
-
-      if (routeError) throw routeError;
-
-      // 4. Criar route_order vinculada ao NOVO pedido de coleta
-      const { error: roError } = await supabase.from('route_orders').insert({
-        route_id: routeData.id,
-        order_id: newOrderData.id, // ID do novo pedido C-
-        sequence: 1,
-        status: 'pending',
-        delivery_observations: `Coleta de devolução. NF: ${order.return_nfe_number || '-'}. Motivo: ${order.blocked_reason || '-'}`
+      const result = await createPickupFromReturn({
+        returnId: String(returnRecord.id),
+        teamId: pickupTeam,
+        observations: pickupOrderObservations,
+        conferenteName,
       });
-      if (roError) throw roError;
 
-      // 5. Atualizar o pedido ORIGINAL marcando que a coleta foi criada
-      // Isso faz ele sumir da lista de "Coletas Pendentes"
-      const updateData: any = {
-        pickup_created_at: new Date().toISOString()
-      };
-
-      // Opcional: Salvar DANFE no original tambÃ©m para histÃ³rico, se desejar
-      if (danfeBase64) {
-        updateData.return_danfe_base64 = danfeBase64;
+      if (result.status === 'already_created') {
+        toast.info('Essa coleta já foi criada. Atualizando a tela...');
+      } else if (result.status === 'synced_existing') {
+        toast.success('A coleta já existia e foi sincronizada com o evento de devolução.');
+      } else {
+        toast.success(`Coleta criada! Pedido gerado: ${result.pickupOrderErp}`);
       }
 
-      const { error: ordError } = await supabase.from('orders').update(updateData).eq('id', order.id);
-      if (ordError) throw ordError;
-
-      toast.success(`Coleta criada! Pedido gerado: ${newOrderErpId}`);
-
-      // Limpar e fechar modal
       setShowPickupOrderModal(false);
-      setSelectedPickupOrder(null);
+      setSelectedPickupReturn(null);
       setPickupOrderConferente('');
-      setPickupTeam(''); // Limpar equipe
+      setPickupTeam('');
       setPickupOrderObservations('');
-
-      // Recarregar dados
       await loadData(false);
-
-      // Mudar para aba das rotas de coleta
       setActiveRoutesTab('pickupRoutes');
-
     } catch (error: any) {
       console.error('Error creating pickup order:', error);
       toast.error('Erro ao criar coleta: ' + error.message);
@@ -3520,7 +4136,7 @@ function RouteCreationContent() {
         const routeCode = await generateRouteCode('delivery');
 
         // Pre-generate UUID to avoid .select().single() which can cause 404
-        const newRouteId = crypto.randomUUID();
+        const newRouteId = createUuid();
 
         const { error: routeError } = await supabase
           .from('routes')
@@ -3586,8 +4202,12 @@ function RouteCreationContent() {
 
       const routeOrders = toAdd.map((orderId, idx) => ({ route_id: targetRouteId, order_id: orderId, sequence: startSeq + idx, status: 'pending' }));
       if (routeOrders.length > 0) {
-        const { error: routeOrdersError } = await supabase.from('route_orders').insert(routeOrders);
+        const { data: insertedRouteOrders, error: routeOrdersError } = await supabase
+          .from('route_orders')
+          .insert(routeOrders)
+          .select('id, order_id');
         if (routeOrdersError) throw routeOrdersError;
+        await syncRouteOrderItemSnapshots((insertedRouteOrders || []) as InsertedRouteOrderRow[], selectedExistingRouteId ? 'adição à rota existente' : 'criação da rota');
         const { error: ordersError } = await supabase.from('orders').update({ status: 'assigned' }).in('id', toAdd);
         if (ordersError) throw ordersError;
         await syncStoreReleaseOrderIds(toAdd);
@@ -3890,6 +4510,16 @@ function RouteCreationContent() {
           </button>
 
           <button
+            onClick={() => void moveOrdersToWaiting(Array.from(selectedOrders))}
+            disabled={selectedOrders.size === 0}
+            className="flex items-center justify-center px-4 py-3 rounded-xl border border-amber-200 text-amber-700 bg-amber-50 hover:bg-amber-100 font-bold transition-all shadow-sm hover:shadow disabled:opacity-60 disabled:cursor-not-allowed disabled:shadow-none"
+            title="Move todos os itens dos pedidos selecionados para a aba Em Espera"
+          >
+            <Clock className="h-5 w-5 mr-2" />
+            Em Espera ({selectedOrders.size})
+          </button>
+
+          <button
             onClick={() => loadData(false)}
             disabled={loading}
             className="flex items-center justify-center px-4 py-3 rounded-xl border border-gray-200 text-gray-700 bg-white hover:bg-gray-50 font-bold transition-all shadow-sm hover:shadow disabled:opacity-60 disabled:cursor-not-allowed"
@@ -3960,6 +4590,52 @@ function RouteCreationContent() {
             </div>
           </div>
 
+          {/* Alternador: fila de roteirizacao x Em Espera */}
+          <div className="px-6 pt-3 flex items-center gap-2 border-b border-gray-100 bg-white">
+            <button
+              onClick={() => setShowWaitingTab(false)}
+              className={`px-3 py-2 -mb-px rounded-t-lg text-sm font-bold transition-colors border-b-2 ${!showWaitingTab ? 'border-blue-600 text-blue-700' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+            >
+              Aguardando rota
+            </button>
+            <button
+              onClick={() => setShowWaitingTab(true)}
+              className={`px-3 py-2 -mb-px rounded-t-lg text-sm font-bold transition-colors border-b-2 flex items-center gap-1.5 ${showWaitingTab ? 'border-amber-500 text-amber-700' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+            >
+              <Clock className="h-4 w-4" />
+              Em Espera
+              {waitingRows.length > 0 && (
+                <span className="inline-flex items-center rounded-full bg-amber-100 text-amber-800 px-2 py-0.5 text-[11px] font-semibold">{waitingRows.length}</span>
+              )}
+            </button>
+          </div>
+
+          {/* Busca da aba Em Espera */}
+          {showWaitingTab && waitingRows.length > 0 && (
+            <div className="px-6 py-3 border-b border-gray-100 bg-white">
+              <div className="relative max-w-md">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+                <input
+                  type="text"
+                  value={waitingSearch}
+                  onChange={(e) => setWaitingSearch(e.target.value)}
+                  placeholder="Buscar por nome do cliente ou numero do pedido..."
+                  className="w-full pl-9 pr-8 py-2 border border-gray-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
+                />
+                {waitingSearch && (
+                  <button
+                    type="button"
+                    onClick={() => setWaitingSearch('')}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-gray-400 hover:text-gray-600"
+                    title="Limpar busca"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* Warning for Mixed selection across filters */}
           {selectedMixedOrdersPlus.length > 0 && (
             <div className="bg-yellow-50 border-b border-yellow-100 px-6 py-3 flex items-start gap-3">
@@ -3981,9 +4657,112 @@ function RouteCreationContent() {
             onMouseMove={onProductsMouseMove}
             onMouseUp={endProductsDrag}
             onMouseLeave={endProductsDrag}
-            className={`overflow-auto max-h[500px] ${draggingProducts ? 'cursor-grabbing select-none' : 'cursor-grab'}`}
+            className={`overflow-auto max-h-[60vh] ${draggingProducts ? 'cursor-grabbing select-none' : 'cursor-grab'}`}
           >
-            {orders.length === 0 ? (
+            {showWaitingTab ? (
+              waitingRows.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-16 text-center">
+                  <div className="bg-amber-50 p-4 rounded-full mb-4">
+                    <Clock className="h-8 w-8 text-amber-400" />
+                  </div>
+                  <h3 className="text-lg font-medium text-gray-900">Nenhum item em espera</h3>
+                  <p className="text-gray-500 mt-1 max-w-sm">Use a acao <b>Mover para Em Espera</b> na fila, ou configure o move automatico nas Configuracoes.</p>
+                </div>
+              ) : (
+                <table className="min-w-max w-full text-sm">
+                  <thead className="bg-gray-50 sticky top-0 z-10 shadow-sm">
+                    <tr>
+                      {['Item', 'Motivo', 'Agendar dia', 'Acoes'].map((h) => (
+                        <th key={h} className="px-4 py-3 text-left font-semibold text-gray-600 uppercase text-xs tracking-wider whitespace-nowrap">{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  {waitingGroupsFiltered.length === 0 ? (
+                    <tbody>
+                      <tr>
+                        <td colSpan={4} className="px-4 py-10 text-center text-gray-500">
+                          Nenhum pedido encontrado para "<b>{waitingSearch}</b>".
+                        </td>
+                      </tr>
+                    </tbody>
+                  ) : waitingGroupsFiltered.map((group) => {
+                    const o = group.order;
+                    return (
+                      <tbody key={String(o.id)} className="divide-y divide-gray-100 bg-white border-b-4 border-gray-100">
+                        {/* Cabecalho do PEDIDO: a retirada e uma acao do pedido inteiro */}
+                        <tr className="bg-amber-50/60">
+                          <td colSpan={4} className="px-4 py-2.5">
+                            <div className="flex flex-col md:flex-row md:items-center justify-between gap-2">
+                              <div className="text-sm">
+                                <span className="font-bold text-gray-800">Pedido {o.order_id_erp || o.id}</span>
+                                <span className="text-gray-500"> · {o.customer_name || '-'}</span>
+                                <span className="ml-2 inline-flex items-center rounded-full bg-white border border-amber-200 text-amber-700 px-2 py-0.5 text-[11px] font-semibold">{group.items.length} {group.items.length === 1 ? 'item' : 'itens'} em espera</span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => void releaseGroupFromWaiting(group)}
+                                  className="inline-flex items-center rounded-lg border border-green-200 bg-green-50 px-2.5 py-1.5 text-xs font-semibold text-green-700 transition-colors hover:bg-green-100"
+                                  title="Volta TODOS os itens deste pedido para a fila"
+                                >
+                                  Liberar pedido todo
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => openPickupModalForOrders([String(o.id)])}
+                                  className="inline-flex items-center rounded-lg border border-purple-200 bg-purple-50 px-2.5 py-1.5 text-xs font-semibold text-purple-700 transition-colors hover:bg-purple-100"
+                                  title="Registra a retirada — você escolhe no modal quais itens o cliente levou"
+                                >
+                                  <Store className="mr-1 h-3.5 w-3.5" />
+                                  Cliente retirou
+                                </button>
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+                        {group.items.map((row, idx) => {
+                          const it = row.item;
+                          const reasonBadge = row.reason === 'scheduled'
+                            ? { cls: 'bg-blue-100 text-blue-800 border-blue-200', label: `Agendado${row.scheduledDate ? ` (${row.scheduledDate.split('-').reverse().join('/')})` : ''}` }
+                            : row.reason === 'retirada'
+                              ? { cls: 'bg-purple-100 text-purple-800 border-purple-200', label: 'Retirada' }
+                              : row.reason === 'operacao'
+                                ? { cls: 'bg-gray-100 text-gray-700 border-gray-200', label: 'Automatico (obs/operacao)' }
+                                : { cls: 'bg-amber-100 text-amber-800 border-amber-200', label: 'Cliente vai avisar' };
+                          return (
+                            <tr key={`${o.id}-${it?.sku || ''}-${idx}`} className="hover:bg-gray-50 transition-colors">
+                              <td className="px-4 py-3 text-gray-700 max-w-[320px] truncate pl-8" title={it?.name || it?.descricao || ''}>{it?.name || it?.descricao || it?.sku || '-'}</td>
+                              <td className="px-4 py-3 whitespace-nowrap">
+                                <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold border ${reasonBadge.cls}`}>{reasonBadge.label}</span>
+                              </td>
+                              <td className="px-4 py-3 whitespace-nowrap">
+                                <input
+                                  type="date"
+                                  value={row.scheduledDate || ''}
+                                  onChange={(e) => e.target.value && void setItemSchedule(row, e.target.value)}
+                                  className="border border-gray-300 rounded-lg text-sm px-2 py-1 outline-none focus:ring-2 focus:ring-blue-500"
+                                  title="A partir deste dia o item volta sozinho pra fila"
+                                />
+                              </td>
+                              <td className="px-4 py-3 whitespace-nowrap">
+                                <button
+                                  type="button"
+                                  onClick={() => void releaseItemFromWaiting(row)}
+                                  className="inline-flex items-center rounded-lg border border-green-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-green-700 transition-colors hover:bg-green-50"
+                                  title="Volta so este item para a fila"
+                                >
+                                  Liberar este item
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    );
+                  })}
+                </table>
+              )
+            ) : orders.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-16 text-center">
                 <div className="bg-gray-50 p-4 rounded-full mb-4">
                   <Package className="h-8 w-8 text-gray-400" />
@@ -3993,13 +4772,13 @@ function RouteCreationContent() {
               </div>
             ) : (
               <table className="min-w-max w-full text-sm divide-y divide-gray-100">
-                <thead className="bg-gray-50 sticky top-0 z-10 shadow-sm">
+                <thead className="bg-gray-50 sticky top-0 z-30 shadow-sm">
                   <tr>
-                    <th className="px-4 py-3 w-10 text-left"></th>
-                    <th className="px-4 py-3 text-left font-semibold text-gray-600 uppercase text-xs tracking-wider whitespace-nowrap">
+                    <th className={`${FROZEN_COL.check} z-10 bg-gray-50 px-3 py-3 text-left`}></th>
+                    <th className={`${FROZEN_COL.acoes} z-10 bg-gray-50 px-4 py-3 text-left font-semibold text-gray-600 uppercase text-xs tracking-wider whitespace-nowrap`}>
                       Ações
                     </th>
-                    {columnsConf.filter(c => c.visible).map(c => (
+                    {orderedColumns.map(c => (
                       <th
                         key={c.id}
                         onClick={() => {
@@ -4012,7 +4791,10 @@ function RouteCreationContent() {
                             setSortDirection(isDate ? 'desc' : 'asc');
                           }
                         }}
-                        className="px-4 py-3 text-left font-semibold text-gray-600 uppercase text-xs tracking-wider cursor-pointer hover:bg-gray-100 transition-colors select-none"
+                        className={`py-3 text-left font-semibold text-gray-600 uppercase text-xs tracking-wider cursor-pointer hover:bg-gray-100 transition-colors select-none ${c.id === 'pedido' ? `${FROZEN_COL.pedido} z-10 bg-gray-50 px-3`
+                          : c.id === 'cliente' ? `${FROZEN_COL.cliente} ${FROZEN_EDGE_SHADOW} z-10 bg-gray-50 px-3`
+                            : `px-4 ${COLUMN_WIDTH_CAP[c.id] || ''}`
+                          }`}
                       >
                         <div className="flex items-center gap-1">
                           {c.label}
@@ -4029,6 +4811,7 @@ function RouteCreationContent() {
                 <tbody className="divide-y divide-gray-100 bg-white">
                   {/* Reuse the massive mapping logic here but cleaner */}
                   {sortedRows.map(({ order: o, item: it, values }, idx) => {
+                    const rowActionsKey = `${o.id}-${it?.sku || ''}-${idx}`; // id UNICO por linha (evita abrir em todas as linhas do mesmo pedido)
                     const isSelected = selectedOrders.has(o.id);
                     const awaitingStoreRelease = isOrderAwaitingStoreRelease(o);
                     const showStoreReleaseBadge = Boolean(o.requires_store_release) && o.store_release_status && o.store_release_status !== 'not_applicable';
@@ -4044,6 +4827,15 @@ function RouteCreationContent() {
 
                     // Flags Logic
                     const isReturned = Boolean(o.return_flag) || String(o.status) === 'returned';
+                    const orderBalances = orderBalancesByOrderId[String(o.id)] || [];
+                    const hasDeliverableBalance = orderBalances.some(
+                      (bal) => bal.source_present && Number(bal.remaining_deliverable_quantity ?? bal.shadow_deliverable_quantity ?? 0) > 0
+                    );
+                    const hasReturnedBalance = orderBalances.some(
+                      (bal) => bal.source_present && Number(bal.returned_quantity || 0) > 0
+                    );
+                    const isPartialReturnedWithRemainingBalance =
+                      hasReturnedBalance && hasDeliverableBalance && String(o.status || '') !== 'returned';
                     const returnReason = normalizeLegacyDisplayText((o.last_return_reason || (raw as any).return_reason || '') as string);
                     const returnNotes = normalizeLegacyDisplayText((o.last_return_notes || (raw as any).return_notes || '') as string);
                     const returnTitle = [returnReason, returnNotes].filter(Boolean).join(' • ');
@@ -4064,49 +4856,101 @@ function RouteCreationContent() {
                       } catch { return 'none'; }
                     };
 
+                    // As colunas congeladas precisam de fundo opaco proprio: o conteudo das
+                    // outras passa por baixo delas na rolagem lateral. E o fundo tem que
+                    // acompanhar o estado da linha, senao fica um retangulo branco na
+                    // linha azul quando o pedido esta selecionado.
+                    const frozenBg = isSelected
+                      ? 'bg-blue-50 group-hover:bg-blue-100'
+                      : 'bg-white group-hover:bg-gray-50';
+
                     return (
                       <tr
                         key={`${o.id}-${it.sku}-${idx}`}
-                        className={`group hover:bg-gray-50 transition-colors ${isSelected ? 'bg-blue-50/60 hover:bg-blue-100/50' : ''}`}
+                        className={`group transition-colors ${isSelected ? 'bg-blue-50 hover:bg-blue-100' : 'hover:bg-gray-50'}`}
                       >
                         <td
-                          className="px-4 py-3 cursor-pointer"
+                          className={`${FROZEN_COL.check} ${frozenBg} z-20 px-3 py-3 cursor-pointer`}
                           onClick={() => toggleOrderSelection(o.id)}
                         >
                           <div className={`w-5 h-5 rounded border flex items-center justify-center transition-colors ${awaitingStoreRelease ? 'border-amber-300 bg-amber-50' : isSelected ? 'bg-blue-600 border-blue-600' : 'border-gray-300 bg-white'}`}>
                             {isSelected && <CheckCircle2 className="h-3.5 w-3.5 text-white" />}
                           </div>
                         </td>
-                        <td className="px-4 py-3 whitespace-nowrap">
+                        {/* z-40 com o menu aberto pra ele passar por cima das colunas congeladas vizinhas */}
+                        <td className={`${FROZEN_COL.acoes} ${frozenBg} ${openOrderActionsId === rowActionsKey ? 'z-40' : 'z-20'} px-4 py-3 whitespace-nowrap`}>
                           <div className="relative inline-block text-left">
                             <button
                               type="button"
+                              disabled={awaitingStoreRelease}
                               onClick={(event) => {
                                 event.stopPropagation();
-                                setOpenOrderActionsId((current) => current === String(o.id) ? null : String(o.id));
+                                if (awaitingStoreRelease) return;
+                                const btn = event.currentTarget.getBoundingClientRect();
+                                const box = productsScrollRef.current?.getBoundingClientRect();
+                                // ~150px e a altura do menu com as 3 opcoes.
+                                setOrderActionsOpenUpward(Boolean(box && box.bottom - btn.bottom < 150));
+                                setOpenOrderActionsId((current) => current === rowActionsKey ? null : rowActionsKey);
                               }}
-                              className="inline-flex items-center rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-semibold text-gray-700 transition-colors hover:bg-gray-50"
-                              title="Ações do pedido"
+                              className={`inline-flex items-center rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors ${awaitingStoreRelease
+                                ? 'border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed'
+                                : 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50'}`}
+                              title={awaitingStoreRelease
+                                ? 'Aguardando liberação do estoque — o gerente responsável precisa liberar antes de qualquer ação.'
+                                : 'Ações do pedido'}
+                              aria-label="Ações do pedido"
                             >
+                              {awaitingStoreRelease && <Lock className="mr-1 h-3 w-3" />}
                               Ações
                               <ChevronDown className="ml-1.5 h-3.5 w-3.5" />
                             </button>
-                            {showStoreReleaseBadge && (
-                              <div className="mt-2">
-                                <span
-                                  className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-semibold ${isStoreReleaseReleased ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'}`}
-                                  title={storeReleaseTooltip}
-                                >
-                                  {getStoreReleaseStatusLabel(o.store_release_status)}
-                                </span>
-                              </div>
-                            )}
 
-                            {openOrderActionsId === String(o.id) && (
+                            {openOrderActionsId === rowActionsKey && (
                               <div
-                                className="absolute left-0 z-30 mt-2 min-w-[180px] overflow-hidden rounded-xl border border-gray-200 bg-white shadow-lg"
+                                className={`absolute left-0 z-30 min-w-[180px] overflow-hidden rounded-xl border border-gray-200 bg-white shadow-lg ${orderActionsOpenUpward ? 'bottom-full mb-2' : 'mt-2'}`}
                                 onClick={(event) => event.stopPropagation()}
                               >
+                                {(rowsCountByOrderId[String(o.id)] || 1) > 1 ? (
+                                  <>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setOpenOrderActionsId(null);
+                                        void moveOrderToWaiting(o);
+                                      }}
+                                      className="flex w-full items-center px-3 py-2 text-left text-sm font-medium text-amber-700 transition-colors hover:bg-amber-50"
+                                      title="Tira TODOS os itens deste pedido da fila e manda pra aba Em Espera"
+                                    >
+                                      <Clock className="mr-2 h-4 w-4" />
+                                      Em Espera — pedido todo
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setOpenOrderActionsId(null);
+                                        void moveItemToWaiting(o, it);
+                                      }}
+                                      className="flex w-full items-center px-3 py-2 text-left text-sm font-medium text-amber-700 transition-colors hover:bg-amber-50"
+                                      title="Tira SO este item da fila (ex: roupeiro espera, ventilador segue)"
+                                    >
+                                      <Clock className="mr-2 h-4 w-4 opacity-60" />
+                                      Em Espera — só este item
+                                    </button>
+                                  </>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setOpenOrderActionsId(null);
+                                      void moveOrderToWaiting(o);
+                                    }}
+                                    className="flex w-full items-center px-3 py-2 text-left text-sm font-medium text-amber-700 transition-colors hover:bg-amber-50"
+                                    title="Tira este pedido da fila e manda pra aba Em Espera"
+                                  >
+                                    <Clock className="mr-2 h-4 w-4" />
+                                    Mover para Em Espera
+                                  </button>
+                                )}
                                 <button
                                   type="button"
                                   onClick={() => {
@@ -4122,12 +4966,19 @@ function RouteCreationContent() {
                             )}
                           </div>
                         </td>
-                        {columnsConf.filter(c => c.visible).map(c => (
+                        {orderedColumns.map(c => (
                           <td
                             key={c.id}
-                            className={`px-4 py-3 text-gray-700 ${['obsPublicas', 'obsInternas', 'endereco', 'outrosLocs'].includes(c.id)
-                              ? 'min-w-[200px] max-w-[300px] whitespace-normal leading-relaxed text-xs'
-                              : 'whitespace-nowrap'
+                            className={`py-3 text-gray-700 ${c.id === 'pedido' ? `${FROZEN_COL.pedido} ${frozenBg} z-20 px-3 whitespace-nowrap font-semibold text-gray-900`
+                              : c.id === 'cliente' ? `${FROZEN_COL.cliente} ${frozenBg} ${FROZEN_EDGE_SHADOW} z-20 px-3 whitespace-normal leading-snug font-medium text-gray-900`
+                                : ['obsPublicas', 'obsInternas', 'endereco'].includes(c.id)
+                                  ? 'px-4 min-w-[200px] max-w-[300px] whitespace-normal leading-relaxed text-xs'
+                                  // Sem teto, os selos ficam numa linha so e esticam a coluna a perder de vista.
+                                  : c.id === 'flags'
+                                    ? 'px-4 min-w-[240px] max-w-[300px] whitespace-normal'
+                                    : COLUMN_WIDTH_CAP[c.id]
+                                      ? `px-4 ${COLUMN_WIDTH_CAP[c.id]} whitespace-normal leading-snug break-words`
+                                      : 'px-4 whitespace-nowrap'
                               }`}
                           >
                             {c.id === 'telefone' ? (
@@ -4141,7 +4992,20 @@ function RouteCreationContent() {
                               </div>
                             ) : c.id === 'flags' ? (
                               <div className="flex flex-wrap items-center gap-2">
-                                {isReturned && (
+                                {showStoreReleaseBadge && (
+                                  <span
+                                    className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold border ${isStoreReleaseReleased ? 'bg-emerald-100 text-emerald-800 border-emerald-200' : 'bg-amber-100 text-amber-800 border-amber-200'}`}
+                                    title={storeReleaseTooltip}
+                                  >
+                                    {getStoreReleaseStatusLabel(o.store_release_status)}
+                                  </span>
+                                )}
+                                {isPartialReturnedWithRemainingBalance ? (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-50 text-amber-800 border border-amber-200" title={returnTitle || 'Pedido com devolução parcial e saldo ainda entregável'}>
+                                    <AlertTriangle className="h-3.5 w-3.5" />
+                                    Devolução parcial no pedido
+                                  </span>
+                                ) : isReturned && (
                                   <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-red-100 text-red-800 border border-red-200" title={returnTitle || 'Pedido retornado'}>
                                     <AlertTriangle className="h-3.5 w-3.5" />
                                     Retornado
@@ -4210,9 +5074,7 @@ function RouteCreationContent() {
                                 </button>
                               </div>
                             ) : c.id === 'produto' ? (
-                              <div className="flex items-center gap-2">
-                                <span className="truncate max-w-[420px]">{values?.[c.id]}</span>
-                              </div>
+                              <span>{values?.[c.id]}</span>
                             ) : (
                               values?.[c.id] || '-'
                             )}
@@ -4313,26 +5175,6 @@ function RouteCreationContent() {
                 Rotas de Entrega
               </button>
               <button
-                onClick={() => setActiveRoutesTab('blocked')}
-                className={`px-4 py-2 rounded-lg text-sm font-bold transition-all flex items-center gap-2 ${activeRoutesTab === 'blocked' ? 'bg-white shadow-sm text-red-700' : 'text-gray-500 hover:text-gray-700'}`}
-              >
-                <Ban className="h-4 w-4" />
-                Bloqueados
-                {blockedOrdersTotal > 0 && (
-                  <span className="bg-red-500 text-white text-xs px-1.5 py-0.5 rounded-full">{blockedOrdersTotal}</span>
-                )}
-              </button>
-              <button
-                onClick={() => setActiveRoutesTab('pickupOrders')}
-                className={`px-4 py-2 rounded-lg text-sm font-bold transition-all flex items-center gap-2 ${activeRoutesTab === 'pickupOrders' ? 'bg-white shadow-sm text-orange-700' : 'text-gray-500 hover:text-gray-700'}`}
-              >
-                <PackageX className="h-4 w-4" />
-                Coletas Pendentes
-                {pickupPendingOrders.length > 0 && (
-                  <span className="bg-orange-500 text-white text-xs px-1.5 py-0.5 rounded-full">{pickupPendingOrders.length}</span>
-                )}
-              </button>
-              <button
                 onClick={() => setActiveRoutesTab('pickupRoutes')}
                 className={`px-4 py-2 rounded-lg text-sm font-bold transition-all flex items-center gap-2 ${activeRoutesTab === 'pickupRoutes' ? 'bg-white shadow-sm text-teal-700' : 'text-gray-500 hover:text-gray-700'}`}
               >
@@ -4353,10 +5195,6 @@ function RouteCreationContent() {
                   return !isRetirada && !isColeta;
                 });
                 count = filtered.length;
-              } else if (activeRoutesTab === 'blocked') {
-                count = blockedOrdersTotal;
-              } else if (activeRoutesTab === 'pickupOrders') {
-                count = pickupPendingOrders.length;
               }
               return (
                 <span className="bg-gray-100 text-gray-600 px-3 py-1 rounded-full text-xs font-bold self-start sm:self-center">
@@ -4421,16 +5259,60 @@ function RouteCreationContent() {
                             {(() => {
                               const conf: any = (route as any).conference;
                               const cStatus = String(conf?.status || '').toLowerCase();
-                              const ok = conf?.result_ok === true || cStatus === 'completed';
-                              const badgeClass = ok
-                                ? 'bg-green-50 text-green-700 border-green-200'
-                                : (cStatus === 'in_progress' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-yellow-50 text-yellow-700 border-yellow-200');
-                              const label = ok ? 'Conferência: Finalizada' : (cStatus === 'in_progress' ? 'Conferência: Em curso' : 'Conferência: Aguardando');
+                              const concluida = cStatus === 'completed';
+                              const comDivergencia = concluida && conf?.result_ok !== true;
+                              const tratada = Boolean(conf?.resolved_at);
+                              const badgeClass = comDivergencia
+                                ? (tratada ? 'bg-gray-100 text-gray-700 border-gray-200' : 'bg-red-50 text-red-700 border-red-200')
+                                : concluida
+                                  ? 'bg-green-50 text-green-700 border-green-200'
+                                  : (cStatus === 'in_progress' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-yellow-50 text-yellow-700 border-yellow-200');
+                              const label = comDivergencia
+                                ? (tratada ? 'Conferência: Divergência tratada' : 'Conferência: Divergência')
+                                : concluida
+                                  ? 'Conferência: Finalizada'
+                                  : (cStatus === 'in_progress' ? 'Conferência: Em curso' : 'Conferência: Aguardando');
                               return (
-                                <span className={`px-2 py-0.5 rounded-full text-[11px] font-semibold border inline-flex items-center gap-1 ${badgeClass}`} title="Status de conferência">
-                                  {ok ? <ClipboardCheck className="h-3 w-3" /> : <ClipboardList className="h-3 w-3" />}
-                                  {label}
-                                </span>
+                                <>
+                                  <span className={`px-2 py-0.5 rounded-full text-[11px] font-semibold border inline-flex items-center gap-1 ${badgeClass}`} title="Status de conferência">
+                                    {concluida && !comDivergencia ? <ClipboardCheck className="h-3 w-3" /> : <ClipboardList className="h-3 w-3" />}
+                                    {label}
+                                  </span>
+                                  {comDivergencia && (
+                                    <button
+                                      onClick={async (e) => {
+                                        e.stopPropagation();
+                                        const toastId = toast.loading('Abrindo divergências...');
+                                        try {
+                                          // A lista nao carrega o cliente/pedido; buscamos aqui pra
+                                          // mostrar de quem e cada divergencia.
+                                          const { data: full } = await supabase
+                                            .from('routes')
+                                            .select('id,name,conferente, route_orders:route_orders(id,order_id, order:orders!order_id(id,order_id_erp,customer_name))')
+                                            .eq('id', route.id)
+                                            .single();
+                                          const { data: confData } = await supabase
+                                            .from('route_conferences')
+                                            .select('*')
+                                            .eq('route_id', route.id)
+                                            .order('created_at', { ascending: false })
+                                            .limit(1)
+                                            .maybeSingle();
+                                          setConferenceRoute({ ...(full || route), conference: confData || conf } as any);
+                                          setShowConferenceModal(true);
+                                          toast.dismiss(toastId);
+                                        } catch (err) {
+                                          console.error(err);
+                                          toast.error('Erro ao abrir as divergências', { id: toastId });
+                                        }
+                                      }}
+                                      className={`px-2 py-0.5 rounded-full text-[11px] font-bold border inline-flex items-center gap-1 transition-colors ${tratada ? 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50' : 'bg-red-600 text-white border-red-600 hover:bg-red-700'}`}
+                                    >
+                                      <AlertTriangle className="h-3 w-3" />
+                                      {tratada ? 'Ver divergências' : 'Tratar divergências'}
+                                    </button>
+                                  )}
+                                </>
                               );
                             })()}
                           </div>
@@ -4571,147 +5453,6 @@ function RouteCreationContent() {
               )}
             </div>
           )}
-
-          {/* Aba: Pedidos Bloqueados */}
-          {activeRoutesTab === 'blocked' && (
-            <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-              {blockedOrdersLoading ? (
-                <div className="p-12 text-center text-gray-500">
-                  Carregando pedidos bloqueados...
-                </div>
-              ) : blockedOrdersTotal === 0 ? (
-                <div className="p-12 text-center">
-                  <div className="mx-auto w-16 h-16 bg-green-50 rounded-full flex items-center justify-center mb-4">
-                    <CheckCircle2 className="h-8 w-8 text-green-500" />
-                  </div>
-                  <h3 className="text-lg font-medium text-gray-900">Nenhum pedido bloqueado</h3>
-                  <p className="text-gray-500">Todos os pedidos estão disponíveis para roteamento.</p>
-                </div>
-              ) : (
-                <div>
-                  <div className="overflow-x-auto">
-                    <table className="w-full">
-                      <thead className="bg-gray-50 border-b border-gray-200">
-                        <tr>
-                          <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">Pedido</th>
-                          <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">Cliente</th>
-                          <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">Status ERP</th>
-                          <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">Motivo</th>
-                          <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">Data Bloqueio</th>
-                          <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">NF Devolução</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-gray-100">
-                        {blockedOrders.map((order) => (
-                          <tr key={order.id} className="hover:bg-gray-50">
-                            <td className="px-4 py-3 font-medium text-gray-900">{order.order_id_erp}</td>
-                            <td className="px-4 py-3 text-gray-600">{order.customer_name}</td>
-                            <td className="px-4 py-3">
-                              <span className={`px-2 py-1 rounded-full text-xs font-bold ${order.erp_status === 'devolvido' ? 'bg-red-100 text-red-700' : 'bg-orange-100 text-orange-700'
-                                }`}>
-                                {order.erp_status?.toUpperCase() || '-'}
-                              </span>
-                            </td>
-                            <td className="px-4 py-3 text-gray-600 text-sm">{order.blocked_reason || '-'}</td>
-                            <td className="px-4 py-3 text-gray-500 text-sm">
-                              {order.blocked_at ? new Date(order.blocked_at).toLocaleString('pt-BR') : '-'}
-                            </td>
-                            <td className="px-4 py-3 text-gray-600">{order.return_nfe_number || '-'}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                  <div className="flex flex-col gap-3 border-t border-gray-200 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-                    <p className="text-sm text-gray-500">
-                      Página {blockedOrdersPage} de {Math.max(1, Math.ceil(blockedOrdersTotal / BLOCKED_ORDERS_PAGE_SIZE))}
-                    </p>
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setBlockedOrdersPage((prev) => Math.max(1, prev - 1))}
-                        disabled={blockedOrdersPage <= 1 || blockedOrdersLoading}
-                        className="rounded-lg border border-gray-300 px-3 py-2 text-sm font-medium text-gray-600 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        Anterior
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setBlockedOrdersPage((prev) => prev + 1)}
-                        disabled={blockedOrdersPage >= Math.max(1, Math.ceil(blockedOrdersTotal / BLOCKED_ORDERS_PAGE_SIZE)) || blockedOrdersLoading}
-                        className="rounded-lg border border-gray-300 px-3 py-2 text-sm font-medium text-gray-600 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        Próxima
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Aba: Coletas Pendentes */}
-          {activeRoutesTab === 'pickupOrders' && (
-            <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-              {pickupPendingOrders.length === 0 ? (
-                <div className="p-12 text-center">
-                  <div className="mx-auto w-16 h-16 bg-green-50 rounded-full flex items-center justify-center mb-4">
-                    <CheckCircle2 className="h-8 w-8 text-green-500" />
-                  </div>
-                  <h3 className="text-lg font-medium text-gray-900">Nenhuma coleta pendente</h3>
-                  <p className="text-gray-500">Não há pedidos aguardando coleta no momento.</p>
-                </div>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full">
-                    <thead className="bg-gray-50 border-b border-gray-200">
-                      <tr>
-                        <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">Pedido</th>
-                        <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">Cliente</th>
-                        <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">Endereço</th>
-                        <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">NF Devolução</th>
-                        <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">Data Devolução</th>
-                        <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">Ações</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-100">
-                      {pickupPendingOrders.map((order) => (
-                        <tr key={order.id} className="hover:bg-gray-50">
-                          <td className="px-4 py-3 font-medium text-gray-900">{order.order_id_erp}</td>
-                          <td className="px-4 py-3 text-gray-600">{order.customer_name}</td>
-                          <td className="px-4 py-3 text-gray-600 text-sm">
-                            {order.address_json?.street}, {order.address_json?.neighborhood} - {order.address_json?.city}
-                          </td>
-                          <td className="px-4 py-3">
-                            <span className="bg-blue-100 text-blue-700 px-2 py-1 rounded-full text-xs font-bold">
-                              NF {order.return_nfe_number || '-'}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3 text-gray-500 text-sm">
-                            {order.return_date ? new Date(order.return_date).toLocaleDateString('pt-BR') : '-'}
-                          </td>
-                          <td className="px-4 py-3">
-                            <button
-                              onClick={() => {
-                                setSelectedPickupOrder(order);
-                                setPickupOrderConferente('');
-                                setPickupOrderObservations('');
-                                setShowPickupOrderModal(true);
-                              }}
-                              className="inline-flex items-center px-3 py-1.5 bg-orange-500 text-white text-xs font-bold rounded-lg hover:bg-orange-600 transition-colors"
-                            >
-                              <PackageX className="h-3 w-3 mr-1" />
-                              Criar Coleta
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-          )}
         </div>
 
       </div>
@@ -4719,7 +5460,7 @@ function RouteCreationContent() {
       {/* --- MODALS --- */}
 
       {/* Modal de Coleta de DevoluÃ§Ã£o */}
-      {showPickupOrderModal && selectedPickupOrder && (
+      {showPickupOrderModal && selectedPickupReturn && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden">
             <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-orange-50">
@@ -4728,10 +5469,10 @@ function RouteCreationContent() {
                   <PackageX className="h-5 w-5 text-orange-600" />
                   Criar Coleta de Devolução
                 </h3>
-                <p className="text-sm text-gray-500 mt-1">Pedido #{selectedPickupOrder.order_id_erp}</p>
+                <p className="text-sm text-gray-500 mt-1">Pedido #{selectedPickupReturn.order.order_id_erp}</p>
               </div>
               <button
-                onClick={() => { setShowPickupOrderModal(false); setSelectedPickupOrder(null); }}
+                onClick={() => { setShowPickupOrderModal(false); setSelectedPickupReturn(null); }}
                 className="text-gray-400 hover:text-gray-600"
               >
                 <X className="h-5 w-5" />
@@ -4743,21 +5484,21 @@ function RouteCreationContent() {
               <div className="bg-gray-50 rounded-lg p-4 space-y-2">
                 <div className="flex justify-between">
                   <span className="text-sm text-gray-500">Cliente:</span>
-                  <span className="text-sm font-medium text-gray-900">{selectedPickupOrder.customer_name}</span>
+                  <span className="text-sm font-medium text-gray-900">{selectedPickupReturn.order.customer_name}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-sm text-gray-500">Endereço:</span>
                   <span className="text-sm text-gray-900">
-                    {selectedPickupOrder.address_json?.street}, {selectedPickupOrder.address_json?.neighborhood}
+                    {selectedPickupReturn.order.address_json?.street}, {selectedPickupReturn.order.address_json?.neighborhood}
                   </span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-sm text-gray-500">NF Devolução:</span>
-                  <span className="text-sm font-bold text-blue-600">{selectedPickupOrder.return_nfe_number || '-'}</span>
+                  <span className="text-sm font-bold text-blue-600">{selectedPickupReturn.return_nfe_number || '-'}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-sm text-gray-500">Motivo:</span>
-                  <span className="text-sm text-red-600">{selectedPickupOrder.blocked_reason || '-'}</span>
+                  <span className="text-sm text-red-600">{selectedPickupReturn.order.blocked_reason || selectedPickupReturn.reason || '-'}</span>
                 </div>
               </div>
 
@@ -4822,7 +5563,7 @@ function RouteCreationContent() {
 
             <div className="px-6 py-4 bg-gray-50 border-t border-gray-100 flex justify-end gap-3">
               <button
-                onClick={() => { setShowPickupOrderModal(false); setSelectedPickupOrder(null); }}
+                onClick={() => { setShowPickupOrderModal(false); setSelectedPickupReturn(null); }}
                 className="px-4 py-2 text-gray-700 font-medium rounded-lg hover:bg-gray-100 transition-colors"
                 disabled={pickupOrderLoading}
               >
@@ -5165,11 +5906,37 @@ function RouteCreationContent() {
                 </button>
               </div>
               {completedPickupWithdrawals.length === 0 ? (
-                <div className="p-6 space-y-4">
+                <div className="p-6 space-y-4 max-h-[70vh] overflow-y-auto">
                   <p className="text-sm text-gray-600 bg-purple-50 p-3 rounded-lg border border-purple-100">
-                    Você está prestes a marcar <strong>{pickupOrderIds.length}</strong> pedido(s) como <strong>RETIRADO</strong>.
-                    Isso encerrará o fluxo de entrega desses pedidos e deixará a retirada visível na consulta de pedidos.
+                    {pickupOrderIds.length === 1
+                      ? <>Marque abaixo <strong>o que o cliente está levando</strong>. O que ficar desmarcado <strong>continua no fluxo</strong> pra entregar depois.</>
+                      : <>Você está prestes a marcar <strong>{pickupOrderIds.length}</strong> pedidos como <strong>RETIRADOS</strong> (pedido inteiro cada um).</>}
                   </p>
+
+                  {pickupOrderIds.length === 1 && pickupItems.length > 0 && (
+                    <div className="rounded-lg border border-gray-200 overflow-hidden">
+                      <div className="flex items-center justify-between px-3 py-2 bg-gray-50 border-b border-gray-100">
+                        <span className="text-sm font-semibold text-gray-700">Itens do pedido ({pickupSelectedKeys.size}/{pickupItems.length})</span>
+                        <div className="flex items-center gap-2 text-xs">
+                          <button type="button" onClick={() => setPickupSelectedKeys(new Set(pickupItems.map(itemKeyOf)))} className="text-purple-700 hover:underline">Todos</button>
+                          <span className="text-gray-300">|</span>
+                          <button type="button" onClick={() => setPickupSelectedKeys(new Set())} className="text-gray-500 hover:underline">Nenhum</button>
+                        </div>
+                      </div>
+                      <div className="divide-y divide-gray-100 max-h-56 overflow-y-auto">
+                        {pickupItems.map((it, idx) => {
+                          const key = itemKeyOf(it);
+                          const checked = pickupSelectedKeys.has(key);
+                          return (
+                            <label key={`${key}-${idx}`} className="flex items-center gap-3 px-3 py-2 cursor-pointer hover:bg-gray-50">
+                              <input type="checkbox" checked={checked} onChange={() => togglePickupItem(key)} disabled={pickupSaving} className="h-4 w-4 text-purple-600 rounded border-gray-300 focus:ring-purple-500" />
+                              <span className="text-sm text-gray-700 truncate" title={it?.name || it?.descricao || ''}>{it?.name || it?.descricao || it?.sku || 'Item'}</span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
 
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">Conferente *</label>
@@ -5232,7 +5999,7 @@ function RouteCreationContent() {
                     </button>
                     <button
                       onClick={createPickup}
-                      disabled={pickupSaving}
+                      disabled={pickupSaving || (pickupOrderIds.length === 1 && pickupSelectedKeys.size === 0)}
                       className="px-6 py-2 rounded-lg bg-purple-600 text-white font-bold hover:bg-purple-700 shadow-md transition-all flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
                     >
                       {pickupSaving && <RefreshCw className="animate-spin h-4 w-4" />}
@@ -5410,43 +6177,50 @@ function RouteCreationContent() {
                 <button onClick={() => setShowColumnsModal(false)}><X className="h-5 w-5 text-gray-400" /></button>
               </div>
               <div className="p-2 overflow-y-auto max-h-[60vh]">
-                {columnsConf.map((c, idx) => (
-                  <div key={c.id} className="flex items-center justify-between p-3 hover:bg-gray-50 rounded-lg group">
-                    <label className="flex items-center gap-3 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={c.visible}
-                        onChange={() => {
-                          const newCols = [...columnsConf];
-                          newCols[idx].visible = !newCols[idx].visible;
-                          setColumnsConf(newCols);
-                        }}
-                        className="h-4 w-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
-                      />
-                      <span className="text-gray-700">{c.label}</span>
-                    </label>
-                    <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <button
-                        onClick={() => {
-                          if (idx === 0) return;
-                          const newCols = [...columnsConf];
-                          [newCols[idx - 1], newCols[idx]] = [newCols[idx], newCols[idx - 1]];
-                          setColumnsConf(newCols);
-                        }}
-                        className="p-1 hover:bg-gray-200 rounded"
-                      ><ChevronUp className="h-4 w-4" /></button>
-                      <button
-                        onClick={() => {
-                          if (idx === columnsConf.length - 1) return;
-                          const newCols = [...columnsConf];
-                          [newCols[idx + 1], newCols[idx]] = [newCols[idx], newCols[idx + 1]];
-                          setColumnsConf(newCols);
-                        }}
-                        className="p-1 hover:bg-gray-200 rounded"
-                      ><ChevronDown className="h-4 w-4" /></button>
+                <p className="px-3 pt-1 pb-2 text-xs text-gray-500">
+                  <b>Pedido</b> e <b>Cliente</b> ficam sempre fixos na esquerda e não aparecem aqui.
+                </p>
+                {columnsConf.map((c, idx) => {
+                  if (PINNED_COLUMN_IDS.includes(c.id)) return null;
+                  // Setas trocam de lugar com o vizinho reordenavel mais proximo (pulando os fixos).
+                  const prevIdx = columnsConf.slice(0, idx).map((x, i) => ({ x, i })).filter(({ x }) => !PINNED_COLUMN_IDS.includes(x.id)).pop()?.i;
+                  const nextIdx = columnsConf.slice(idx + 1).map((x, i) => ({ x, i: idx + 1 + i })).find(({ x }) => !PINNED_COLUMN_IDS.includes(x.id))?.i;
+                  const swap = (target?: number) => {
+                    if (target === undefined) return;
+                    const newCols = [...columnsConf];
+                    [newCols[target], newCols[idx]] = [newCols[idx], newCols[target]];
+                    setColumnsConf(newCols);
+                  };
+                  return (
+                    <div key={c.id} className="flex items-center justify-between p-3 hover:bg-gray-50 rounded-lg group">
+                      <label className="flex items-center gap-3 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={c.visible}
+                          onChange={() => {
+                            const newCols = [...columnsConf];
+                            newCols[idx] = { ...newCols[idx], visible: !newCols[idx].visible };
+                            setColumnsConf(newCols);
+                          }}
+                          className="h-4 w-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
+                        />
+                        <span className="text-gray-700">{c.label}</span>
+                      </label>
+                      <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button
+                          onClick={() => swap(prevIdx)}
+                          disabled={prevIdx === undefined}
+                          className="p-1 hover:bg-gray-200 rounded disabled:opacity-30 disabled:hover:bg-transparent"
+                        ><ChevronUp className="h-4 w-4" /></button>
+                        <button
+                          onClick={() => swap(nextIdx)}
+                          disabled={nextIdx === undefined}
+                          className="p-1 hover:bg-gray-200 rounded disabled:opacity-30 disabled:hover:bg-transparent"
+                        ><ChevronDown className="h-4 w-4" /></button>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
               <div className="p-4 border-t border-gray-100 bg-gray-50 text-right">
                 <button
@@ -5475,171 +6249,14 @@ function RouteCreationContent() {
         )
       }
 
-      {/* Conference Review Modal */}
-      {
-        showConferenceModal && conferenceRoute && (
-          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-            <div className="bg-white rounded-xl shadow-xl w-full max-w-5xl max-h-[85vh] flex flex-col overflow-hidden">
-              <div className="px-6 py-4 border-b flex items-center justify-between bg-gray-50">
-                <h4 className="text-lg font-bold text-gray-900">Revisão de Conferência - {conferenceRoute.name}</h4>
-                <button onClick={() => setShowConferenceModal(false)} className="text-gray-500 hover:text-gray-700"><X className="h-5 w-5" /></button>
-              </div>
-              <div className="p-6 overflow-y-auto flex-1">
-                {(() => {
-                  const conf = (conferenceRoute as any).conference;
-                  const missing: Array<{ code: string; orderId?: string }> = conf?.summary?.missing || [];
-                  const notBiped: Array<{ orderId?: string; productCode?: string; reason?: string; notes?: string }> = conf?.summary?.notBipedProducts || [];
-                  const byOrder: Record<string, { codes: string[], order: any }> = {};
-                  (conferenceRoute.route_orders || []).forEach((ro: any) => {
-                    byOrder[String(ro.order_id)] = byOrder[String(ro.order_id)] || { codes: [], order: ro.order };
-                  });
-                  missing.forEach((m) => {
-                    const k = String(m.orderId || '');
-                    if (!byOrder[k]) byOrder[k] = { codes: [], order: null } as any;
-                    byOrder[k].codes.push(m.code);
-                  });
-                  const byOrderProducts: Record<string, Array<{ productCode?: string; reason?: string; notes?: string }>> = {};
-                  notBiped.forEach((p) => {
-                    const k = String(p.orderId || '');
-                    byOrderProducts[k] = byOrderProducts[k] || [];
-                    byOrderProducts[k].push({ productCode: p.productCode, reason: p.reason, notes: p.notes });
-                  });
-                  const authUser = useAuthStore.getState().user;
-                  const markResolved = async (removedIds: string[]) => {
-                    try {
-                      if (!conf?.id) { toast.error('Conferência não encontrada'); return; }
-                      const resolutionPayload = { removedOrderIds: removedIds, missingLabelsByOrder: Object.keys(byOrder).reduce((acc: any, k) => { if ((byOrder[k]?.codes || []).length > 0) acc[k] = byOrder[k].codes; return acc; }, {}), notBipedByOrder: byOrderProducts };
-                      const { error: updErr } = await supabase
-                        .from('route_conferences')
-                        .update({ resolved_at: new Date().toISOString(), resolved_by: authUser?.id || null, resolution: resolutionPayload })
-                        .eq('id', conf.id);
-                      if (updErr) throw updErr;
-                      toast.success('Divergência marcada como resolvida');
-                      setShowConferenceModal(false);
-                      loadData();
-                    } catch (e: any) {
-                      console.error(e);
-                      toast.error('Erro ao marcar divergência como resolvida');
-                    }
-                  };
-                  const orderIds = Object.keys(byOrder).filter(k => byOrder[k].codes.length > 0);
-                  if (orderIds.length === 0) {
-                    const pIds = Object.keys(byOrderProducts).filter(k => (byOrderProducts[k] || []).length > 0);
-                    if (pIds.length === 0) return <div className="text-center py-8 text-gray-500 font-medium">Sem faltantes. Conferência OK.</div>;
-                    return (
-                      <div className="space-y-4">
-                        {pIds.map((oid) => {
-                          const info = byOrder[String(oid)] || { order: null, codes: [] } as any;
-                          const cliente = info.order?.customer_name || 'â€”';
-                          const pedido = info.order?.order_id_erp || 'â€”';
-                          const products = byOrderProducts[oid] || [];
-                          return (
-                            <div key={oid} className="border rounded-lg overflow-hidden">
-                              <div className="px-4 py-2 bg-gray-50 border-b flex justify-between items-center">
-                                <div>
-                                  <span className="font-bold text-gray-900">Pedido: {pedido}</span>
-                                  <span className="mx-2 text-gray-400">|</span>
-                                  <span className="text-gray-700">{cliente}</span>
-                                </div>
-                              </div>
-                              <div className="p-4 bg-white">
-                                <div className="text-sm font-bold text-red-600 mb-2">Produtos não bipados ({products.length}):</div>
-                                <ul className="space-y-2">
-                                  {products.map((p, idx) => (
-                                    <li key={idx} className="text-sm text-gray-700 bg-red-50 p-2 rounded border border-red-100">
-                                      <span className="font-semibold">Produto:</span> {p.productCode || 'â€”'} â€¢ <span className="font-semibold">Motivo:</span> {p.reason || 'â€”'} {p.notes ? `â€¢ ${p.notes}` : ''}
-                                    </li>
-                                  ))}
-                                </ul>
-                              </div>
-                            </div>
-                          );
-                        })}
-                        <div className="flex justify-end space-x-3 pt-4 border-t border-gray-100">
-                          <button
-                            onClick={async () => {
-                              try {
-                                const ids = pIds.filter(Boolean);
-                                if (ids.length === 0) return;
-                                const rid = String(conferenceRoute.id);
-                              const { error: delErr } = await supabase.from('route_orders').delete().eq('route_id', rid).in('order_id', ids);
-                              if (delErr) throw delErr;
-                              const { error: updErr } = await supabase.from('orders').update({ status: 'pending' }).in('id', ids);
-                              if (updErr) throw updErr;
-                              await syncStoreReleaseOrderIds(ids);
-                              toast.success('Pedidos removidos da rota');
-                                setShowConferenceModal(false);
-                                loadData();
-                              } catch (e: any) {
-                                toast.error('Erro ao remover pedidos da rota');
-                              }
-                            }}
-                            className="px-4 py-2 bg-red-100 text-red-700 hover:bg-red-200 rounded-lg font-medium transition-colors"
-                          >Remover pedidos não bipados</button>
-                          <button
-                            onClick={() => { const ids = pIds.filter(Boolean); markResolved(ids); }}
-                            className="px-4 py-2 bg-teal-600 text-white hover:bg-teal-700 rounded-lg font-medium shadow-sm transition-colors"
-                          >Resolver Divergência</button>
-                        </div>
-                      </div>
-                    );
-                  }
-                  return (
-                    <div className="space-y-4">
-                      {orderIds.map((oid) => {
-                        const info = byOrder[oid];
-                        const cliente = info.order?.customer_name || 'â€”';
-                        const pedido = info.order?.order_id_erp || 'â€”';
-                        return (
-                          <div key={oid} className="border rounded-lg overflow-hidden">
-                            <div className="px-4 py-2 bg-gray-50 border-b">
-                              <div className="font-bold text-gray-900">Pedido: {pedido} â€¢ {cliente}</div>
-                            </div>
-                            <div className="p-4 bg-white">
-                              <div className="text-sm font-bold text-red-600 mb-2">Volumes faltantes ({info.codes.length}):</div>
-                              <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                                {info.codes.map((c, idx) => (
-                                  <div key={`${c}-${idx}`} className="text-xs px-2 py-1.5 rounded bg-red-50 text-red-700 border border-red-100 font-mono text-center">{c}</div>
-                                ))}
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })}
-                      <div className="flex justify-end space-x-3 pt-4 border-t border-gray-100">
-                        <button
-                          onClick={async () => {
-                            try {
-                              const ids = orderIds.filter(Boolean);
-                              if (ids.length === 0) return;
-                              const rid = String(conferenceRoute.id);
-                              const { error: delErr } = await supabase.from('route_orders').delete().eq('route_id', rid).in('order_id', ids);
-                              if (delErr) throw delErr;
-                              const { error: updErr } = await supabase.from('orders').update({ status: 'pending' }).in('id', ids);
-                              if (updErr) throw updErr;
-                              await syncStoreReleaseOrderIds(ids);
-                              toast.success('Pedidos faltantes removidos da rota');
-                              setShowConferenceModal(false);
-                              loadData();
-                            } catch (e: any) {
-                              toast.error('Erro ao remover pedidos da rota');
-                            }
-                          }}
-                          className="px-4 py-2 bg-red-100 text-red-700 hover:bg-red-200 rounded-lg font-medium transition-colors"
-                        >Remover pedidos faltantes</button>
-                        <button
-                          onClick={() => { const ids = orderIds.filter(Boolean); markResolved(ids); }}
-                          className="px-4 py-2 bg-teal-600 text-white hover:bg-teal-700 rounded-lg font-medium shadow-sm transition-colors"
-                        >Resolver Divergência</button>
-                      </div>
-                    </div>
-                  );
-                })()}
-              </div>
-            </div>
-          </div>
-        )
-      }
+      {/* Divergencias da conferencia (admin trata aqui, na Gestao de Entregas) */}
+      {showConferenceModal && conferenceRoute && (
+        <ConferenceDivergenceModal
+          route={conferenceRoute}
+          onClose={() => setShowConferenceModal(false)}
+          onChanged={() => loadData()}
+        />
+      )}
 
       {/* Route Details Modal */}
 
@@ -5836,8 +6453,12 @@ function RouteCreationContent() {
                                   if (toAddIds.length === 0) { toast.info('Nenhum novo pedido selecionado'); return; }
                                   const startSeq = (roData && roData.length > 0) ? Math.max(...(roData || []).map((r) => Number(r.sequence || 0))) + 1 : 1;
                                   const rows = toAddIds.map((orderId, idx) => ({ route_id: route.id, order_id: orderId, sequence: startSeq + idx, status: 'pending' }));
-                                  const { error: insErr } = await supabase.from('route_orders').insert(rows);
+                                  const { data: insertedRouteOrders, error: insErr } = await supabase
+                                    .from('route_orders')
+                                    .insert(rows)
+                                    .select('id, order_id');
                                   if (insErr) throw insErr;
+                                  await syncRouteOrderItemSnapshots((insertedRouteOrders || []) as InsertedRouteOrderRow[], 'adição rápida à rota');
                                   const { error: updErr } = await supabase.from('orders').update({ status: 'assigned' }).in('id', toAddIds);
                                   if (updErr) throw updErr;
                                   await syncStoreReleaseOrderIds(toAddIds);
@@ -5884,14 +6505,32 @@ function RouteCreationContent() {
                                 const cStatus = String(conf?.status || '').toLowerCase();
                                 const ok = conf?.result_ok === true || cStatus === 'completed';
                                 if (requireConference && !ok) { toast.error('Finalize a conferencia para iniciar a rota'); return; }
+
+                                const { data: returnBlockers, error: returnBlockersError } = await supabase.rpc(
+                                  'get_route_start_return_blockers',
+                                  { p_route_id: selectedRoute.id }
+                                );
+                                if (returnBlockersError) throw returnBlockersError;
+
+                                if (Array.isArray(returnBlockers) && returnBlockers.length > 0) {
+                                  const blockedOrderNumbers = returnBlockers
+                                    .map((item: any) => String(item?.order_id_erp || '').trim())
+                                    .filter(Boolean)
+                                    .join(', ');
+                                  toast.error(
+                                    `Não é possível iniciar. Remova da rota os pedidos totalmente devolvidos: ${blockedOrderNumbers}`
+                                  );
+                                  return;
+                                }
+
                                 const { error } = await supabase.from('routes').update({ status: 'in_progress' }).eq('id', selectedRoute.id);
                                 if (error) throw error;
                                 const updated = { ...selectedRoute, status: 'in_progress' };
                                 setSelectedRoute(updated as any);
                                 toast.success('Rota iniciada');
                                 loadData();
-                              } catch (e) {
-                                toast.error('Falha ao iniciar rota');
+                              } catch (e: any) {
+                                toast.error(e?.message || 'Falha ao iniciar rota');
                               }
                             }}
                             disabled={
@@ -5920,14 +6559,22 @@ function RouteCreationContent() {
 
                               const toastId = toast.loading('Gerando Romaneio de Separação...');
                               try {
-                                const orders = selectedRoute.route_orders
-                                  .map((ro: any) => ro.order)
-                                  .filter(Boolean) as Order[];
+                                const payload = await buildSeparationSheetPayload(
+                                  selectedRoute,
+                                  selectedRoute.route_orders || []
+                                );
+
+                                if (payload.routeOrders.length === 0 || payload.orders.length === 0) {
+                                  const firstRouteOrder = (selectedRoute.route_orders || [])[0];
+                                  const orderIdErp = firstRouteOrder?.order?.order_id_erp || firstRouteOrder?.order_id;
+                                  toast.error(getEmptyDeliveryPrintMessage(orderIdErp, (selectedRoute.route_orders || []).length), { id: toastId });
+                                  return;
+                                }
 
                                 const pdfBytes = await SeparationSheetGenerator.generate({
                                   route: selectedRoute,
-                                  routeOrders: selectedRoute.route_orders,
-                                  orders,
+                                  routeOrders: payload.routeOrders,
+                                  orders: payload.orders,
                                   generatedAt: new Date().toISOString(),
                                 });
 
@@ -5959,7 +6606,7 @@ function RouteCreationContent() {
                                   const neighborhood = String(address.neighborhood || o.raw_json?.destinatario_bairro || '');
                                   const city = String(address.city || o.raw_json?.destinatario_cidade || '');
                                   const endereco_completo = [zip, street, neighborhood && `- ${neighborhood}`, city].filter(Boolean).join(', ').replace(', -', ' -');
-                                  const items = Array.isArray(o.items_json) ? o.items_json : [];
+                                  const items = getOperationalItemsForOrder(o, orderBalancesByOrderId, holdCtx);
                                   const produtos = items.map((it) => `${String(it.sku || '')} - ${String(it.name || '')}`).join(', ');
                                   return {
                                     lancamento_venda: Number(o.order_id_erp || ro.order_id || 0),
@@ -6467,23 +7114,10 @@ function RouteCreationContent() {
                                       const isPickupOrder = orderERP.startsWith('C-');
 
                                       if (isPickupOrder) {
-                                        // 1. Extrair ID original
-                                        const originalErpInfo = orderERP.substring(2); // remove "C-"
-                                        // Tenta achar o pedido original. Como nÃ£o temos o ID original fÃ¡cil aqui no objeto ro, 
-                                        // vamos buscar pelo order_id_erp se possÃ­vel, ou assumir que o 'C-' foi criado corretamente.
-                                        // O ideal seria ter salvo o original_id no pedido de coleta, mas usamos o ERP ID como chave lÃ³gica.
-
-                                        // Buscar pedido original pelo ERP ID
-                                        const { data: originalOrder } = await supabase
-                                          .from('orders')
-                                          .select('id')
-                                          .eq('order_id_erp', originalErpInfo)
-                                          .single();
-
-                                        if (originalOrder) {
-                                          // Atualiza pedido original limpando pickup_created_at
-                                          await supabase.from('orders').update({ pickup_created_at: null }).eq('id', originalOrder.id);
-                                        }
+                                        const { error: unlinkPickupError } = await supabase.rpc('clear_order_return_pickup', {
+                                          p_pickup_order_id: ro.order_id,
+                                        });
+                                        if (unlinkPickupError) throw unlinkPickupError;
 
                                         // Excluir o pedido da rota
                                         const { error: delErr } = await supabase.from('route_orders').delete().eq('id', ro.id);
@@ -6535,11 +7169,16 @@ function RouteCreationContent() {
                                   try {
                                     const order = ro.order;
                                     if (!order) throw new Error("Pedido não encontrado");
+                                    const payload = await buildSeparationSheetPayload(selectedRoute, [ro]);
+                                    const printableOrder = payload.orders[0];
+                                    if (!printableOrder || payload.routeOrders.length === 0) {
+                                      throw new Error('Este pedido não possui itens alocados para impressão');
+                                    }
 
                                     const pdfBytes = await SeparationSheetGenerator.generate({
                                       route: selectedRoute,
-                                      routeOrders: [ro],
-                                      orders: [order],
+                                      routeOrders: payload.routeOrders,
+                                      orders: [printableOrder],
                                       generatedAt: new Date().toISOString()
                                     });
                                     DeliverySheetGenerator.openPDFInNewTab(pdfBytes);
@@ -6563,61 +7202,18 @@ function RouteCreationContent() {
                                     const order = ro.order;
                                     if (!order) throw new Error("Pedido não encontrado");
 
-                                    // LÃ³gica de mapeamento igual ao romaneio geral, mas para UM pedido
-                                    const address = order.address_json || {};
-                                    const itemsRaw = Array.isArray(order.items_json) ? order.items_json : [];
-                                    const prodLoc = order.raw_json?.produtos_locais || [];
-                                    const norm = (s: any) => String(s ?? '').toLowerCase().trim();
-
-                                    const items = itemsRaw.map((it: any, idx: number) => {
-                                      if (it && !it.location) {
-                                        let loc = '';
-                                        if (Array.isArray(prodLoc) && prodLoc.length > 0) {
-                                          const byCode = prodLoc.find((p: any) => norm(p?.codigo_produto) === norm(it?.sku));
-                                          const byName = prodLoc.find((p: any) => norm(p?.nome_produto) === norm(it?.name));
-                                          if (byCode?.local_estocagem) loc = String(byCode.local_estocagem);
-                                          else if (byName?.local_estocagem) loc = String(byName.local_estocagem);
-                                          else if (prodLoc[idx]?.local_estocagem) loc = String(prodLoc[idx].local_estocagem);
-                                          else if (prodLoc[0]?.local_estocagem) loc = String(prodLoc[0].local_estocagem);
-                                        }
-                                        return { ...it, location: loc };
-                                      }
-                                      return it;
-                                    });
-
-                                    const mappedOrder = {
-                                      id: (order as any).id || ro.order_id,
-                                      order_id_erp: String((order as any).order_id_erp || ro.order_id || ''),
-                                      customer_name: String((order as any).customer_name || ((order as any).raw_json?.nome_cliente ?? '')),
-                                      phone: String((order as any).phone || ((order as any).raw_json?.cliente_celular ?? '')),
-                                      address_json: {
-                                        street: String((address as any).street || (order as any).raw_json?.destinatario_endereco || ''),
-                                        neighborhood: String((address as any).neighborhood || (order as any).raw_json?.destinatario_bairro || ''),
-                                        city: String((address as any).city || (order as any).raw_json?.destinatario_cidade || ''),
-                                        state: String((address as any).state || ''),
-                                        zip: String((address as any).zip || (order as any).raw_json?.destinatario_cep || ''),
-                                        complement: (address as any).complement || (order as any).raw_json?.destinatario_complemento || '',
-                                      },
-                                      items_json: items,
-                                      raw_json: order.raw_json || null,
-                                      data_venda: (order as any).data_venda || (order as any).raw_json?.data_venda || (order as any).raw_json?.data_emissao || (order as any).sale_date || '',
-                                      sale_date: (order as any).sale_date || (order as any).data_venda || (order as any).raw_json?.data_venda || (order as any).raw_json?.data_emissao || '',
-                                      previsao_entrega: (order as any).previsao_entrega || (order as any).raw_json?.previsao_entrega || (order as any).raw_json?.data_prevista_entrega || '',
-                                      observacoes_publicas: (order as any).observacoes_publicas ?? (order as any).raw_json?.observacoes_publicas ?? (order as any).raw_json?.observacoes ?? '',
-                                      observacoes_internas: (order as any).observacoes_internas ?? (order as any).raw_json?.observacoes_internas ?? '',
-                                      total: Number((order as any).total || 0),
-                                      status: order.status || 'imported',
-                                      observations: (order as any).observations || '',
-                                      created_at: order.created_at || new Date().toISOString(),
-                                      updated_at: order.updated_at || new Date().toISOString(),
-                                    } as any;
-
                                     const pickupSourceXmlByOrderErp = isCollectionRouteName(selectedRoute.name)
                                       ? await fetchPickupSourceReturnXmlMap([{ order }])
                                       : undefined;
-                                    const mappedOrderResolved = isCollectionRouteName(selectedRoute.name)
-                                      ? mapOrderToDeliverySheetOrder(order, ro, selectedRoute.name, pickupSourceXmlByOrderErp)
-                                      : mappedOrder;
+                                    const payload = await buildDeliverySheetPayload(
+                                      selectedRoute,
+                                      [ro],
+                                      pickupSourceXmlByOrderErp
+                                    );
+                                    const mappedOrderResolved = payload.orders[0];
+                                    if (!mappedOrderResolved || payload.routeOrders.length === 0) {
+                                      throw new Error(getEmptyDeliveryPrintMessage(order?.order_id_erp || ro?.order_id, (selectedRoute.route_orders || []).length));
+                                    }
 
                                     // Resolve Motorista e Equipe (pode usar os da rota ou vazios)
                                     let driverObj = selectedRoute.driver || { id: '', user_id: '', cpf: '', active: true, user: { id: '', email: '', name: '', role: 'driver', created_at: '' } };
@@ -6649,10 +7245,10 @@ function RouteCreationContent() {
                                         created_at: selectedRoute.created_at,
                                         updated_at: selectedRoute.updated_at,
                                       },
-                                      routeOrders: [ro], // Passa sÃ³ esta routeOrder
+                                      routeOrders: payload.routeOrders,
                                       driver: driverObj as any,
                                       vehicle: vehicleObj,
-                                      orders: [mappedOrderResolved], // Passa sÃ³ este pedido
+                                      orders: [mappedOrderResolved],
                                       generatedAt: new Date().toISOString(),
                                       teamName,
                                       helperName,
@@ -7081,67 +7677,22 @@ function RouteCreationContent() {
                     const { data: roData, error: roErr } = await supabase.from('route_orders').select('*, order:orders(*)').eq('route_id', route.id).order('sequence');
                     if (roErr) throw roErr;
 
-                    let orders = (roData || []).map((ro: any) => {
-                      const o = ro.order || {};
-                      const address = o.address_json || {};
-                      const itemsRaw = Array.isArray(o.items_json) ? o.items_json : [];
-                      const prodLoc = o.raw_json?.produtos_locais || [];
-                      const norm = (s: any) => String(s ?? '').toLowerCase().trim();
-                      const items = itemsRaw.map((it: any, idx: number) => {
-                        if (it && !it.location) {
-                          let loc = '';
-                          if (Array.isArray(prodLoc) && prodLoc.length > 0) {
-                            const byCode = prodLoc.find((p: any) => norm(p?.codigo_produto) === norm(it?.sku));
-                            const byName = prodLoc.find((p: any) => norm(p?.nome_produto) === norm(it?.name));
-                            if (byCode?.local_estocagem) loc = String(byCode.local_estocagem);
-                            else if (byName?.local_estocagem) loc = String(byName.local_estocagem);
-                            else if (prodLoc[idx]?.local_estocagem) loc = String(prodLoc[idx].local_estocagem);
-                            else if (prodLoc[0]?.local_estocagem) loc = String(prodLoc[0].local_estocagem);
-                          }
-                          return { ...it, location: loc };
-                        }
-                        return it;
-                      });
-                      return {
-                        id: o.id || ro.order_id,
-                        order_id_erp: String(o.order_id_erp || ro.order_id || ''),
-                        customer_name: String(o.customer_name || (o.raw_json?.nome_cliente ?? '')),
-                        phone: String(o.phone || (o.raw_json?.cliente_celular ?? '')),
-                        address_json: {
-                          street: String(address.street || o.raw_json?.destinatario_endereco || ''),
-                          neighborhood: String(address.neighborhood || o.raw_json?.destinatario_bairro || ''),
-                          city: String(address.city || o.raw_json?.destinatario_cidade || ''),
-                          state: String(address.state || ''),
-                          zip: String(address.zip || o.raw_json?.destinatario_cep || ''),
-                          complement: address.complement || o.raw_json?.destinatario_complemento || '',
-                        },
-                        items_json: items,
-                        raw_json: o.raw_json || null,
-                        data_venda: o.data_venda || o.raw_json?.data_venda || o.raw_json?.data_emissao || o.sale_date || '',
-                        sale_date: o.sale_date || o.data_venda || o.raw_json?.data_venda || o.raw_json?.data_emissao || '',
-                        previsao_entrega: o.previsao_entrega || o.raw_json?.previsao_entrega || o.raw_json?.data_prevista_entrega || '',
-                        observacoes_publicas: o.observacoes_publicas ?? o.raw_json?.observacoes_publicas ?? o.raw_json?.observacoes ?? '',
-                        observacoes_internas: o.observacoes_internas ?? o.raw_json?.observacoes_internas ?? '',
-                        total: Number(o.total || 0),
-                        status: o.status || 'imported',
-                        service_type: o.service_type || '',
-                        is_carrier_delivery: Boolean(o.is_carrier_delivery),
-                        observations: o.observations || '',
-                        created_at: o.created_at || new Date().toISOString(),
-                        updated_at: o.updated_at || new Date().toISOString(),
-                      } as any;
-                    });
+                    const pickupSourceXmlByOrderErp = isCollectionRouteName(route.name)
+                      ? await fetchPickupSourceReturnXmlMap(roData || [])
+                      : undefined;
+                    const deliveryPayload = await buildDeliverySheetPayload(
+                      route,
+                      roData || [],
+                      pickupSourceXmlByOrderErp
+                    );
+                    const routeOrders = deliveryPayload.routeOrders;
+                    let orders = deliveryPayload.orders;
 
-                    if (isCollectionRouteName(route.name)) {
-                      const pickupSourceXmlByOrderErp = await fetchPickupSourceReturnXmlMap(roData || []);
-                      orders = (roData || []).map((ro: any) =>
-                        mapOrderToDeliverySheetOrder(
-                          ro.order || {},
-                          ro,
-                          route.name,
-                          pickupSourceXmlByOrderErp
-                        )
-                      );
+                    if (routeOrders.length === 0 || orders.length === 0) {
+                      const firstRouteOrder = (roData || [])[0];
+                      const orderIdErp = firstRouteOrder?.order?.order_id_erp || firstRouteOrder?.order_id;
+                      toast.error(getEmptyDeliveryPrintMessage(orderIdErp, (roData || []).length));
+                      return;
                     }
 
                     if (pdfPrintScope === 'full') {
@@ -7153,9 +7704,12 @@ function RouteCreationContent() {
                     }
 
                     if (orders.length === 0) {
-                      toast.error('Nenhum pedido encontrado para o filtro de impressão selecionado');
+                      toast.error('Nenhum pedido disponível para o filtro selecionado. Se algum pedido foi totalmente devolvido, exclua esse pedido da rota para continuar com os demais.');
                       return;
                     }
+
+                    const allowedOrderIds = new Set(orders.map((order) => String(order.id || '')).filter(Boolean));
+                    const filteredRouteOrders = routeOrders.filter((ro: any) => allowedOrderIds.has(String(ro?.order_id || ro?.order?.id || '')));
 
                     // Ordenar pedidos conforme opÃ§Ã£o selecionada
                     const parseDate = (d: any) => {
@@ -7190,7 +7744,7 @@ function RouteCreationContent() {
                     }
 
                     // Criar routeOrders na ordem dos orders ordenados
-                    const routeOrders = orders.map((order, idx) => {
+                    const orderedRouteOrders = orders.map((order, idx) => {
                       const ro = (roData || []).find((r: any) => r.order_id === order.id || r.order?.id === order.id);
                       return {
                         id: ro?.id || '',
@@ -7235,7 +7789,7 @@ function RouteCreationContent() {
 
                     const data = {
                       route: { id: route.id, name: route.name, route_code: (route as any).route_code, driver_id: route.driver_id, vehicle_id: route.vehicle_id, conferente: route.conferente, observations: route.observations, status: route.status, created_at: route.created_at, updated_at: route.updated_at },
-                      routeOrders,
+                      routeOrders: filteredRouteOrders.length > 0 ? filteredRouteOrders : orderedRouteOrders,
                       driver: driverObj || { id: '', user_id: '', cpf: '', active: true, user: { id: '', email: '', name: '', role: 'driver', created_at: '' } },
                       vehicle: vehicleObj || undefined,
                       orders,
@@ -7282,5 +7836,3 @@ export default function RouteCreation() {
     </RouteCreationErrorBoundary>
   );
 }
-
-

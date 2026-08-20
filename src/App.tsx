@@ -3,11 +3,8 @@ import { useEffect } from 'react';
 import { envOk } from './supabase/client';
 import { useAuthStore } from './stores/authStore';
 import Login from './pages/Login';
-import Register from './pages/Register';
-import TestLogin from './pages/TestLogin';
-import CheckUsers from './pages/CheckUsers';
-import Setup from './pages/Setup';
 import FirstLogin from './pages/FirstLogin';
+import TwoFactor from './pages/TwoFactor';
 import CustomerTracking from './pages/public/CustomerTracking';
 import AdminDashboard from './pages/admin/Dashboard';
 import Settings from './pages/admin/Settings';
@@ -18,6 +15,7 @@ import ConferenteDashboard from './pages/conferente/Dashboard';
 import ConferenteRouteConference from './pages/conferente/RouteConference';
 import OrdersImport from './pages/admin/OrdersImport';
 import RouteCreation from './pages/admin/RouteCreation';
+import ReturnsManagement from './pages/admin/ReturnsManagement';
 import AssemblyManagement from './pages/admin/AssemblyManagement';
 import OrderLookup from './pages/admin/OrderLookup';
 import Reports from './pages/admin/Reports';
@@ -30,18 +28,14 @@ import ReportsWithdrawals from './pages/admin/ReportsWithdrawals';
 import StoreReleaseManagement from './pages/gerente/StoreReleaseManagement';
 import Mdfe from './pages/admin/Mdfe';
 import MdfeEmitters from './pages/admin/MdfeEmitters';
-import MdfeVehicles from './pages/admin/MdfeVehicles';
-import MdfeDrivers from './pages/admin/MdfeDrivers';
 import MdfeSettings from './pages/admin/MdfeSettings';
 import MdfeManifests from './pages/admin/MdfeManifests';
 import AssemblyDashboard from './pages/montador/AssemblyDashboard';
 import AssemblyRouteDetails from './pages/montador/AssemblyRouteDetails';
-import TesteImportacao from './pages/teste-importacao';
-import DiagnosticoOrders from './pages/diagnostico-orders';
-import VerificarColunasOrders from './pages/verificar-colunas';
 import AuditDashboard from './pages/admin/AuditDashboard';
 import Diary from './pages/admin/Diary';
 import FleetManagement from './pages/admin/FleetManagement';
+import TemporaryReturnSimulator from './pages/admin/TemporaryReturnSimulator';
 import DriverFleetInspections from './pages/fleet/DriverFleetInspections';
 import DriverFleetInspectionForm from './pages/fleet/DriverFleetInspectionForm';
 import AdminLayout from './layouts/AdminLayout';
@@ -54,7 +48,11 @@ function App() {
   const { checkAuth, isLoading } = useAuthStore();
 
   if (!envOk) {
-    return <Setup />;
+    return (
+      <div className="min-h-screen flex items-center justify-center p-6 text-center">
+        <p className="text-gray-700">Configuração do ambiente ausente. Defina as variáveis do Supabase (VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY).</p>
+      </div>
+    );
   }
 
   useEffect(() => {
@@ -77,15 +75,9 @@ function App() {
       <Router>
         <Routes>
           <Route path="/login" element={<Login />} />
-          <Route path="/register" element={<Register />} />
           <Route path="/rastreio" element={<CustomerTracking />} />
-          <Route path="/test-login" element={<TestLogin />} />
-          <Route path="/check-users" element={<CheckUsers />} />
-          <Route path="/setup" element={<Setup />} />
           <Route path="/first-login" element={<FirstLogin />} />
-          <Route path="/teste-importacao" element={<TesteImportacao />} />
-          <Route path="/diagnostico-orders" element={<DiagnosticoOrders />} />
-          <Route path="/verificar-colunas" element={<VerificarColunasOrders />} />
+          <Route path="/ativar-2fa" element={<TwoFactor />} />
 
           {/* Rotas de teste removidas para fluxo profissional */}
 
@@ -116,6 +108,16 @@ function App() {
               <ProtectedRoute allowedRoles={['admin']}>
                 <AdminLayout>
                   <RouteCreation />
+                </AdminLayout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/returns"
+            element={
+              <ProtectedRoute allowedRoles={['admin']}>
+                <AdminLayout>
+                  <ReturnsManagement />
                 </AdminLayout>
               </ProtectedRoute>
             }
@@ -160,6 +162,19 @@ function App() {
               </ProtectedRoute>
             }
           />
+          {/* Ferramenta de testes de devolucao: NUNCA disponivel em producao (grava dados reais). */}
+          {import.meta.env.DEV && (
+            <Route
+              path="/simular"
+              element={
+                <ProtectedRoute allowedRoles={['admin']}>
+                  <AdminLayout>
+                    <TemporaryReturnSimulator />
+                  </AdminLayout>
+                </ProtectedRoute>
+              }
+            />
+          )}
           <Route
             path="/admin/reports"
             element={
@@ -283,26 +298,6 @@ function App() {
             }
           />
           <Route
-            path="/admin/mdfe/vehicles"
-            element={
-              <ProtectedRoute allowedRoles={['admin']}>
-                <AdminLayout>
-                  <MdfeVehicles />
-                </AdminLayout>
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/admin/mdfe/drivers"
-            element={
-              <ProtectedRoute allowedRoles={['admin']}>
-                <AdminLayout>
-                  <MdfeDrivers />
-                </AdminLayout>
-              </ProtectedRoute>
-            }
-          />
-          <Route
             path="/admin/mdfe/manifests"
             element={
               <ProtectedRoute allowedRoles={['admin']}>
@@ -346,12 +341,20 @@ function App() {
             path="/fleet"
             element={
               <ProtectedRoute allowedRoles={['driver']}>
-                <Navigate to="/fleet/driver" replace />
+                <Navigate to="/inspecao" replace />
               </ProtectedRoute>
             }
           />
           <Route
             path="/fleet/driver"
+            element={
+              <ProtectedRoute allowedRoles={['driver']}>
+                <Navigate to="/inspecao" replace />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/inspecao"
             element={
               <ProtectedRoute allowedRoles={['driver']}>
                 <DriverFleetInspections />
@@ -360,6 +363,14 @@ function App() {
           />
           <Route
             path="/fleet/driver/inspection/:inspectionId"
+            element={
+              <ProtectedRoute allowedRoles={['driver']}>
+                <DriverFleetInspectionForm />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/inspecao/:inspectionId"
             element={
               <ProtectedRoute allowedRoles={['driver']}>
                 <DriverFleetInspectionForm />
@@ -396,7 +407,7 @@ function App() {
           <Route
             path="/conferente"
             element={
-              <ProtectedRoute allowedRoles={['conferente']}>
+              <ProtectedRoute allowedRoles={['conferente', 'admin']}>
                 <ConferenteDashboard />
               </ProtectedRoute>
             }
@@ -404,7 +415,7 @@ function App() {
           <Route
             path="/conferente/route/:routeId"
             element={
-              <ProtectedRoute allowedRoles={['conferente']}>
+              <ProtectedRoute allowedRoles={['conferente', 'admin']}>
                 <ConferenteRouteConference />
               </ProtectedRoute>
             }

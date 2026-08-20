@@ -20,6 +20,7 @@ export default defineConfig({
       input: {
         main: resolve(__dirname, 'index.html'),
         fleet: resolve(__dirname, 'fleet/index.html'),
+        inspecao: resolve(__dirname, 'inspecao/index.html'),
       },
     },
   },
@@ -113,15 +114,17 @@ export default defineConfig({
     {
       name: 'fleet-manifest-isolation',
       generateBundle(_, bundle) {
-        const fleetEntry = bundle['fleet/index.html'];
-        if (!fleetEntry || fleetEntry.type !== 'asset' || typeof fleetEntry.source !== 'string') {
-          return;
-        }
+        ['fleet/index.html', 'inspecao/index.html'].forEach((entryName) => {
+          const fleetEntry = bundle[entryName];
+          if (!fleetEntry || fleetEntry.type !== 'asset' || typeof fleetEntry.source !== 'string') {
+            return;
+          }
 
-        fleetEntry.source = fleetEntry.source.replace(
-          /\s*<link rel="manifest" href="\/manifest\.webmanifest">/g,
-          ''
-        );
+          fleetEntry.source = fleetEntry.source.replace(
+            /\s*<link rel="manifest" href="\/manifest\.webmanifest">/g,
+            ''
+          );
+        });
       },
     },
     tsconfigPaths()

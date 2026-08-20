@@ -287,7 +287,7 @@ export default function FleetManagement() {
 
       const [vehiclesRes, driversRes, inspectionsRes, occurrencesRes] = await Promise.all([
         supabase
-          .from('fleet_vehicles')
+          .from('vehicles')
           .select('*')
           .order('active', { ascending: false })
           .order('display_name'),
@@ -301,7 +301,7 @@ export default function FleetManagement() {
           .from('fleet_inspections')
           .select(`
             *,
-            vehicle:fleet_vehicles(*),
+            vehicle:vehicles(*),
             assigned_driver:users!assigned_driver_user_id(id,email,name,role,phone,must_change_password,created_at),
             items:fleet_inspection_items(*),
             photos:fleet_inspection_photos(*)
@@ -311,7 +311,7 @@ export default function FleetManagement() {
           .from('fleet_occurrences')
           .select(`
             *,
-            vehicle:fleet_vehicles(*)
+            vehicle:vehicles(*)
           `)
           .order('created_at', { ascending: false }),
       ]);
@@ -402,16 +402,16 @@ export default function FleetManagement() {
     if (vehicle) {
       setEditingVehicle(vehicle);
       setVehicleForm({
-        display_name: vehicle.display_name,
+        display_name: vehicle.display_name || '',
         plate: vehicle.plate,
-        brand: vehicle.brand,
+        brand: vehicle.brand || '',
         model: vehicle.model,
         model_year: vehicle.model_year ? String(vehicle.model_year) : '',
         vehicle_type: vehicle.vehicle_type || '',
         renavam: vehicle.renavam || '',
         chassis: vehicle.chassis || '',
         current_odometer: String(vehicle.current_odometer || 0),
-        status: vehicle.status,
+        status: vehicle.status || 'available',
         notes: vehicle.notes || '',
       });
     } else {
@@ -454,12 +454,22 @@ export default function FleetManagement() {
         active: vehicleForm.status !== 'inactive',
       };
 
-      const query = editingVehicle
-        ? supabase.from('fleet_vehicles').update(payload).eq('id', editingVehicle.id)
-        : supabase.from('fleet_vehicles').insert(payload);
-
-      const { error } = await query;
-      if (error) throw error;
+      if (editingVehicle) {
+        const { error } = await supabase.from('vehicles').update(payload).eq('id', editingVehicle.id);
+        if (error) throw error;
+      } else {
+        // Cria (ou reaproveita) o veículo no cadastro principal via RPC (upsert por
+        // placa) e grava os campos operacionais da frota em seguida.
+        const { data: newVehicleId, error: rpcError } = await supabase.rpc('insert_vehicle', {
+          p_model: payload.model,
+          p_plate: payload.plate,
+        });
+        if (rpcError) throw rpcError;
+        if (newVehicleId) {
+          const { error } = await supabase.from('vehicles').update(payload).eq('id', newVehicleId);
+          if (error) throw error;
+        }
+      }
 
       toast.success(editingVehicle ? 'Veículo atualizado com sucesso' : 'Veículo cadastrado com sucesso');
       closeVehicleModal();
@@ -475,7 +485,7 @@ export default function FleetManagement() {
   const updateVehicleStatus = async (vehicle: FleetVehicle, status: FleetVehicleStatus) => {
     try {
       const { error } = await supabase
-        .from('fleet_vehicles')
+        .from('vehicles')
         .update({
           status,
           active: status !== 'inactive',
@@ -814,7 +824,7 @@ export default function FleetManagement() {
                         </div>
                         <div>
                           <div className="flex flex-wrap items-center gap-2">
-                            <h3 className="text-lg font-bold text-gray-900">{vehicle.display_name}</h3>
+                            <h3 className="text-lg font-bold text-gray-900">{vehicle.display_name || vehicle.model}</h3>
                             <StatusBadge label={VEHICLE_STATUS_LABELS[vehicle.status]} className={VEHICLE_STATUS_CLASSES[vehicle.status]} />
                           </div>
                           <p className="mt-1 text-sm font-medium text-gray-600">{vehicle.brand} {vehicle.model}</p>
@@ -1202,7 +1212,7 @@ export default function FleetManagement() {
                 <option value="">Selecione...</option>
                 {activeFleetVehicles.map((vehicle) => (
                   <option key={vehicle.id} value={vehicle.id}>
-                    {vehicle.display_name} • {vehicle.plate}
+                    {(vehicle.display_name || vehicle.model)} • {vehicle.plate}
                   </option>
                 ))}
               </select>

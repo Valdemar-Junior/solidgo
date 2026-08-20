@@ -22,6 +22,34 @@ import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { supabase } from '../../supabase/client';
 import { generateDanfeBase64 } from '../../utils/danfe/generateDanfe';
+import { fetchInChunks } from '../../utils/supabase/batch';
+
+const syncOrderItemsShadowForImport = async (orderIds: string[]) => {
+  const normalizedIds = Array.from(new Set(orderIds.map((value) => String(value || '').trim()).filter(Boolean)));
+  if (normalizedIds.length === 0) {
+    return { attempted: 0, failed: 0 };
+  }
+
+  const results = await Promise.allSettled(
+    normalizedIds.map(async (orderId) => {
+      const { error } = await supabase.rpc('sync_order_items_shadow', {
+        p_order_id: orderId,
+      });
+      if (error) throw error;
+    })
+  );
+
+  const failures = results.filter((result) => result.status === 'rejected');
+  if (failures.length > 0) {
+    console.warn('[Import] Falha ao sincronizar order_items para alguns pedidos:', failures);
+    throw new Error(`A importação salvou os pedidos, mas falhou ao estruturar ${failures.length} deles para o fluxo por item.`);
+  }
+
+  return {
+    attempted: normalizedIds.length,
+    failed: failures.length,
+  };
+};
 
 export default function OrdersImport() {
   const [loading, setLoading] = useState(false);
@@ -426,11 +454,12 @@ export default function OrdersImport() {
       let existentes: any[] = [];
 
       if (numerosLancamento.length > 0) {
-        const { data: existentesPorLancamento } = await supabase
+        // Em lotes: importação grande (centenas de lançamentos) estoura a URL do .in().
+        // Se essa checagem falhar, PARAR a importação — seguir sem ela duplicaria pedidos.
+        existentes = await fetchInChunks<string, any>(numerosLancamento, (nums) => supabase
           .from('orders')
           .select('id, order_id_erp, items_json')
-          .in('order_id_erp', numerosLancamento);
-        existentes = existentesPorLancamento || [];
+          .in('order_id_erp', nums));
       }
 
       const existentesLancamentoSet = new Set<string>((existentes || []).map((e: any) => String(e.order_id_erp)).filter(Boolean));
@@ -537,6 +566,17 @@ export default function OrdersImport() {
         })
         .filter(Boolean);
 
+      const shadowSyncOrderIds = Array.from(new Set([...savedOrderIds, ...updatedOrderIds]));
+      let shadowSyncOutcome: { attempted: number; failed: number } | null = null;
+      if (shadowSyncOrderIds.length > 0) {
+        try {
+          shadowSyncOutcome = await syncOrderItemsShadowForImport(shadowSyncOrderIds);
+        } catch (syncOrderItemsError) {
+          console.warn('[Import] Erro ao sincronizar estrutura por item:', syncOrderItemsError);
+          toast.error(syncOrderItemsError instanceof Error ? syncOrderItemsError.message : 'Falha ao estruturar os itens importados.');
+        }
+      }
+
       const storeReleaseOrderIds = Array.from(new Set([...savedOrderIds, ...updatedOrderIds]));
       if (storeReleaseOrderIds.length > 0) {
         try {
@@ -557,6 +597,12 @@ export default function OrdersImport() {
         duration: 5000,
         style: { background: '#10B981', color: 'white' }
       });
+
+      if (shadowSyncOutcome && shadowSyncOutcome.attempted > 0 && shadowSyncOutcome.failed === 0) {
+        toast.success(`Estrutura por item sincronizada em ${shadowSyncOutcome.attempted} pedido(s).`, {
+          duration: 3500,
+        });
+      }
 
       await Promise.all([
         fetchImportStats(),

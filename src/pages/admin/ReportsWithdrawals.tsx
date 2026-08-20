@@ -3,6 +3,7 @@ import { ArrowLeft, CalendarRange, Eye, FileSpreadsheet, Loader2, Package, Rotat
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { supabase } from '../../supabase/client';
+import { fetchInChunks } from '../../utils/supabase/batch';
 import { isAssemblyRequired } from '../../utils/assembly/syncAssemblyProducts';
 import { DeliverySheetGenerator } from '../../utils/pdf/deliverySheetGenerator';
 import {
@@ -593,6 +594,7 @@ async function fetchWithdrawalPreview(filters: FiltersState): Promise<PreviewRow
       registered_by_name,
       source,
       legacy_route_id,
+      items,
       order:orders!inner(
         id,
         order_id_erp,
@@ -613,12 +615,11 @@ async function fetchWithdrawalPreview(filters: FiltersState): Promise<PreviewRow
 
   const assemblyOrdersSet = new Set<string>();
   if (orderIds.length > 0) {
-    const { data: assemblyData, error: assemblyError } = await supabase
+    // Em lotes: período longo pode trazer centenas de pedidos e o .in() estoura a URL.
+    const assemblyData = await fetchInChunks<string, any>(orderIds, (ids) => supabase
       .from('assembly_products')
       .select('order_id')
-      .in('order_id', orderIds);
-
-    if (assemblyError) throw assemblyError;
+      .in('order_id', ids));
 
     (assemblyData || []).forEach((row: any) => {
       if (row?.order_id) {
@@ -629,7 +630,11 @@ async function fetchWithdrawalPreview(filters: FiltersState): Promise<PreviewRow
 
   return withdrawals.map((row) => {
     const order = row.order!;
-    const items = buildItemRows(parseItemsJson(order.items_json));
+    // Retirada parcial: usa o snapshot dos itens efetivamente retirados (coluna items);
+    // só cai pro pedido inteiro (items_json) em retirada total/legado (items nulo).
+    const pickedSnapshot = (row as any).items;
+    const itemsSource = Array.isArray(pickedSnapshot) && pickedSnapshot.length > 0 ? pickedSnapshot : order.items_json;
+    const items = buildItemRows(parseItemsJson(itemsSource));
     const hasAssemblyItems = items.some((item) => item.hasAssembly);
 
     return {

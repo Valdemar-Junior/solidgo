@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+
+# Test outputs
+danfe_teste.html
+teste-api.html
+
+# Environment
+.env
+.env.local
+.env*.local
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Vercel
+.vercel
