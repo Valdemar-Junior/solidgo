@@ -1513,11 +1513,34 @@ export default function DeliveryMarking({ routeId, onUpdated }: DeliveryMarkingP
         // ENTREGA PARCIAL: pedidos entregues que ainda tem item faltando (o que "nao coube")
         // voltam pra fila (status pending). O item entregue ja gerou montagem acima; o snapshot
         // da proxima rota (Fase 1B) traz so o item que falta.
-        if (deliveredIds.length > 0) {
+        //
+        // SO vale para pedidos que esta rota acompanhou POR ITEM (tem linha em
+        // route_order_items). Em rota legada — criada com a entrega por item desligada, ou
+        // anterior a ela — nao existe registro de item, entao delivered_quantity do saldo fica
+        // em ZERO mesmo com o pedido entregue por inteiro. Sem este recorte, todo pedido
+        // entregue em rota legada era lido como "sobrou item" e voltava para a fila marcado
+        // como devolvido. Em rota legada a entrega e tudo-ou-nada: entregue e entregue.
+        const { data: routeItemRows, error: routeItemRowsError } = await supabase
+          .from('route_order_items')
+          .select('order_id')
+          .eq('route_id', routeId);
+
+        if (routeItemRowsError) {
+          // Sem saber quais pedidos foram acompanhados por item, nao da para afirmar que houve
+          // entrega parcial. Nao re-enfileira nada: manter entregue e o lado seguro do erro.
+          console.warn('[FinalizeRoute] Falha ao ler os itens da rota; parciais nao avaliados:', routeItemRowsError);
+        }
+
+        const itemizedOrderIds = new Set(
+          (routeItemRows || []).map((row: any) => String(row.order_id))
+        );
+        const deliveredItemizedIds = deliveredIds.filter((id) => itemizedOrderIds.has(String(id)));
+
+        if (!routeItemRowsError && deliveredItemizedIds.length > 0) {
           const { data: partialBalances, error: partialBalancesError } = await supabase
             .from('order_item_shadow_balances')
             .select('order_id')
-            .in('order_id', deliveredIds)
+            .in('order_id', deliveredItemizedIds)
             .eq('source_present', true)
             .gt('remaining_deliverable_quantity', 0);
 
