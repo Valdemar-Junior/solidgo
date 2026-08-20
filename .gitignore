@@ -22,3 +22,6 @@ tests/e2e/credentials.local.json
 schema_PRODUCAO_sem_feature.sql
 schema_teste_COM_feature.sql
 supabase/migrations_archive/
+
+# atalho (symlink) com o nome node_modules — a regra acima so pega diretorio
+node_modules
