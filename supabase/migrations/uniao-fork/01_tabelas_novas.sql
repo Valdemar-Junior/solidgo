@@ -47,7 +47,7 @@ CREATE TABLE public.order_item_holds (
     released_at timestamp with time zone,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT order_item_holds_status_check CHECK ((status = ANY (ARRAY['active'::text, 'released'::text, 'picked_up'::text]))),
-    CONSTRAINT order_item_holds_type_check CHECK ((hold_type = ANY (ARRAY['manual'::text, 'scheduled'::text, 'retirada'::text])))
+    CONSTRAINT order_item_holds_type_check CHECK ((hold_type = ANY (ARRAY['manual'::text, 'scheduled'::text, 'retirada'::text, 'antecipada'::text])))
 );
 
 

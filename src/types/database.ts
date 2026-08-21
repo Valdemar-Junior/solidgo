@@ -354,7 +354,21 @@ export interface OrderItemShadowBalance {
 }
 
 // "Em Espera": item tirado da fila de roteirizacao (agendamento / espera / retirada).
-export type OrderItemHoldType = 'manual' | 'scheduled' | 'retirada';
+// Motivo pelo qual o item esta parado na aba "Em Espera". O admin escolhe;
+// o sistema nao adivinha.
+//   manual     = cliente vai avisar quando puder receber
+//   scheduled  = entrega agendada (usa scheduled_date)
+//   retirada   = cliente vai buscar na loja
+//   antecipada = entrada antecipada: o produto ainda nao chegou
+export type OrderItemHoldType = 'manual' | 'scheduled' | 'retirada' | 'antecipada';
+
+// Rotulos exibidos na aba. Fonte unica — usar sempre daqui.
+export const ORDER_ITEM_HOLD_LABELS: Record<OrderItemHoldType, string> = {
+  retirada: 'Cliente vai retirar',
+  manual: 'Cliente vai avisar',
+  scheduled: 'Entrega agendada',
+  antecipada: 'Entrada antecipada',
+};
 // 'picked_up' = item efetivamente retirado pelo cliente (terminal).
 export type OrderItemHoldStatus = 'active' | 'released' | 'picked_up';
 

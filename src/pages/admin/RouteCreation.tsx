@@ -3,6 +3,7 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { supabase } from '../../supabase/client';
 import { generateDanfeBase64 } from '../../utils/danfe/generateDanfe';
 import { formatDateTimeBR, toDateBR, todayBR } from '../../utils/dateBR';
+import { ORDER_ITEM_HOLD_LABELS } from '../../types/database';
 import type { CarrierCity, DeliveryRouteCatalog, ItemFulfillmentControl, Order, OrderReturn, DriverWithUser, Vehicle, RouteWithDetails, OrderWithdrawal, RouteOrderItem, OrderItemShadowBalance, OrderItemHold, OrderItemHoldType, WaitingAutoRules } from '../../types/database';
 import {
   Truck,
@@ -893,6 +894,37 @@ function RouteCreationContent() {
       String(g.order.customer_name || '').toLowerCase().includes(q)
     );
   }, [waitingGroups, waitingSearch]);
+
+  // O motivo pelo qual o item esta parado e ESCOLHIDO pelo admin, nao adivinhado.
+  // Item que caiu na aba pelo move automatico ainda nao tem linha em
+  // order_item_holds; escolher o motivo cria a linha.
+  const setItemHoldReason = async (
+    row: { order: any; item: any; hold: OrderItemHold | null },
+    reason: OrderItemHoldType
+  ) => {
+    try {
+      if (row.hold) {
+        const { error } = await supabase.from('order_item_holds')
+          .update({
+            hold_type: reason,
+            // trocar de "entrega agendada" para outro motivo limpa a data
+            scheduled_date: reason === 'scheduled' ? row.hold.scheduled_date : null,
+            status: 'active',
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', row.hold.id);
+        if (error) throw error;
+      } else {
+        const { error } = await supabase.from('order_item_holds')
+          .insert(buildHoldPayload(row.order, row.item, { hold_type: reason, status: 'active' }));
+        if (error) throw error;
+      }
+      toast.success(`Motivo salvo: ${ORDER_ITEM_HOLD_LABELS[reason]}.`);
+      await loadHoldsAndRules();
+    } catch {
+      toast.error('Nao foi possivel salvar o motivo.');
+    }
+  };
 
   const setItemSchedule = async (
     row: { order: any; item: any; hold: OrderItemHold | null },
@@ -4722,18 +4754,36 @@ function RouteCreationContent() {
                         </tr>
                         {group.items.map((row, idx) => {
                           const it = row.item;
-                          const reasonBadge = row.reason === 'scheduled'
-                            ? { cls: 'bg-blue-100 text-blue-800 border-blue-200', label: `Agendado${row.scheduledDate ? ` (${row.scheduledDate.split('-').reverse().join('/')})` : ''}` }
-                            : row.reason === 'retirada'
-                              ? { cls: 'bg-purple-100 text-purple-800 border-purple-200', label: 'Retirada' }
-                              : row.reason === 'operacao'
-                                ? { cls: 'bg-gray-100 text-gray-700 border-gray-200', label: 'Automatico (obs/operacao)' }
-                                : { cls: 'bg-amber-100 text-amber-800 border-amber-200', label: 'Cliente vai avisar' };
+                          // Sem linha de espera gravada, o item caiu aqui pelo move
+                          // automatico e o motivo ainda nao foi informado.
+                          const motivoAtual: OrderItemHoldType | '' = row.hold ? row.hold.hold_type : '';
                           return (
                             <tr key={`${o.id}-${it?.sku || ''}-${idx}`} className="hover:bg-gray-50 transition-colors">
                               <td className="px-4 py-3 text-gray-700 max-w-[320px] truncate pl-8" title={it?.name || it?.descricao || ''}>{it?.name || it?.descricao || it?.sku || '-'}</td>
                               <td className="px-4 py-3 whitespace-nowrap">
-                                <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold border ${reasonBadge.cls}`}>{reasonBadge.label}</span>
+                                <select
+                                  value={motivoAtual}
+                                  onChange={(e) => {
+                                    const escolhido = e.target.value as OrderItemHoldType | '';
+                                    if (escolhido) void setItemHoldReason(row, escolhido);
+                                  }}
+                                  className={`text-xs font-semibold rounded-full border px-2 py-1 ${
+                                    motivoAtual
+                                      ? 'bg-white text-gray-800 border-gray-300'
+                                      : 'bg-amber-50 text-amber-800 border-amber-300'
+                                  }`}
+                                  title="Por que este item esta em espera"
+                                >
+                                  {!motivoAtual && <option value="">Informe o motivo</option>}
+                                  {(Object.keys(ORDER_ITEM_HOLD_LABELS) as OrderItemHoldType[]).map((k) => (
+                                    <option key={k} value={k}>{ORDER_ITEM_HOLD_LABELS[k]}</option>
+                                  ))}
+                                </select>
+                                {motivoAtual === 'scheduled' && row.scheduledDate && (
+                                  <span className="ml-2 text-xs text-gray-500">
+                                    {row.scheduledDate.split('-').reverse().join('/')}
+                                  </span>
+                                )}
                               </td>
                               <td className="px-4 py-3 whitespace-nowrap">
                                 <input
