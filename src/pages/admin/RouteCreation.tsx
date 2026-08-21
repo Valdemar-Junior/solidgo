@@ -339,7 +339,13 @@ function RouteCreationContent() {
   // fila inteira, entao o sinal termina junto.
   const voltouDaEsperaPorPedido = useMemo(() => {
     const mapa = new Map<string, { motivo: OrderItemHoldType; agendadoPara: string | null; automatico: boolean }>();
+    // So conta pedido que AINDA esta na fila. Um pedido que passou pela espera,
+    // foi roteirizado e entregue continua com o registro de liberacao no banco —
+    // sem este recorte ele inflava o contador para sempre, mostrando trabalho
+    // que nao existe mais.
+    const naFila = new Set((orders || []).map((o: any) => String(o.id)));
     Object.entries(holdsByOrderId).forEach(([orderId, holds]) => {
+      if (!naFila.has(String(orderId))) return;
       let melhor: { motivo: OrderItemHoldType; agendadoPara: string | null; automatico: boolean } | null = null;
       (holds || []).forEach((h) => {
         const venceu = h.status === 'active' && h.hold_type === 'scheduled'
@@ -363,7 +369,7 @@ function RouteCreationContent() {
       if (melhor) mapa.set(String(orderId), melhor);
     });
     return mapa;
-  }, [holdsByOrderId, todayStr]);
+  }, [holdsByOrderId, todayStr, orders]);
 
 
   const loadHoldsAndRules = React.useCallback(async () => {
