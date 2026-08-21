@@ -201,6 +201,8 @@ export default function OrderLookup() {
   const [withdrawals, setWithdrawals] = useState<WithdrawalInfo[]>([]);
   const withdrawal = useMemo(() => (withdrawals.length > 0 ? withdrawals[0] : null), [withdrawals]);
   const [pickedUpHolds, setPickedUpHolds] = useState<OrderItemHold[]>([]);
+  // SKUs que voltaram numa tentativa de entrega (nao e devolucao do cliente).
+  const [skusRetornadosNaEntrega, setSkusRetornadosNaEntrega] = useState<Set<string>>(new Set());
   const [storeReleaseAssignments, setStoreReleaseAssignments] = useState<StoreReleaseAssignment[]>([]);
   const [storeReleaseHistory, setStoreReleaseHistory] = useState<StoreReleaseHistory[]>([]);
   const [storeReleaseUserNames, setStoreReleaseUserNames] = useState<Record<string, string>>({});
@@ -353,6 +355,7 @@ export default function OrderLookup() {
     setStructuredItems([]);
     setShadowBalances([]);
     setReturnEvents([]);
+    setSkusRetornadosNaEntrega(new Set());
     setAssemblies([]);
     setDeliveryReceiptsByRouteOrder({});
     setDeliveryReceiptUserNames({});
@@ -757,6 +760,22 @@ export default function OrderLookup() {
           .eq('order_id', selectedOrder.id)
           .eq('status', 'picked_up');
         setPickedUpHolds((pickedUpData || []) as OrderItemHold[]);
+
+        // Produtos que voltaram numa tentativa de entrega. Isso NAO e devolucao do
+        // cliente — o produto nem chegou nele. Sem esta marca, o item reaparece so
+        // como "Saldo disponivel" e se perde a informacao de que ja saiu e voltou.
+        const { data: retornosNaEntrega } = await supabase
+          .from('route_order_items')
+          .select('sku_snapshot, returned_quantity')
+          .eq('order_id', selectedOrder.id)
+          .gt('returned_quantity', 0);
+        setSkusRetornadosNaEntrega(
+          new Set(
+            (retornosNaEntrega || [])
+              .map((row: any) => String(row.sku_snapshot || '').trim().toLowerCase())
+              .filter(Boolean),
+          ),
+        );
 
         setStoreReleaseAssignments((releaseAssignmentsData || []) as StoreReleaseAssignment[]);
         setStoreReleaseHistory((releaseHistoryData || []) as StoreReleaseHistory[]);
@@ -1205,6 +1224,33 @@ export default function OrderLookup() {
 
   function getReturnFlowSummary(order: Order | null) {
     if (!order?.return_flag && !order?.blocked_at && !returnScopeSummary.hasReturnedItems) return null;
+
+    // DEVOLUCAO x RETORNO NA ENTREGA sao coisas diferentes, e ate aqui a tela
+    // chamava as duas de "devolucao".
+    //   Devolucao      = o cliente recusou/devolveu. Vira registro em order_returns
+    //                    e aparece como returned_quantity no saldo por item.
+    //   Retorno na entrega = o produto NAO foi entregue (nao coube, avaria, cliente
+    //                    ausente) e voltou pro deposito. Nao existe devolucao nenhuma:
+    //                    so o pedido volta pra fila com return_flag.
+    // Como o codigo usa o MESMO return_flag para os dois casos, um pedido com
+    // entrega parcial aparecia como "Devolucao parcial" — dizendo ao escritorio que
+    // a cliente devolveu um produto que, na verdade, nem chegou na casa dela.
+    const houveDevolucaoDeVerdade =
+      returnEvents.length > 0 || returnScopeSummary.hasReturnedItems;
+
+    if (!houveDevolucaoDeVerdade) {
+      // Sobrou o caso do retorno na entrega. Se ainda ha saldo a entregar, foi
+      // parcial; se nao ha, o pedido inteiro voltou.
+      const aindaTemSaldo = returnScopeSummary.availableItemsCount > 0;
+      const rotulo = aindaTemSaldo ? 'Entrega parcial' : 'Pedido retornou';
+      return {
+        badge: rotulo,
+        stage: rotulo,
+        helper: aindaTemSaldo
+          ? 'Parte dos produtos foi entregue; o restante voltou para o deposito e segue na fila para uma nova rota.'
+          : 'O pedido voltou para o deposito sem ser entregue e segue na fila para uma nova rota.',
+      };
+    }
 
     const normalizedType = String(order?.return_type || '').trim().toLowerCase();
     const fallbackIsPartial = normalizedType === 'partial' || normalizedType === 'parcial';
@@ -2343,6 +2389,11 @@ export default function OrderLookup() {
                             ) : (
                               <span className="rounded-full border border-gray-200 bg-gray-50 px-2 py-1 text-gray-700">
                                 Saldo disponível: {remainingQuantity}
+                              </span>
+                            )}
+                            {!pickedUp && !isDelivered && skusRetornadosNaEntrega.has(String(item.sku || '').trim().toLowerCase()) && (
+                              <span className="rounded-full border border-orange-200 bg-orange-50 px-2 py-1 font-semibold text-orange-700">
+                                Retornou na entrega
                               </span>
                             )}
                             <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-1 text-amber-700">
