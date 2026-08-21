@@ -830,6 +830,22 @@ function RouteCreationContent() {
     });
   }, [filteredRows, sortColumn, sortDirection]);
 
+  // Pedidos que voltaram da espera sobem para o TOPO da fila.
+  // O selo e o fundo destacado ajudam quem ja esta olhando a linha, mas nao
+  // fazem ninguem rolar ate a linha 180 — e foi o que aconteceu na pratica.
+  // Estando no topo, e a primeira coisa que a pessoa ve ao abrir a tela.
+  // A ordem escolhida pelo usuario (clique no cabecalho) continua valendo
+  // DENTRO de cada grupo.
+  const sortedRowsComPrioridade = useMemo(() => {
+    if (voltouDaEsperaPorPedido.size === 0) return sortedRows;
+    const voltaram: typeof sortedRows = [];
+    const demais: typeof sortedRows = [];
+    sortedRows.forEach((r: any) => {
+      (voltouDaEsperaPorPedido.has(String(r.order?.id)) ? voltaram : demais).push(r);
+    });
+    return [...voltaram, ...demais];
+  }, [sortedRows, voltouDaEsperaPorPedido]);
+
   // Quantas linhas (itens) cada pedido tem na fila — pra saber se mostra "item x pedido".
   const rowsCountByOrderId = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -5042,7 +5058,7 @@ function RouteCreationContent() {
                 </thead>
                 <tbody className="divide-y divide-gray-100 bg-white">
                   {/* Reuse the massive mapping logic here but cleaner */}
-                  {sortedRows.map(({ order: o, item: it, values }, idx) => {
+                  {sortedRowsComPrioridade.map(({ order: o, item: it, values }, idx) => {
                     const rowActionsKey = `${o.id}-${it?.sku || ''}-${idx}`; // id UNICO por linha (evita abrir em todas as linhas do mesmo pedido)
                     const isSelected = selectedOrders.has(o.id);
                     const awaitingStoreRelease = isOrderAwaitingStoreRelease(o);
@@ -5248,10 +5264,11 @@ function RouteCreationContent() {
                                     : '';
                                   return (
                                     <span
-                                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold border ${
-                                        v.automatico
-                                          ? 'bg-amber-100 text-amber-900 border-amber-300'
-                                          : 'bg-amber-50 text-amber-800 border-amber-200'}`}
+                                      // Selo forte e pulsando. A versao discreta passou
+                                      // despercebida na pratica. A animacao fica SO no selo,
+                                      // nao na linha inteira, e respeita quem desliga animacao
+                                      // no sistema (motion-safe).
+                                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold border-2 bg-amber-400 text-amber-950 border-amber-600 shadow-sm motion-safe:animate-pulse"
                                       title={v.automatico
                                         ? `A entrega estava agendada para ${dataBR} e o pedido voltou sozinho para a fila`
                                         : `Este pedido estava em espera (${ORDER_ITEM_HOLD_LABELS[v.motivo]}) e foi liberado`}
