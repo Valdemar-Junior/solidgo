@@ -1,5 +1,6 @@
+import { ORDER_ITEM_HOLD_LABELS } from '../../types/database';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, Loader2, MapPin, Phone, Search, Truck, Hammer, FileText, FileSpreadsheet, AlertTriangle, LogOut, Eye, ChevronDown, ChevronUp, Copy, Check, Briefcase } from 'lucide-react';
+import { ArrowLeft, Loader2, MapPin, Phone, Search, Truck, Hammer, FileText, FileSpreadsheet, AlertTriangle, LogOut, Eye, ChevronDown, ChevronUp, Copy, Check, Briefcase, Clock } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../../supabase/client';
 import { generateDanfeBase64 } from '../../utils/danfe/generateDanfe';
@@ -9,6 +10,7 @@ import type {
   ItemFulfillmentControl,
   Order,
   OrderItemHold,
+  OrderItemHoldType,
   OrderItemShadowBalance,
   OrderReturn,
   OrderWithdrawal,
@@ -203,6 +205,8 @@ export default function OrderLookup() {
   const [pickedUpHolds, setPickedUpHolds] = useState<OrderItemHold[]>([]);
   // SKUs que voltaram numa tentativa de entrega (nao e devolucao do cliente).
   const [skusRetornadosNaEntrega, setSkusRetornadosNaEntrega] = useState<Set<string>>(new Set());
+  // Itens parados na aba Em Espera, com o motivo e a data (quando agendado).
+  const [holdsAtivos, setHoldsAtivos] = useState<OrderItemHold[]>([]);
   const [storeReleaseAssignments, setStoreReleaseAssignments] = useState<StoreReleaseAssignment[]>([]);
   const [storeReleaseHistory, setStoreReleaseHistory] = useState<StoreReleaseHistory[]>([]);
   const [storeReleaseUserNames, setStoreReleaseUserNames] = useState<Record<string, string>>({});
@@ -356,6 +360,7 @@ export default function OrderLookup() {
     setShadowBalances([]);
     setReturnEvents([]);
     setSkusRetornadosNaEntrega(new Set());
+    setHoldsAtivos([]);
     setAssemblies([]);
     setDeliveryReceiptsByRouteOrder({});
     setDeliveryReceiptUserNames({});
@@ -776,6 +781,15 @@ export default function OrderLookup() {
               .filter(Boolean),
           ),
         );
+
+        // Itens em espera. A Consulta de Pedido e o raio-x do percurso: se o
+        // pedido esta parado, o motivo precisa aparecer aqui.
+        const { data: holdsData } = await supabase
+          .from('order_item_holds')
+          .select('*')
+          .eq('order_id', selectedOrder.id)
+          .eq('status', 'active');
+        setHoldsAtivos((holdsData || []) as OrderItemHold[]);
 
         setStoreReleaseAssignments((releaseAssignmentsData || []) as StoreReleaseAssignment[]);
         setStoreReleaseHistory((releaseHistoryData || []) as StoreReleaseHistory[]);
@@ -1738,6 +1752,26 @@ export default function OrderLookup() {
                       <AlertTriangle className="h-3 w-3" /> {isBlockedReturnOrder(selectedOrder) ? 'Bloqueado por devolução' : 'Bloqueado no ERP'}
                     </span>
                   )}
+                  {/* Pedido parado na aba Em Espera: mostra o motivo aqui, e a data
+                      quando for entrega agendada. */}
+                  {holdsAtivos.length > 0 && (() => {
+                    const motivos = Array.from(new Set(holdsAtivos.map((h) => h.hold_type)));
+                    const agendado = holdsAtivos.find((h) => h.hold_type === 'scheduled' && h.scheduled_date);
+                    const texto = motivos.length === 1
+                      ? ORDER_ITEM_HOLD_LABELS[motivos[0] as OrderItemHoldType]
+                      : `${motivos.length} motivos`;
+                    return (
+                      <span className="px-2 py-1 rounded-full bg-amber-100 text-amber-800 border border-amber-200 flex items-center gap-1">
+                        <Clock className="h-3 w-3" />
+                        Em espera: {texto}
+                        {agendado?.scheduled_date && (
+                          <span className="font-semibold">
+                            {' '}({String(agendado.scheduled_date).split('-').reverse().join('/')})
+                          </span>
+                        )}
+                      </span>
+                    );
+                  })()}
                 </div>
                 <div className="mt-3 flex flex-wrap gap-2 text-xs">
                   {(() => {
@@ -2396,6 +2430,27 @@ export default function OrderLookup() {
                                 Retornou na entrega
                               </span>
                             )}
+                            {!pickedUp && !isDelivered && (() => {
+                              // Qual hold segura ESTE item — casa por chave da linha ou por
+                              // SKU + local, na mesma regra usada na fila.
+                              const chave = String(item.source_line_key || '');
+                              const sku = String(item.sku || '').trim().toLowerCase();
+                              const local = String(item.storage_location || '').trim().toLowerCase();
+                              const h = holdsAtivos.find((x) =>
+                                (x.source_line_key && x.source_line_key === chave) ||
+                                (x.sku && sku && String(x.sku).trim().toLowerCase() === sku &&
+                                  String(x.storage_location || '').trim().toLowerCase() === local));
+                              if (!h) return null;
+                              const rotulo = ORDER_ITEM_HOLD_LABELS[h.hold_type as OrderItemHoldType] || 'Em espera';
+                              const data = h.hold_type === 'scheduled' && h.scheduled_date
+                                ? ` (${String(h.scheduled_date).split('-').reverse().join('/')})`
+                                : '';
+                              return (
+                                <span className="rounded-full border border-amber-300 bg-amber-50 px-2 py-1 font-semibold text-amber-800">
+                                  Em espera: {rotulo}{data}
+                                </span>
+                              );
+                            })()}
                             <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-1 text-amber-700">
                               Devolvido: {returnedQuantity}
                             </span>
