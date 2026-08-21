@@ -475,6 +475,10 @@ function RouteCreationContent() {
   const [activeRoutesTab, setActiveRoutesTab] = useState<'deliveries' | 'blocked' | 'pickupOrders' | 'pickupRoutes'>('deliveries');
   const [showWaitingTab, setShowWaitingTab] = useState(false);
   const [waitingSearch, setWaitingSearch] = useState('');
+  // Filtro por motivo da aba Em Espera. '' = todos.
+  const [waitingReasonFilter, setWaitingReasonFilter] = useState<OrderItemHoldType | '' | 'sem_motivo'>('');
+  // Pedido aberto no modal "Ver pedido" da aba Em Espera.
+  const [waitingDetailOrder, setWaitingDetailOrder] = useState<any | null>(null);
 
   // Sorting State
   const [sortColumn, setSortColumn] = useState<string>('');
@@ -907,12 +911,35 @@ function RouteCreationContent() {
 
   const waitingGroupsFiltered = useMemo(() => {
     const q = waitingSearch.trim().toLowerCase();
-    if (!q) return waitingGroups;
-    return waitingGroups.filter((g) =>
-      String(g.order.order_id_erp || g.order.id || '').toLowerCase().includes(q) ||
-      String(g.order.customer_name || '').toLowerCase().includes(q)
-    );
-  }, [waitingGroups, waitingSearch]);
+    return waitingGroups.filter((g) => {
+      if (q) {
+        const casa =
+          String(g.order.order_id_erp || g.order.id || '').toLowerCase().includes(q) ||
+          String(g.order.customer_name || '').toLowerCase().includes(q);
+        if (!casa) return false;
+      }
+      if (waitingReasonFilter) {
+        // 'sem_motivo' = item que caiu na aba pelo move automatico e ainda nao
+        // foi classificado (nao tem linha em order_item_holds).
+        const temItemComMotivo = g.items.some((r: any) =>
+          waitingReasonFilter === 'sem_motivo' ? !r.hold : r.hold?.hold_type === waitingReasonFilter
+        );
+        if (!temItemComMotivo) return false;
+      }
+      return true;
+    });
+  }, [waitingGroups, waitingSearch, waitingReasonFilter]);
+
+  // Quantos itens em cada motivo — alimenta os contadores do filtro.
+  const waitingReasonCounts = useMemo(() => {
+    const c: Record<string, number> = { sem_motivo: 0 };
+    (Object.keys(ORDER_ITEM_HOLD_LABELS) as OrderItemHoldType[]).forEach((k) => { c[k] = 0; });
+    waitingRows.forEach((r: any) => {
+      const k = r.hold ? r.hold.hold_type : 'sem_motivo';
+      c[k] = (c[k] || 0) + 1;
+    });
+    return c;
+  }, [waitingRows]);
 
   // O motivo pelo qual o item esta parado e ESCOLHIDO pelo admin, nao adivinhado.
   // Item que caiu na aba pelo move automatico ainda nao tem linha em
@@ -4665,9 +4692,47 @@ function RouteCreationContent() {
           </div>
           )}
 
-          {/* Busca da aba Em Espera */}
+          {/* Busca e filtro por motivo da aba Em Espera */}
           {showWaitingTab && waitingRows.length > 0 && (
-            <div className="px-6 py-3 border-b border-gray-100 bg-white">
+            <div className="px-6 py-3 border-b border-gray-100 bg-white space-y-3">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="text-xs font-semibold text-gray-500 mr-1">Motivo:</span>
+                <button
+                  type="button"
+                  onClick={() => setWaitingReasonFilter('')}
+                  className={`px-2.5 py-1 rounded-full text-xs font-semibold border transition-colors ${
+                    waitingReasonFilter === ''
+                      ? 'bg-gray-800 text-white border-gray-800'
+                      : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'}`}
+                >
+                  Todos ({waitingRows.length})
+                </button>
+                {(Object.keys(ORDER_ITEM_HOLD_LABELS) as OrderItemHoldType[]).map((k) => (
+                  <button
+                    key={k}
+                    type="button"
+                    onClick={() => setWaitingReasonFilter(waitingReasonFilter === k ? '' : k)}
+                    className={`px-2.5 py-1 rounded-full text-xs font-semibold border transition-colors ${
+                      waitingReasonFilter === k
+                        ? 'bg-amber-500 text-white border-amber-500'
+                        : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'}`}
+                  >
+                    {ORDER_ITEM_HOLD_LABELS[k]} ({waitingReasonCounts[k] || 0})
+                  </button>
+                ))}
+                {(waitingReasonCounts.sem_motivo || 0) > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setWaitingReasonFilter(waitingReasonFilter === 'sem_motivo' ? '' : 'sem_motivo')}
+                    className={`px-2.5 py-1 rounded-full text-xs font-semibold border transition-colors ${
+                      waitingReasonFilter === 'sem_motivo'
+                        ? 'bg-red-500 text-white border-red-500'
+                        : 'bg-red-50 text-red-700 border-red-300 hover:bg-red-100'}`}
+                  >
+                    Sem motivo ({waitingReasonCounts.sem_motivo})
+                  </button>
+                )}
+              </div>
               <div className="relative max-w-md">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
                 <input
@@ -4752,8 +4817,40 @@ function RouteCreationContent() {
                                 <span className="font-bold text-gray-800">Pedido {o.order_id_erp || o.id}</span>
                                 <span className="text-gray-500"> · {o.customer_name || '-'}</span>
                                 <span className="ml-2 inline-flex items-center rounded-full bg-white border border-amber-200 text-amber-700 px-2 py-0.5 text-[11px] font-semibold">{group.items.length} {group.items.length === 1 ? 'item' : 'itens'} em espera</span>
+                                {/* As observacoes sao onde o vendedor escreve o combinado com o
+                                    cliente ("vai retirar", "vai avisar"). E o que explica por que
+                                    o pedido esta parado, entao fica a vista. */}
+                                {(() => {
+                                  const raw = (o as any).raw_json || {};
+                                  const pub = String(o.observacoes_publicas || raw.observacoes || '').trim();
+                                  const int = String(o.observacoes_internas || raw.observacoes_internas || '').trim();
+                                  if (!pub && !int) return null;
+                                  return (
+                                    <div className="mt-1.5 space-y-1">
+                                      {pub && (
+                                        <div className="text-xs text-gray-700">
+                                          <span className="font-semibold text-gray-500">Obs. do pedido:</span> {pub}
+                                        </div>
+                                      )}
+                                      {int && (
+                                        <div className="text-xs text-gray-700">
+                                          <span className="font-semibold text-gray-500">Obs. interna:</span> {int}
+                                        </div>
+                                      )}
+                                    </div>
+                                  );
+                                })()}
                               </div>
                               <div className="flex items-center gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => setWaitingDetailOrder(o)}
+                                  className="inline-flex items-center rounded-lg border border-blue-200 bg-blue-50 px-2.5 py-1.5 text-xs font-semibold text-blue-700 transition-colors hover:bg-blue-100"
+                                  title="Ver todos os dados deste pedido"
+                                >
+                                  <Eye className="mr-1 h-3.5 w-3.5" />
+                                  Ver pedido
+                                </button>
                                 <button
                                   type="button"
                                   onClick={() => void releaseGroupFromWaiting(group)}
@@ -6323,6 +6420,116 @@ function RouteCreationContent() {
       }
 
       {/* Divergencias da conferencia (admin trata aqui, na Gestao de Entregas) */}
+      {waitingDetailOrder && (
+        <div
+          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+          onClick={() => setWaitingDetailOrder(null)}
+        >
+          <div
+            className="bg-white rounded-xl shadow-xl w-full max-w-3xl max-h-[85vh] flex flex-col overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-6 py-4 border-b flex items-center justify-between bg-gray-50">
+              <div>
+                <h4 className="text-lg font-bold text-gray-900">
+                  Pedido {waitingDetailOrder.order_id_erp || waitingDetailOrder.id}
+                </h4>
+                <p className="text-sm text-gray-600">{waitingDetailOrder.customer_name || '-'}</p>
+              </div>
+              <button onClick={() => setWaitingDetailOrder(null)} className="text-gray-500 hover:text-gray-700">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="p-6 overflow-y-auto flex-1 space-y-5">
+              {(() => {
+                const o: any = waitingDetailOrder;
+                const raw = o.raw_json || {};
+                const end = o.address_json || {};
+                const itens = Array.isArray(o.items_json) ? o.items_json : [];
+                const pub = String(o.observacoes_publicas || raw.observacoes || '').trim();
+                const int = String(o.observacoes_internas || raw.observacoes_internas || '').trim();
+                const linha = (rot: string, val: any) => (
+                  <div className="flex gap-2 text-sm">
+                    <span className="text-gray-500 min-w-[130px]">{rot}</span>
+                    <span className="text-gray-900 font-medium">{val || '-'}</span>
+                  </div>
+                );
+                return (
+                  <>
+                    <div className="grid gap-1.5 sm:grid-cols-2">
+                      {linha('Cliente', o.customer_name)}
+                      {linha('CPF', o.customer_cpf)}
+                      {linha('Telefone', o.phone)}
+                      {linha('Vendedor', o.vendedor_nome || raw.nome_vendedor)}
+                      {linha('Filial', o.filial_venda)}
+                      {linha('Venda', o.data_venda ? formatDateTimeBR(o.data_venda) : '-')}
+                      {linha('Prev. entrega', o.previsao_entrega ? toDateBR(o.previsao_entrega) : '-')}
+                      {linha('Prev. montagem', o.previsao_montagem ? toDateBR(o.previsao_montagem) : '-')}
+                    </div>
+
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-1.5">Endereco</p>
+                      <p className="text-sm text-gray-900">
+                        {[end.street, end.neighborhood, end.city, end.zip].filter(Boolean).join(', ') || '-'}
+                      </p>
+                      {end.complement && <p className="text-sm text-gray-600 mt-0.5">{end.complement}</p>}
+                    </div>
+
+                    {(pub || int) && (
+                      <div className="space-y-2">
+                        <p className="text-xs font-semibold uppercase tracking-wider text-gray-500">Observacoes</p>
+                        {pub && (
+                          <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 text-sm text-gray-800">
+                            <span className="font-semibold text-gray-500">Do pedido: </span>{pub}
+                          </div>
+                        )}
+                        {int && (
+                          <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-gray-800">
+                            <span className="font-semibold text-amber-700">Interna: </span>{int}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-1.5">
+                        Produtos ({itens.length})
+                      </p>
+                      <div className="divide-y divide-gray-100 rounded-lg border border-gray-200">
+                        {itens.length === 0 && (
+                          <p className="p-3 text-sm text-gray-500">Nenhum produto informado.</p>
+                        )}
+                        {itens.map((it: any, i: number) => (
+                          <div key={i} className="p-3">
+                            <p className="text-sm font-medium text-gray-900">{it.name || it.descricao || it.sku || '-'}</p>
+                            <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-600">
+                              <span>SKU: {it.sku || '-'}</span>
+                              <span>Qtd: {it.purchased_quantity ?? it.quantity ?? 1}</span>
+                              <span>Volumes: {it.volumes_per_unit ?? it.quantity ?? '-'}</span>
+                              <span>Local: {it.location || '-'}</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </>
+                );
+              })()}
+            </div>
+
+            <div className="px-6 py-3 border-t bg-gray-50 flex justify-end">
+              <button
+                onClick={() => setWaitingDetailOrder(null)}
+                className="px-4 py-2 rounded-lg border border-gray-300 text-sm font-semibold text-gray-700 hover:bg-gray-100"
+              >
+                Fechar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showConferenceModal && conferenceRoute && (
         <ConferenceDivergenceModal
           route={conferenceRoute}
