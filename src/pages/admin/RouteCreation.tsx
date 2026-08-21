@@ -331,6 +331,36 @@ function RouteCreationContent() {
     [holdsByOrderId, waitingAutoRules, todayStr, emEsperaAtivo]
   );
 
+  // Pedidos que VOLTARAM da espera e ainda estao na fila. Dois caminhos de volta:
+  //   1. alguem liberou na mao        -> hold com status 'released'
+  //   2. o agendamento venceu sozinho -> hold 'scheduled' ativo com data <= hoje
+  // O segundo e o silencioso: o item reaparece sem ninguem clicar em nada.
+  // Nao precisa de prazo de validade: quando o pedido e roteirizado ele sai da
+  // fila inteira, entao o sinal termina junto.
+  const voltouDaEsperaPorPedido = useMemo(() => {
+    const mapa = new Map<string, { motivo: OrderItemHoldType; agendadoPara: string | null; automatico: boolean }>();
+    Object.entries(holdsByOrderId).forEach(([orderId, holds]) => {
+      let melhor: { motivo: OrderItemHoldType; agendadoPara: string | null; automatico: boolean } | null = null;
+      (holds || []).forEach((h) => {
+        const venceu = h.status === 'active' && h.hold_type === 'scheduled'
+          && Boolean(h.scheduled_date) && String(h.scheduled_date) <= todayStr;
+        const liberado = h.status === 'released';
+        if (!venceu && !liberado) return;
+        // O agendamento vencido tem prioridade: tem data combinada com o cliente.
+        if (!melhor || venceu) {
+          melhor = {
+            motivo: h.hold_type as OrderItemHoldType,
+            agendadoPara: venceu ? String(h.scheduled_date) : null,
+            automatico: venceu,
+          };
+        }
+      });
+      if (melhor) mapa.set(String(orderId), melhor);
+    });
+    return mapa;
+  }, [holdsByOrderId, todayStr]);
+
+
   const loadHoldsAndRules = React.useCallback(async () => {
     try {
       const [{ data: holdsData }, { data: rulesData }] = await Promise.all([
@@ -475,6 +505,8 @@ function RouteCreationContent() {
   const [activeRoutesTab, setActiveRoutesTab] = useState<'deliveries' | 'blocked' | 'pickupOrders' | 'pickupRoutes'>('deliveries');
   const [showWaitingTab, setShowWaitingTab] = useState(false);
   const [waitingSearch, setWaitingSearch] = useState('');
+  // Filtro rapido: mostrar so os pedidos que voltaram da espera.
+  const [soVoltaramDaEspera, setSoVoltaramDaEspera] = useState(false);
   // Filtro por motivo da aba Em Espera. '' = todos.
   const [waitingReasonFilter, setWaitingReasonFilter] = useState<OrderItemHoldType | '' | 'sem_motivo'>('');
   // Pedido aberto no modal "Ver pedido" da aba Em Espera.
@@ -572,6 +604,9 @@ function RouteCreationContent() {
 
     // 1. Filter Orders
     const filteredOrders = orders.filter((o: any) => {
+      // Filtro rapido "Voltaram da espera": vem antes dos demais porque e o mais
+      // restritivo — a pessoa clicou para ver so esses.
+      if (soVoltaramDaEspera && !voltouDaEsperaPorPedido.has(String(o.id))) return false;
       const addr: any = o.address_json || {};
       const raw: any = o.raw_json || {};
       const city = String(addr.city || raw.destinatario_cidade || '').toLowerCase();
@@ -743,7 +778,7 @@ function RouteCreationContent() {
     filterFilialVenda, filterSeller, filterSaleDateStart, filterSaleDateEnd, filterReturnedOnly,
     filterDeadline, filterServiceType, strictLocal, filterLocalEstocagem, strictDepartment,
     filterDepartment, filterBrand, filterHasAssembly, filterRetirada, carrierCityNameSet,
-    orderBalancesByOrderId, holdCtx
+    orderBalancesByOrderId, holdCtx, soVoltaramDaEspera, voltouDaEsperaPorPedido
   ]);
 
   const sortedRows = useMemo(() => {
@@ -4597,6 +4632,22 @@ function RouteCreationContent() {
             Em Espera ({selectedOrders.size})
           </button>
 
+          {/* So aparece quando ha o que mostrar: enquanto tiver numero, tem pedido
+              que voltou da espera esperando decisao. */}
+          {voltouDaEsperaPorPedido.size > 0 && (
+            <button
+              onClick={() => setSoVoltaramDaEspera((v) => !v)}
+              className={`flex items-center justify-center px-4 py-3 rounded-xl border font-bold transition-all shadow-sm hover:shadow ${
+                soVoltaramDaEspera
+                  ? 'border-amber-500 bg-amber-500 text-white'
+                  : 'border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100'}`}
+              title="Pedidos que estavam em espera e voltaram para a fila"
+            >
+              <Clock className="h-5 w-5 mr-2" />
+              Voltaram da espera ({voltouDaEsperaPorPedido.size})
+            </button>
+          )}
+
           <button
             onClick={() => loadData(false)}
             disabled={loading}
@@ -5170,6 +5221,28 @@ function RouteCreationContent() {
                                     {getStoreReleaseStatusLabel(o.store_release_status)}
                                   </span>
                                 )}
+                                {(() => {
+                                  const v = voltouDaEsperaPorPedido.get(String(o.id));
+                                  if (!v) return null;
+                                  const dataBR = v.agendadoPara
+                                    ? String(v.agendadoPara).split('-').reverse().join('/')
+                                    : '';
+                                  return (
+                                    <span
+                                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold border ${
+                                        v.automatico
+                                          ? 'bg-amber-100 text-amber-900 border-amber-300'
+                                          : 'bg-amber-50 text-amber-800 border-amber-200'}`}
+                                      title={v.automatico
+                                        ? `A entrega estava agendada para ${dataBR} e o pedido voltou sozinho para a fila`
+                                        : `Este pedido estava em espera (${ORDER_ITEM_HOLD_LABELS[v.motivo]}) e foi liberado`}
+                                    >
+                                      <Clock className="h-3.5 w-3.5" />
+                                      Voltou da espera
+                                      {v.automatico ? ` · agendado ${dataBR}` : ` · ${ORDER_ITEM_HOLD_LABELS[v.motivo]}`}
+                                    </span>
+                                  );
+                                })()}
                                 {isPartialReturnedWithRemainingBalance ? (
                                   <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-50 text-amber-800 border border-amber-200" title={returnTitle || 'Pedido com devolução parcial e saldo ainda entregável'}>
                                     <AlertTriangle className="h-3.5 w-3.5" />

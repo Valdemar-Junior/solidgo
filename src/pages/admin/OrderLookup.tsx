@@ -205,6 +205,9 @@ export default function OrderLookup() {
   const [pickedUpHolds, setPickedUpHolds] = useState<OrderItemHold[]>([]);
   // SKUs que voltaram numa tentativa de entrega (nao e devolucao do cliente).
   const [skusRetornadosNaEntrega, setSkusRetornadosNaEntrega] = useState<Set<string>>(new Set());
+  // TODO o historico de espera do pedido (ativos e ja liberados) — alimenta a
+  // linha do tempo. O que esta ativo aparece tambem como marca no cabecalho.
+  const [holdsHistorico, setHoldsHistorico] = useState<OrderItemHold[]>([]);
   // Itens parados na aba Em Espera, com o motivo e a data (quando agendado).
   const [holdsAtivos, setHoldsAtivos] = useState<OrderItemHold[]>([]);
   const [storeReleaseAssignments, setStoreReleaseAssignments] = useState<StoreReleaseAssignment[]>([]);
@@ -361,6 +364,7 @@ export default function OrderLookup() {
     setReturnEvents([]);
     setSkusRetornadosNaEntrega(new Set());
     setHoldsAtivos([]);
+    setHoldsHistorico([]);
     setAssemblies([]);
     setDeliveryReceiptsByRouteOrder({});
     setDeliveryReceiptUserNames({});
@@ -787,9 +791,10 @@ export default function OrderLookup() {
         const { data: holdsData } = await supabase
           .from('order_item_holds')
           .select('*')
-          .eq('order_id', selectedOrder.id)
-          .eq('status', 'active');
-        setHoldsAtivos((holdsData || []) as OrderItemHold[]);
+          .eq('order_id', selectedOrder.id);
+        const todosHolds = (holdsData || []) as OrderItemHold[];
+        setHoldsHistorico(todosHolds);
+        setHoldsAtivos(todosHolds.filter((h) => h.status === 'active'));
 
         setStoreReleaseAssignments((releaseAssignmentsData || []) as StoreReleaseAssignment[]);
         setStoreReleaseHistory((releaseHistoryData || []) as StoreReleaseHistory[]);
@@ -1594,6 +1599,61 @@ export default function OrderLookup() {
     return 'Retirado pelo cliente';
   })();
   const shouldShowLegacyItemsList = !showShadowItemsPanel || showOriginalImportedItems;
+  // LINHA DO TEMPO — a historia do pedido em ordem, de cima para baixo.
+  // Selo e bom para ESTADO (bate o olho e sabe). Historia tem ordem e data, e
+  // selo nao carrega nem uma coisa nem outra — por isso vive aqui, e nao como
+  // mais uma marca no cabecalho.
+  const linhaDoTempo = useMemo(() => {
+    if (!selectedOrder) return [] as Array<{ quando: string; titulo: string; detalhe?: string; tom: string }>;
+    const ev: Array<{ quando: string; titulo: string; detalhe?: string; tom: string }> = [];
+    const add = (quando: any, titulo: string, detalhe?: string, tom = 'gray') => {
+      if (!quando) return;
+      ev.push({ quando: String(quando), titulo, detalhe, tom });
+    };
+
+    const vendedor = String((selectedOrder as any).vendedor_nome || '').trim();
+    add(selectedOrder.data_venda, 'Venda no ERP', vendedor ? `Vendedor: ${vendedor}` : undefined);
+    add(selectedOrder.created_at, 'Importado para o sistema');
+
+    holdsHistorico.forEach((h) => {
+      const rotulo = ORDER_ITEM_HOLD_LABELS[h.hold_type as OrderItemHoldType] || 'Em espera';
+      const dataAg = h.hold_type === 'scheduled' && h.scheduled_date
+        ? ` para ${String(h.scheduled_date).split('-').reverse().join('/')}`
+        : '';
+      const prod = h.product_name || h.sku || '';
+      add(h.created_at, `Foi para espera — ${rotulo}${dataAg}`, prod || undefined, 'amber');
+      if (h.status === 'released') {
+        add(h.released_at, 'Liberado da espera', prod || undefined, 'green');
+      }
+      if (h.status === 'picked_up') {
+        add(h.updated_at || h.created_at, 'Retirado pelo cliente', prod || undefined, 'purple');
+      }
+    });
+
+    withdrawals.forEach((w: any) => {
+      const qtd = Array.isArray(w.items) ? w.items.length : null;
+      add(w.created_at, 'Retirada no balcao', qtd ? `${qtd} produto(s)` : 'Pedido inteiro', 'purple');
+    });
+
+    routeOrders.forEach((ro: any) => {
+      const nomeRota = ro.route?.name || ro.route?.route_code || 'rota';
+      add(ro.created_at, `Entrou na rota ${nomeRota}`, undefined, 'blue');
+      add(ro.delivered_at, 'Entregue', `Rota ${nomeRota}`, 'green');
+      add(ro.returned_at, 'Retornou da rota', ro.return_reason || undefined, 'red');
+    });
+
+    returnEvents.forEach((r: any) => {
+      add(r.return_date || r.created_at, 'Devolucao registrada', r.return_nfe_number ? `NF ${r.return_nfe_number}` : undefined, 'red');
+    });
+
+    assemblies.forEach((a: any) => {
+      add(a.created_at, 'Montagem gerada', a.route_name || undefined, 'orange');
+      if (a.status === 'completed') add(a.updated_at, 'Montagem concluida', undefined, 'green');
+    });
+
+    return ev.sort((x, y) => new Date(x.quando).getTime() - new Date(y.quando).getTime());
+  }, [selectedOrder, holdsHistorico, withdrawals, routeOrders, returnEvents, assemblies]);
+
   const returnFlowSummary = getReturnFlowSummary(selectedOrder);
 
   return (
@@ -2513,6 +2573,44 @@ export default function OrderLookup() {
                 <p className="text-sm text-gray-500">Itens não informados.</p>
               )}
             </div>
+          </div>
+        )}
+
+        {selectedOrder && linhaDoTempo.length > 0 && (
+          <div className="bg-white rounded-xl border border-gray-200 p-5">
+            <div className="flex items-center gap-2 mb-1">
+              <Clock className="h-5 w-5 text-gray-500" />
+              <h3 className="font-bold text-gray-900">Linha do tempo</h3>
+            </div>
+            <p className="text-sm text-gray-500 mb-4">Tudo que aconteceu com este pedido, na ordem.</p>
+
+            <ol className="relative border-l-2 border-gray-200 ml-2 space-y-4">
+              {linhaDoTempo.map((e, i) => {
+                const cor: Record<string, string> = {
+                  gray: 'bg-gray-400',
+                  amber: 'bg-amber-500',
+                  green: 'bg-green-500',
+                  blue: 'bg-blue-500',
+                  red: 'bg-red-500',
+                  purple: 'bg-purple-500',
+                  orange: 'bg-orange-500',
+                };
+                const d = new Date(e.quando);
+                const quandoBR = isNaN(d.getTime())
+                  ? '-'
+                  : `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+                return (
+                  <li key={i} className="ml-5">
+                    <span className={`absolute -left-[7px] flex h-3 w-3 rounded-full ring-4 ring-white ${cor[e.tom] || 'bg-gray-400'}`} />
+                    <div className="flex flex-wrap items-baseline gap-x-3">
+                      <span className="text-sm font-semibold text-gray-900">{e.titulo}</span>
+                      <span className="text-xs text-gray-500 tabular-nums">{quandoBR}</span>
+                    </div>
+                    {e.detalhe && <p className="text-xs text-gray-600 mt-0.5">{e.detalhe}</p>}
+                  </li>
+                );
+              })}
+            </ol>
           </div>
         )}
       </main>
