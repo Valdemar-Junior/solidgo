@@ -307,9 +307,28 @@ function RouteCreationContent() {
   const [holdsByOrderId, setHoldsByOrderId] = useState<Record<string, OrderItemHold[]>>({});
   const [waitingAutoRules, setWaitingAutoRules] = useState<WaitingAutoRules | null>(null);
   const todayStr = new Date().toISOString().slice(0, 10);
+  // O controle da entrega por item, lido uma vez para a tela saber se a camada
+  // "Em Espera" deve existir.
+  const [itemFulfillmentControl, setItemFulfillmentControl] =
+    useState<ItemFulfillmentControl>(DEFAULT_ITEM_FULFILLMENT_CONTROL);
+
+  useEffect(() => {
+    let vivo = true;
+    loadItemFulfillmentControlForRouting()
+      .then((c) => { if (vivo) setItemFulfillmentControl(c); })
+      .catch(() => { /* sem config, vale o padrao: tudo desligado */ });
+    return () => { vivo = false; };
+  }, []);
+
+  // "Em Espera" so cumpre o que promete quando a rota registra os produtos um a
+  // um. Sem isso, segurar UM item nao impede que ele suba no caminhao: a rota
+  // leva o pedido inteiro. Entao a aba, o move automatico e o efeito dos holds
+  // na fila acompanham a alocacao por item.
+  const emEsperaAtivo = shouldCreateRouteOrderItemSnapshots(itemFulfillmentControl);
+
   const holdCtx = useMemo(
-    () => ({ holdsByOrderId, autoRules: waitingAutoRules, today: todayStr }),
-    [holdsByOrderId, waitingAutoRules, todayStr]
+    () => ({ holdsByOrderId, autoRules: waitingAutoRules, today: todayStr, waitingEnabled: emEsperaAtivo }),
+    [holdsByOrderId, waitingAutoRules, todayStr, emEsperaAtivo]
   );
 
   const loadHoldsAndRules = React.useCallback(async () => {
@@ -4622,7 +4641,10 @@ function RouteCreationContent() {
             </div>
           </div>
 
-          {/* Alternador: fila de roteirizacao x Em Espera */}
+          {/* Alternador: fila de roteirizacao x Em Espera.
+              Com a alocacao por item desligada a aba nao aparece: segurar um item
+              nao impediria que ele subisse no caminhao. */}
+          {emEsperaAtivo && (
           <div className="px-6 pt-3 flex items-center gap-2 border-b border-gray-100 bg-white">
             <button
               onClick={() => setShowWaitingTab(false)}
@@ -4641,6 +4663,7 @@ function RouteCreationContent() {
               )}
             </button>
           </div>
+          )}
 
           {/* Busca da aba Em Espera */}
           {showWaitingTab && waitingRows.length > 0 && (
@@ -4960,7 +4983,7 @@ function RouteCreationContent() {
                                 className={`absolute left-0 z-30 min-w-[180px] overflow-hidden rounded-xl border border-gray-200 bg-white shadow-lg ${orderActionsOpenUpward ? 'bottom-full mb-2' : 'mt-2'}`}
                                 onClick={(event) => event.stopPropagation()}
                               >
-                                {(rowsCountByOrderId[String(o.id)] || 1) > 1 ? (
+                                {emEsperaAtivo && ((rowsCountByOrderId[String(o.id)] || 1) > 1 ? (
                                   <>
                                     <button
                                       type="button"
@@ -5000,7 +5023,7 @@ function RouteCreationContent() {
                                     <Clock className="mr-2 h-4 w-4" />
                                     Mover para Em Espera
                                   </button>
-                                )}
+                                ))}
                                 <button
                                   type="button"
                                   onClick={() => {

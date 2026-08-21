@@ -9,6 +9,14 @@ export interface HoldContext {
   holdsByOrderId?: Record<string, OrderItemHold[]>;
   autoRules?: WaitingAutoRules | null;
   today?: string; // 'YYYY-MM-DD'
+  // "Em Espera" so faz sentido quando a rota registra os produtos um a um.
+  // Sem isso, segurar UM item nao impede que ele va no caminhao: a rota leva o
+  // pedido inteiro, e tanto a folha de separacao quanto a tela do motorista
+  // mostram tudo. Desligado, a aba some, o move automatico nao roda e nenhum
+  // hold esconde item da fila.
+  // A RETIRADA (picked_up) NAO depende disto — e recurso proprio e continua
+  // valendo sempre, senao item ja retirado voltaria pra fila.
+  waitingEnabled?: boolean;
 }
 
 const norm = (v: any) => String(v ?? '').trim().toLowerCase();
@@ -61,12 +69,15 @@ function holdMatchesItem(hold: OrderItemHold, item: any): boolean {
 function applyHolds(order: any, items: any[], ctx?: HoldContext): any[] {
   if (!ctx) return items;
   const holds = ctx.holdsByOrderId?.[String(order?.id || '')] || [];
-  const autoMatch = orderMatchesAutoWaiting(order, ctx.autoRules);
+  const waitingEnabled = ctx.waitingEnabled !== false;
+  const autoMatch = waitingEnabled && orderMatchesAutoWaiting(order, ctx.autoRules);
   if (holds.length === 0 && !autoMatch) return items;
 
   const today = ctx.today || '';
   // Esconde da fila: pausas ativas (manual/agendado no futuro) E itens ja retirados (terminal).
-  const hidingHolds = holds.filter((h) => h.status === 'picked_up' || isHoldActiveOn(h, today));
+  // Com "Em Espera" desligado, so a retirada continua escondendo.
+  const hidingHolds = holds.filter((h) =>
+    h.status === 'picked_up' || (waitingEnabled && isHoldActiveOn(h, today)));
   const releasedHolds = holds.filter((h) => h.status === 'released');
 
   return items.filter((item) => {
