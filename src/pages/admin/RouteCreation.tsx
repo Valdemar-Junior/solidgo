@@ -350,7 +350,12 @@ function RouteCreationContent() {
         if (!melhor || venceu) {
           melhor = {
             motivo: h.hold_type as OrderItemHoldType,
-            agendadoPara: venceu ? String(h.scheduled_date) : null,
+            // A data vale sempre que for agendamento — tanto faz se venceu
+            // sozinho ou se alguem liberou na mao. E a data combinada com o
+            // cliente, e e o que a pessoa precisa ver na fila.
+            agendadoPara: h.hold_type === 'scheduled' && h.scheduled_date
+              ? String(h.scheduled_date)
+              : null,
             automatico: venceu,
           };
         }
@@ -5088,7 +5093,15 @@ function RouteCreationContent() {
                     return (
                       <tr
                         key={`${o.id}-${it.sku}-${idx}`}
-                        className={`group transition-colors ${isSelected ? 'bg-blue-50 hover:bg-blue-100' : 'hover:bg-gray-50'}`}
+                        className={`group transition-colors ${
+                          isSelected
+                            ? 'bg-blue-50 hover:bg-blue-100'
+                            : voltouDaEsperaPorPedido.has(String(o.id))
+                              // Fundo ambar + faixa na lateral. Chama atencao enquanto a
+                              // pessoa rola, sem animacao: piscando, o sinal competiria com
+                              // os outros selos da linha e em uma semana viraria invisivel.
+                              ? 'bg-amber-50/70 hover:bg-amber-100/70 border-l-4 border-l-amber-400'
+                              : 'hover:bg-gray-50'}`}
                       >
                         <td
                           className={`${FROZEN_COL.check} ${frozenBg} z-20 px-3 py-3 cursor-pointer`}
@@ -5238,8 +5251,8 @@ function RouteCreationContent() {
                                         : `Este pedido estava em espera (${ORDER_ITEM_HOLD_LABELS[v.motivo]}) e foi liberado`}
                                     >
                                       <Clock className="h-3.5 w-3.5" />
-                                      Voltou da espera
-                                      {v.automatico ? ` · agendado ${dataBR}` : ` · ${ORDER_ITEM_HOLD_LABELS[v.motivo]}`}
+                                      Voltou da espera · {ORDER_ITEM_HOLD_LABELS[v.motivo]}
+                                      {dataBR ? ` ${dataBR}` : ''}
                                     </span>
                                   );
                                 })()}
