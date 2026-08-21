@@ -5115,15 +5115,9 @@ function RouteCreationContent() {
                     return (
                       <tr
                         key={`${o.id}-${it.sku}-${idx}`}
-                        className={`group transition-colors ${
-                          isSelected
-                            ? 'bg-blue-50 hover:bg-blue-100'
-                            : voltouDaEsperaPorPedido.has(String(o.id))
-                              // Fundo ambar + faixa na lateral. Chama atencao enquanto a
-                              // pessoa rola, sem animacao: piscando, o sinal competiria com
-                              // os outros selos da linha e em uma semana viraria invisivel.
-                              ? 'bg-amber-50/70 hover:bg-amber-100/70 border-l-4 border-l-amber-400'
-                              : 'hover:bg-gray-50'}`}
+                        // Linha igual as demais: quem chama atencao e o selo pulsando
+                        // na coluna Sinais, somado a posicao no topo da fila.
+                        className={`group transition-colors ${isSelected ? 'bg-blue-50 hover:bg-blue-100' : 'hover:bg-gray-50'}`}
                       >
                         <td
                           className={`${FROZEN_COL.check} ${frozenBg} z-20 px-3 py-3 cursor-pointer`}
