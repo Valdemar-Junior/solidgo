@@ -125,11 +125,21 @@ export function useDeliveryPhotos(): UseDeliveryPhotosResult {
         }
     };
 
+    // FECHAR A CAIXA DE FOTOS = DESISTIR DA ACAO. Sempre.
+    //
+    // Antes isto devolvia `!photosRequired`. Como a foto so e obrigatoria na
+    // ENTREGA, no RETORNO o cancelar devolvia `true` — o mesmo valor do
+    // confirmar. Resultado: o motorista clicava em Cancelar, a caixa fechava, e
+    // o pedido era marcado como retornado assim mesmo. "Pular a foto" e
+    // "desistir da operacao" tinham virado a mesma resposta.
+    //
+    // Agora fechar sempre significa desistir. Quem quiser seguir sem foto usa o
+    // botao de confirmar com zero fotos, que no retorno e permitido (minPhotos
+    // e 0) — a intencao fica explicita, e nao adivinhada pelo tipo da acao.
     const handleClose = () => {
         if (isSubmittingRef.current) return;
-        const canSkip = !photosRequired;
         setIsOpen(false);
-        if (resolvePromise) resolvePromise(canSkip);
+        if (resolvePromise) resolvePromise(false);
     };
 
     const renderModal = () => (
@@ -139,10 +149,14 @@ export function useDeliveryPhotos(): UseDeliveryPhotosResult {
             onConfirm={handleConfirm}
             minPhotos={photosRequired ? 2 : 0}
             maxPhotos={5}
-            productName={action === 'delivered' ? 'Entrega: Foto do Produto + Recibo' : 'Retorno: Foto (Opcional)'}
+            productName={action === 'delivered'
+                ? 'Entrega: Foto do Produto + Recibo'
+                : 'Retorno: foto opcional — pode confirmar sem tirar'}
             isOffline={!NetworkStatus.isOnline()}
-            title="Fotos da Entrega"
-            confirmLabel="Confirmar Entrega"
+            // Os rotulos seguem a acao: dizer "Confirmar Entrega" numa tela de
+            // retorno confundia o motorista sobre o que o botao ia fazer.
+            title={action === 'delivered' ? 'Fotos da Entrega' : 'Fotos do Retorno'}
+            confirmLabel={action === 'delivered' ? 'Confirmar Entrega' : 'Confirmar Retorno'}
             isSubmitting={isProcessing}
             submittingLabel={submitLabel || undefined}
         />
