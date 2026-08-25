@@ -819,8 +819,25 @@ CREATE OR REPLACE FUNCTION public.reconcile_order_return_state(p_order_id uuid) 
     LANGUAGE plpgsql SECURITY DEFINER
     SET search_path TO 'public'
     AS $$
+-- AJUSTE DA UNIAO (nao veio assim do fork).
+--
+-- return_flag serve para DUAS coisas diferentes:
+--   1. DEVOLUCAO do ERP  -> tem registro em order_returns
+--   2. RETORNO NA ENTREGA -> o motorista nao conseguiu entregar e voltou com a
+--      mercadoria. NAO gera order_returns; a marca vive em route_orders.status
+--      = 'returned' e em orders.return_flag/last_return_reason.
+--
+-- A versao do fork so conhecia o caso 1: sem order_returns processado, ela
+-- apagava return_flag/last_return_reason/last_return_notes. Como o gatilho
+-- trg_routes_reconcile_returns_after_completion roda para TODO pedido da rota
+-- ao finalizar, todo retorno na entrega perdia a marca no momento em que a
+-- rota fechava — o pedido voltava para a fila sem o selo "Retornado".
+--
+-- Aqui a funcao passa a olhar a ULTIMA parada do pedido antes de limpar.
 declare
   v_has_processed_return boolean := false;
+  v_last_stop record;
+  v_delivery_return boolean := false;
 begin
   if p_order_id is null then
     raise exception 'p_order_id é obrigatório';
@@ -837,6 +854,46 @@ begin
     return public.sync_order_return_operational_state(p_order_id);
   end if;
 
+  -- Ultima parada do pedido. Interessa o estado ATUAL: se ele foi retornado
+  -- numa rota antiga mas entregue depois, a entrega manda e a marca sai.
+  select ro.status, ro.return_reason, ro.return_notes
+  into v_last_stop
+  from public.route_orders ro
+  where ro.order_id = p_order_id
+  order by coalesce(ro.returned_at, ro.delivered_at, ro.updated_at, ro.created_at) desc,
+    ro.created_at desc, ro.id desc
+  limit 1;
+
+  v_delivery_return := found and v_last_stop.status = 'returned';
+
+  if v_delivery_return then
+    -- Retorno na entrega: preserva a marca do motorista e limpa so o que
+    -- pertence a devolucao (coleta e bloqueio por devolucao).
+    update public.orders
+    set
+      return_flag = true,
+      last_return_reason = coalesce(
+        nullif(trim(coalesce(last_return_reason, '')), ''),
+        nullif(trim(coalesce(v_last_stop.return_reason, '')), '')
+      ),
+      last_return_notes = coalesce(
+        nullif(trim(coalesce(last_return_notes, '')), ''),
+        nullif(trim(coalesce(v_last_stop.return_notes, '')), '')
+      ),
+      requires_pickup = false,
+      pickup_created_at = null,
+      blocked_at = case when coalesce(blocked_reason, '') like 'Devolu%' then null else blocked_at end,
+      blocked_reason = case when coalesce(blocked_reason, '') like 'Devolu%' then null else blocked_reason end
+    where id = p_order_id;
+
+    return jsonb_build_object(
+      'order_id', p_order_id,
+      'processed_return', false,
+      'delivery_return', true,
+      'requires_pickup', false
+    );
+  end if;
+
   update public.orders
   set
     return_flag = false,
@@ -851,6 +908,7 @@ begin
   return jsonb_build_object(
     'order_id', p_order_id,
     'processed_return', false,
+    'delivery_return', false,
     'requires_pickup', false
   );
 end;
