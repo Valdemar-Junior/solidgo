@@ -9,6 +9,7 @@ import type { OrderItem, OrderItemHold, StoreReleaseAssignment, UserStoreRelease
 import { getStoreReleaseStatusLabel, normalizeStoreReleaseLocation } from '../../utils/storeRelease';
 import { registerPickupForOrder, pickupItemKey, pickupHoldMatchesItem } from '../../utils/pickup/pickupCore';
 import { buildPickupReceiptPdf } from '../../utils/pickup/pickupReceipt';
+import { mergeReceiptWithDanfe } from '../../utils/pickup/pickupDanfe';
 import { DeliverySheetGenerator } from '../../utils/pdf/deliverySheetGenerator';
 import { toast } from 'sonner';
 
@@ -71,6 +72,9 @@ export default function StoreReleaseManagement() {
   const [pickupModal, setPickupModal] = useState<{ assignment: AssignmentRow; items: OrderItem[] } | null>(null);
   const [pickupSelectedKeys, setPickupSelectedKeys] = useState<Set<string>>(new Set());
   const [pickupNotes, setPickupNotes] = useState('');
+  // Quem esta levando o produto. Antes o sistema gravava o nome do GERENTE, o que
+  // deixava o comprovante sem serventia: nao havia registro de quem retirou.
+  const [pickupResponsibleName, setPickupResponsibleName] = useState('');
   const [pickupSaving, setPickupSaving] = useState(false);
 
   const fetchUserNamesByIds = async (ids: string[]) => {
@@ -296,6 +300,7 @@ export default function StoreReleaseManagement() {
     setPickupModal({ assignment, items });
     setPickupSelectedKeys(new Set(items.map(pickupItemKey)));
     setPickupNotes('');
+    setPickupResponsibleName('');
   };
 
   const closePickupModal = () => {
@@ -314,6 +319,10 @@ export default function StoreReleaseManagement() {
   };
 
   const confirmPickup = async () => {
+    if (pickupResponsibleName.trim().length < 3) {
+      toast.error('Informe quem esta retirando o produto.');
+      return;
+    }
     if (!pickupModal || pickupSaving) return;
     const order = pickupModal.assignment.order;
     if (!order) return;
@@ -356,22 +365,28 @@ export default function StoreReleaseManagement() {
         order,
         allDeliverableItems,
         pickedItems: enrichedPicked,
-        responsibleName: user?.name || user?.email || 'Gerente',
+        responsibleName: pickupResponsibleName.trim(),
         notes: pickupNotes.trim() || null,
         registeredByUserId: user?.id || null,
         registeredByName: user?.name || user?.email || null,
       });
 
-      // Comprovante de retirada (só dos itens retirados).
+      // Comprovante de retirada (só dos itens retirados) + NOTA FISCAL, num PDF
+      // unico — o mesmo que a tela de admin entrega. O produto nao sai da loja
+      // sem documento.
       try {
-        const pdf = await buildPickupReceiptPdf(
+        const receipt = await buildPickupReceiptPdf(
           [{ order, items: pickedItems, withdrawal }],
           { conferenteName: user?.name || user?.email || '-' }
         );
+        const { pdf, semNota } = await mergeReceiptWithDanfe(receipt, [String(order.id)]);
         DeliverySheetGenerator.openPDFInNewTab(pdf);
+        if (semNota) {
+          toast.warning('Comprovante gerado, mas este pedido ainda nao tem nota fiscal.');
+        }
       } catch (pdfError) {
-        console.error('Falha ao gerar comprovante de retirada:', pdfError);
-        toast.warning('Retirada registrada, mas o comprovante não pôde ser gerado.');
+        console.error('Falha ao gerar documentos da retirada:', pdfError);
+        toast.warning('Retirada registrada, mas os documentos não puderam ser gerados.');
       }
 
       if (assemblyError) {
@@ -656,6 +671,23 @@ export default function StoreReleaseManagement() {
                   : 'Use a reversao apenas quando a liberacao tiver sido feita por engano ou a loja ainda nao estiver pronta.'}
               </div>
               <div>
+                <label className="mb-2 block text-sm font-medium text-gray-700">
+                  Quem esta retirando <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={pickupResponsibleName}
+                  onChange={(event) => setPickupResponsibleName(event.target.value)}
+                  disabled={pickupSaving}
+                  className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:border-purple-500 focus:ring-2 focus:ring-purple-100"
+                  placeholder="Nome de quem esta levando o produto"
+                />
+                <p className="mt-1 text-xs text-gray-500">
+                  Vai no comprovante. E o registro de quem levou a mercadoria da loja.
+                </p>
+              </div>
+
+              <div>
                 <label className="mb-2 block text-sm font-medium text-gray-700">Observacao (opcional)</label>
                 <textarea
                   value={actionNotes}
@@ -761,7 +793,7 @@ export default function StoreReleaseManagement() {
               <button
                 type="button"
                 onClick={() => void confirmPickup()}
-                disabled={pickupSaving || pickupSelectedKeys.size === 0}
+                disabled={pickupSaving || pickupSelectedKeys.size === 0 || pickupResponsibleName.trim().length < 3}
                 className="inline-flex items-center rounded-xl bg-purple-600 px-4 py-2 text-sm font-semibold text-white hover:bg-purple-700 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {pickupSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Store className="mr-2 h-4 w-4" />}
