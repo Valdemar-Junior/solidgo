@@ -671,23 +671,6 @@ export default function StoreReleaseManagement() {
                   : 'Use a reversao apenas quando a liberacao tiver sido feita por engano ou a loja ainda nao estiver pronta.'}
               </div>
               <div>
-                <label className="mb-2 block text-sm font-medium text-gray-700">
-                  Quem esta retirando <span className="text-red-500">*</span>
-                </label>
-                <input
-                  type="text"
-                  value={pickupResponsibleName}
-                  onChange={(event) => setPickupResponsibleName(event.target.value)}
-                  disabled={pickupSaving}
-                  className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:border-purple-500 focus:ring-2 focus:ring-purple-100"
-                  placeholder="Nome de quem esta levando o produto"
-                />
-                <p className="mt-1 text-xs text-gray-500">
-                  Vai no comprovante. E o registro de quem levou a mercadoria da loja.
-                </p>
-              </div>
-
-              <div>
                 <label className="mb-2 block text-sm font-medium text-gray-700">Observacao (opcional)</label>
                 <textarea
                   value={actionNotes}
@@ -764,6 +747,23 @@ export default function StoreReleaseManagement() {
                     );
                   })}
                 </div>
+              </div>
+
+              <div>
+                <label className="mb-2 block text-sm font-medium text-gray-700">
+                  Quem esta retirando <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={pickupResponsibleName}
+                  onChange={(event) => setPickupResponsibleName(event.target.value)}
+                  disabled={pickupSaving}
+                  className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:border-purple-500 focus:ring-2 focus:ring-purple-100"
+                  placeholder="Nome de quem esta levando o produto"
+                />
+                <p className="mt-1 text-xs text-gray-500">
+                  Vai no comprovante. E o registro de quem levou a mercadoria da loja.
+                </p>
               </div>
 
               <div>
