@@ -2,7 +2,7 @@ import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import type { PDFFont, PDFPage } from 'pdf-lib';
 import { code128Bars, code128ModuleCount, sanitizeCode128 } from '../labels/code128';
 import type { ExpeditionLabel } from '../labels/expeditionLabels';
-import { fitTextSafe, sanitizePdfText } from './pdfTextSanitizer';
+import { fitTextSafe, sanitizePdfText, wrapTextSafe } from './pdfTextSanitizer';
 
 /**
  * PDF das etiquetas de expedição: UMA etiqueta por página, no tamanho exato de
@@ -83,14 +83,16 @@ const drawLabel = (page: PDFPage, label: ExpeditionLabel, font: PDFFont, fontBol
 
   const black = rgb(0, 0, 0);
 
+  /** Uma linha de texto a partir da esquerda, cortada se não couber. */
   const line = (text: string, size: number, f: PDFFont, gap = 1) => {
     y -= size;
     page.drawText(fitTextSafe(text, usable, f, size), { x: left, y, size, font: f, color: black });
     y -= gap;
   };
 
-  const rightText = (text: string, size: number, f: PDFFont, baseline: number) => {
-    const safe = sanitizePdfText(text);
+  /** Texto encostado na margem direita, na mesma altura de uma linha já escrita. */
+  const rightText = (text: string, maxWidth: number, size: number, f: PDFFont, baseline: number) => {
+    const safe = fitTextSafe(text, maxWidth, f, size);
     page.drawText(safe, {
       x: right - f.widthOfTextAtSize(safe, size),
       y: baseline,
@@ -100,14 +102,27 @@ const drawLabel = (page: PDFPage, label: ExpeditionLabel, font: PDFFont, fontBol
     });
   };
 
+  /**
+   * Quebra o texto em até `maxLines` linhas. O que passar disso não some: vai
+   * junto na última linha, que aí sim é cortada — melhor perder o fim do nome
+   * do produto do que perder o meio dele.
+   */
+  const wrapped = (text: string, size: number, f: PDFFont, maxLines: number, gap = 1) => {
+    const all = wrapTextSafe(text, usable, f, size);
+    const lines = all.length <= maxLines
+      ? all
+      : [...all.slice(0, maxLines - 1), all.slice(maxLines - 1).join(' ')];
+    lines.forEach((l) => line(l, size, f, gap));
+  };
+
   // 1. Pedido à esquerda, volume do pedido à direita — as duas coisas que o
   //    conferente olha primeiro.
-  const headerSize = 11;
+  const headerSize = 12;
   y -= headerSize;
   page.drawText(fitTextSafe(`PEDIDO ${label.erp}`, usable * 0.6, fontBold, headerSize), {
     x: left, y, size: headerSize, font: fontBold, color: black,
   });
-  rightText(`VOL ${label.volumeInOrder}/${label.volumesInOrder}`, headerSize, fontBold, y);
+  rightText(`VOL ${label.volumeInOrder}/${label.volumesInOrder}`, usable * 0.4, headerSize, fontBold, y);
   y -= 3;
 
   // 2. Código de barras + o mesmo código em texto embaixo (pra digitar no
@@ -116,7 +131,7 @@ const drawLabel = (page: PDFPage, label: ExpeditionLabel, font: PDFFont, fontBol
   drawBarcode(page, label.barcode, left, y, usable, BARCODE_HEIGHT);
   y -= 1;
 
-  const codeSize = 7.5;
+  const codeSize = 8.5;
   y -= codeSize;
   const codeText = sanitizePdfText(sanitizeCode128(label.barcode));
   page.drawText(codeText, {
@@ -128,34 +143,52 @@ const drawLabel = (page: PDFPage, label: ExpeditionLabel, font: PDFFont, fontBol
   });
   y -= 3;
 
-  // 3. Cliente e endereço — a carga é separada pela cidade, por isso ela vem
-  //    em negrito e maior que o resto do endereço.
-  line(label.customer, 9, fontBold, 1.5);
-  line(label.address.street, 7.5, font, 0.5);
-  if (label.address.neighborhood) line(label.address.neighborhood, 7.5, font, 0.5);
+  // 3. Cliente.
+  line(label.customer, 10.5, fontBold, 1.5);
 
-  const citySize = 9;
+  // 4. Rua com número, complemento e CEP numa linha só; quebra pra segunda
+  //    quando o complemento for daqueles longos ("próximo ao posto...").
+  const endereco = [label.address.street, label.address.complement, label.address.zip]
+    .map((p) => String(p || '').trim())
+    .filter(Boolean)
+    .join(' - ');
+  wrapped(endereco, 8.5, font, 2, 1);
+  y -= 1;
+
+  // 5. Cidade e bairro lado a lado, os dois em negrito: é por eles que a carga
+  //    é separada, então precisam saltar aos olhos de longe.
+  const citySize = 11;
   y -= citySize;
-  page.drawText(fitTextSafe(label.address.city, usable * 0.7, fontBold, citySize), {
+  page.drawText(fitTextSafe(label.address.city, usable * 0.62, fontBold, citySize), {
     x: left, y, size: citySize, font: fontBold, color: black,
   });
-  if (label.address.zip) rightText(label.address.zip, 7.5, font, y);
-  y -= 1.5;
+  if (label.address.neighborhood) {
+    rightText(label.address.neighborhood, usable * 0.36, 10, fontBold, y);
+  }
+  y -= 2;
 
-  if (label.address.complement) line(label.address.complement, 7, font, 1);
+  // 6. Produto, com o volume DAQUELE produto na frente pra não ser cortado
+  //    quando o nome for longo. Em duas linhas cabe quase todo nome.
+  wrapped(
+    `(${label.volumeInProduct}/${label.volumesInProduct}) ${label.sku} ${label.productName}`,
+    9,
+    font,
+    2,
+    1,
+  );
 
-  // 4. Produto, com o volume DAQUELE produto na frente pra não ser cortado
-  //    quando o nome for longo.
-  line(`(${label.volumeInProduct}/${label.volumesInProduct}) ${label.sku} ${label.productName}`, 7.5, font, 1.5);
-
-  // 5. Rodapé: de quem é a venda e de onde a caixa sai. Parada e nome da rota
-  //    ficaram de fora de propósito — quem separa já tem isso no romaneio, e
-  //    sem eles cabe o nome inteiro do vendedor e do local.
+  // 7. Rodapé colado no pé da etiqueta: o espaço que sobrar vira respiro entre
+  //    ele e o produto, em vez de sobra branca no fim.
+  const footerSize = 8;
   const footer = [
     label.seller ? `Vend: ${label.seller}` : '',
     label.location ? `Local: ${label.location}` : '',
   ].filter(Boolean).join(' | ');
-  line(footer, 6.5, font, 0);
+  if (footer) {
+    page.drawText(fitTextSafe(footer, usable, font, footerSize), {
+      x: left, y: MARGIN, size: footerSize, font, color: black,
+    });
+  }
 };
 
 /** Desenha o Code 128 como barras pretas, centralizado na largura disponível. */
