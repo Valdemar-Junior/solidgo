@@ -50,12 +50,15 @@ import {
   ArrowDown,
   ArrowUpDown,
   Replace,
-  Lock
+  Lock,
+  Tags
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { DeliverySheetGenerator } from '../../utils/pdf/deliverySheetGenerator';
 import { RouteReportGenerator } from '../../utils/pdf/routeReportGenerator';
 import { SeparationSheetGenerator } from '../../utils/pdf/separationSheetGenerator';
+import { ExpeditionLabelGenerator } from '../../utils/pdf/expeditionLabelGenerator';
+import { buildExpeditionLabels } from '../../utils/labels/expeditionLabels';
 import { PDFDocument } from 'pdf-lib';
 import { useAuthStore } from '../../stores/authStore';
 import { fetchInChunks, fetchAllPages, chunkArray } from '../../utils/supabase/batch';
@@ -6971,6 +6974,47 @@ function RouteCreationContent() {
                             className="flex items-center justify-center px-4 py-2 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 rounded-lg font-medium text-sm transition-colors border border-indigo-200"
                           >
                             <FileText className="h-4 w-4 mr-2" /> Imprimir Separação
+                          </button>
+
+                          {/* Etiquetas de expedição: uma por volume, na ordem das paradas.
+                              Substituem as do ERP e são as mesmas que o coletor bipa. */}
+                          <button
+                            onClick={async () => {
+                              if (!selectedRoute) return;
+                              if (!selectedRoute.route_orders || selectedRoute.route_orders.length === 0) {
+                                toast.error('Rota vazia não gera etiqueta');
+                                return;
+                              }
+
+                              const toastId = toast.loading('Gerando etiquetas...');
+                              try {
+                                // O snapshot manda: item devolvido pelo cliente não vira etiqueta.
+                                const { data: snapshot } = await supabase
+                                  .from('route_order_items')
+                                  .select('order_id,sku_snapshot,allocated_quantity,purchased_quantity')
+                                  .eq('route_id', selectedRoute.id);
+
+                                const labels = buildExpeditionLabels(selectedRoute, snapshot || []);
+                                if (labels.length === 0) {
+                                  toast.error('Nenhum volume para etiquetar nesta rota', { id: toastId });
+                                  return;
+                                }
+
+                                const pdfBytes = await ExpeditionLabelGenerator.generate({ labels });
+                                ExpeditionLabelGenerator.openPDFInNewTab(
+                                  pdfBytes,
+                                  `etiquetas-${(selectedRoute as any).route_code || selectedRoute.id.slice(0, 8)}.pdf`
+                                );
+                                toast.success(`${labels.length} etiqueta(s) gerada(s)`, { id: toastId });
+                              } catch (e) {
+                                console.error(e);
+                                toast.error('Erro ao gerar etiquetas', { id: toastId });
+                              }
+                            }}
+                            title="Uma etiqueta por volume, 100x50 mm, na ordem das paradas"
+                            className="flex items-center justify-center px-4 py-2 bg-purple-50 text-purple-700 hover:bg-purple-100 rounded-lg font-medium text-sm transition-colors border border-purple-200"
+                          >
+                            <Tags className="h-4 w-4 mr-2" /> Etiquetas
                           </button>
 
                           {/* WhatsApp Button (cliente) */}

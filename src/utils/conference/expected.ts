@@ -16,6 +16,7 @@ export type ExpectedLine = {
   location: string;
   required: number;       // volumes esperados NESTA rota (já descontando devolução)
   codes: string[];        // etiquetas aceitas (normalizadas)
+  itemIndex: number;      // posição em items_json (a etiqueta precisa do item cru)
 };
 
 /** Uma parada = um pedido da rota. */
@@ -121,6 +122,7 @@ export const buildStops = (route: any, snapshot: any[]): Stop[] => {
         location: String(it?.location || ''),
         required,
         codes,
+        itemIndex: idx,
       });
     });
 
