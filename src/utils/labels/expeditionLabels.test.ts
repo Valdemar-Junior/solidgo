@@ -121,7 +121,6 @@ describe('o que vai escrito na etiqueta', () => {
   const labels = buildExpeditionLabels(route, []);
 
   it('sai na ordem das paradas', () => {
-    expect(labels.map((l) => l.stopNumber)).toEqual([1, 1, 1, 2]);
     expect(labels.map((l) => l.erp)).toEqual(['144897', '144897', '144897', '144898']);
   });
 
@@ -136,7 +135,7 @@ describe('o que vai escrito na etiqueta', () => {
       .toEqual(['1/2', '2/2', '1/1']);
   });
 
-  it('leva cliente, endereco completo, vendedor, local e nome da rota', () => {
+  it('leva cliente, endereco completo, vendedor e local', () => {
     const l = labels[0];
     expect(l.customer).toBe('Jessica Priscila Costa De Araujo');
     expect(l.address.street).toBe('Maria Das Dores Da Silva, 13');
@@ -146,7 +145,6 @@ describe('o que vai escrito na etiqueta', () => {
     expect(l.address.complement).toBe('Proximo O Plantio De Bananas');
     expect(l.seller).toBe('DALLYSON');
     expect(l.location).toBe('ATACADO DEPOSITO');
-    expect(l.routeName).toBe('ASSU SETOR 1');
   });
 
   it('cai no raw_json quando o endereco estruturado vier vazio', () => {

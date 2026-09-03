@@ -30,8 +30,6 @@ export type ExpeditionLabel = {
   productName: string;
   location: string;         // local de estoque
   seller: string;           // vendedor
-  routeName: string;
-  stopNumber: number;       // parada (1, 2, 3...) na ordem da rota
   volumeInOrder: number;    // x de "VOL x/y" — o que o conferente conta
   volumesInOrder: number;   // y de "VOL x/y"
   volumeInProduct: number;  // x do "(x/y)" na frente do produto
@@ -98,7 +96,6 @@ export const buildExpeditionLabels = (
   snapshot: any[],
   options: ExpeditionLabelOptions = {},
 ): ExpeditionLabel[] => {
-  const routeName = String(route?.name || '');
   const ordersById = new Map<string, any>();
   (route?.route_orders || []).forEach((ro: any) => {
     if (ro?.order?.id) ordersById.set(String(ro.order.id), ro.order);
@@ -106,7 +103,7 @@ export const buildExpeditionLabels = (
 
   const labels: ExpeditionLabel[] = [];
 
-  buildStops(route, snapshot).forEach((stop, stopIdx) => {
+  buildStops(route, snapshot).forEach((stop) => {
     const order = ordersById.get(stop.orderId) || {};
     const items = Array.isArray(order.items_json) ? order.items_json : [];
     const address = order.address_json || {};
@@ -140,8 +137,6 @@ export const buildExpeditionLabels = (
           productName: line.name,
           location: line.location,
           seller,
-          routeName,
-          stopNumber: stopIdx + 1,
           volumeInOrder,
           volumesInOrder,
           volumeInProduct: i + 1,

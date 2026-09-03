@@ -22,8 +22,8 @@ const MARGIN = 5;
 const DOT = 72 / 203;
 /** Margem branca dos dois lados do código — sem ela o leitor não engata. */
 const QUIET_MODULES = 10;
-/** Barra alta lê melhor de longe e tolera o leitor torto na caixa. */
-const BARCODE_HEIGHT = 44;
+/** Altura testada na Tomate: o leitor pega de primeira sem comer a etiqueta. */
+const BARCODE_HEIGHT = 22;
 
 export type ExpeditionLabelPdfOptions = {
   /** Documento gerado vazio quando a rota não tem nenhum volume pra etiquetar. */
@@ -148,10 +148,10 @@ const drawLabel = (page: PDFPage, label: ExpeditionLabel, font: PDFFont, fontBol
   //    quando o nome for longo.
   line(`(${label.volumeInProduct}/${label.volumesInProduct}) ${label.sku} ${label.productName}`, 7.5, font, 1.5);
 
-  // 5. Rodapé: onde essa caixa entra na rota e de quem ela é.
+  // 5. Rodapé: de quem é a venda e de onde a caixa sai. Parada e nome da rota
+  //    ficaram de fora de propósito — quem separa já tem isso no romaneio, e
+  //    sem eles cabe o nome inteiro do vendedor e do local.
   const footer = [
-    `Parada ${label.stopNumber}`,
-    label.routeName,
     label.seller ? `Vend: ${label.seller}` : '',
     label.location ? `Local: ${label.location}` : '',
   ].filter(Boolean).join(' | ');
