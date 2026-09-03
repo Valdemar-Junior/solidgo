@@ -47,12 +47,15 @@ import {
   ArrowDown,
   ArrowUpDown,
   Replace,
-  Lock
+  Lock,
+  Tags
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { DeliverySheetGenerator } from '../../utils/pdf/deliverySheetGenerator';
 import { RouteReportGenerator } from '../../utils/pdf/routeReportGenerator';
 import { SeparationSheetGenerator } from '../../utils/pdf/separationSheetGenerator';
+import { ExpeditionLabelGenerator } from '../../utils/pdf/expeditionLabelGenerator';
+import { buildExpeditionLabels } from '../../utils/labels/expeditionLabels';
 import { PDFDocument } from 'pdf-lib';
 import { useAuthStore } from '../../stores/authStore';
 import { fetchInChunks, fetchAllPages, chunkArray } from '../../utils/supabase/batch';
@@ -6605,6 +6608,48 @@ function RouteCreationContent() {
                             className="flex items-center justify-center px-4 py-2 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 rounded-lg font-medium text-sm transition-colors border border-indigo-200"
                           >
                             <FileText className="h-4 w-4 mr-2" /> Imprimir Separação
+                          </button>
+
+                          {/* Etiquetas de Expedição (100x50mm, uma por volume) */}
+                          <button
+                            onClick={async () => {
+                              if (!selectedRoute) return;
+                              if (!selectedRoute.route_orders || selectedRoute.route_orders.length === 0) {
+                                toast.error('Rota vazia não gera etiquetas');
+                                return;
+                              }
+
+                              const toastId = toast.loading('Gerando etiquetas de expedição...');
+                              try {
+                                // Mesma fonte da conferência: o que foi separado pra ESTA rota.
+                                const { data: snapshot } = await supabase
+                                  .from('route_order_items')
+                                  .select('order_id,sku_snapshot,allocated_quantity,purchased_quantity')
+                                  .eq('route_id', selectedRoute.id);
+
+                                const labels = buildExpeditionLabels(selectedRoute, snapshot || []);
+                                if (labels.length === 0) {
+                                  toast.error('Nenhum volume para etiquetar nesta rota', { id: toastId });
+                                  return;
+                                }
+
+                                const pdfBytes = await ExpeditionLabelGenerator.generate({
+                                  labels,
+                                  routeName: String(selectedRoute.name || ''),
+                                  routeCode: String((selectedRoute as any).route_code || ''),
+                                });
+
+                                DeliverySheetGenerator.openPDFInNewTab(pdfBytes);
+                                toast.success(`${labels.length} etiqueta(s) gerada(s)`, { id: toastId });
+                              } catch (e) {
+                                console.error(e);
+                                toast.error('Erro ao gerar etiquetas', { id: toastId });
+                              }
+                            }}
+                            className="flex items-center justify-center px-4 py-2 bg-teal-50 text-teal-700 hover:bg-teal-100 rounded-lg font-medium text-sm transition-colors border border-teal-200"
+                            title="Gera uma etiqueta 100x50mm por volume, na ordem das paradas"
+                          >
+                            <Tags className="h-4 w-4 mr-2" /> Etiquetas de Expedição
                           </button>
 
                           {/* WhatsApp Button (cliente) */}

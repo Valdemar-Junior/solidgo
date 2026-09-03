@@ -16,6 +16,7 @@ export type ExpectedLine = {
   location: string;
   required: number;       // volumes esperados NESTA rota (já descontando devolução)
   codes: string[];        // etiquetas aceitas (normalizadas)
+  erpLabels: string[];    // etiquetas do ERP como vieram, na ordem (pode vir vazio)
 };
 
 /** Uma parada = um pedido da rota. */
@@ -106,11 +107,14 @@ export const buildStops = (route: any, snapshot: any[]): Stop[] => {
       const required = Math.max(0, Math.round(perUnit * qty));
       if (required === 0) return; // não vai nesta rota
 
+      // Guardamos as etiquetas do ERP como vieram (a impressão usa esse texto)
+      // e normalizadas (a leitura do coletor compara assim).
       const erpLabels: string[] = Array.isArray(it?.labels)
-        ? it.labels.map((l: any) => normalizeScan(String(l))).filter(Boolean)
+        ? it.labels.map((l: any) => String(l || '').trim()).filter(Boolean)
         : [];
+      const erpLabelsNorm = erpLabels.map((l) => normalizeScan(l)).filter(Boolean);
       const generated = Array.from({ length: required }, (_, i) => `${i + 1}/${required}-${skuNorm}`);
-      const codes = Array.from(new Set([...erpLabels, ...generated]));
+      const codes = Array.from(new Set([...erpLabelsNorm, ...generated]));
 
       lines.push({
         key: `${orderId}|${skuNorm}|${idx}`,
@@ -121,6 +125,7 @@ export const buildStops = (route: any, snapshot: any[]): Stop[] => {
         location: String(it?.location || ''),
         required,
         codes,
+        erpLabels,
       });
     });
 
