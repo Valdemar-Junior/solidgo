@@ -18,7 +18,8 @@ import { toast } from 'sonner';
 import { supabase } from '../../supabase/client';
 import { fetchAllPages, fetchInChunks } from '../../utils/supabase/batch';
 import { generateDanfeBase64 } from '../../utils/danfe/generateDanfe';
-import { createPickupFromReturn } from '../../utils/pickup/createPickupFromReturn';
+import { createPickupFromLegacyOrder, createPickupFromReturn } from '../../utils/pickup/createPickupFromReturn';
+import { buildLegacyReturnRows, isLegacyReturnRowId, legacyReturnRowId } from '../../utils/returns/legacyReturns';
 
 // Central de Devoluções: uma tela só com o filme completo de cada devolução
 // que chegou do ERP — tipo (parcial/total), origem (cancelado/devolvido),
@@ -64,6 +65,9 @@ type ReturnRow = {
   // com o motorista"): nome da rota + nome do motorista, pra logística
   // entender POR QUE o item retornou.
   outboundRoute: { name: string; driverName: string | null } | null;
+  // Devolução gravada pelo n8n ANTIGO (só no pedido, sem evento em
+  // order_returns): sem itens detalhados; a coleta sai pelo fluxo legado.
+  isLegacy: boolean;
 };
 
 type XmlInfo = { motivo: string; nfOrigem: string; rawXml: string };
@@ -121,6 +125,28 @@ export default function ReturnsManagement() {
         .order('created_at', { ascending: false })
         .range(from, to));
 
+      // Devoluções do fluxo ANTIGO do n8n (só carimbo no pedido, sem evento):
+      // ver utils/returns/legacyReturns. Coleta pendente aparece sempre, mesmo
+      // fora do período — é trabalho a fazer, não histórico.
+      const legacyCandidates = await fetchAllPages<any>((from, to) => supabase
+        .from('orders')
+        .select('id, order_id_erp, customer_name, filial_venda, blocked_at, blocked_reason, requires_pickup, pickup_created_at, return_nfe_number, return_date, created_at')
+        .or(`blocked_at.gte.${startIso},and(requires_pickup.eq.true,pickup_created_at.is.null)`)
+        .order('blocked_at', { ascending: false })
+        .range(from, to));
+      const legacyOrderIds = legacyCandidates.map((o: any) => String(o.id));
+      const ordersWithEvent = legacyOrderIds.length > 0
+        ? await fetchInChunks<string, any>(legacyOrderIds, (ids) => supabase
+          .from('order_returns')
+          .select('order_id')
+          .eq('processing_status', 'processed')
+          .in('order_id', ids))
+        : [];
+      const legacyRows = buildLegacyReturnRows(
+        legacyCandidates,
+        new Set(ordersWithEvent.map((r: any) => String(r.order_id))),
+      );
+
       const returnIds = returns.map((r: any) => String(r.id));
       const itemRows = returnIds.length > 0
         ? await fetchInChunks<string, ReturnItemRow>(returnIds, (ids) => supabase
@@ -135,7 +161,7 @@ export default function ReturnsManagement() {
       }
 
       // Situação operacional: o pedido está em alguma rota de ENTREGA ativa?
-      const orderIds = Array.from(new Set(returns.map((r: any) => String(r.order_id)).filter(Boolean)));
+      const orderIds = Array.from(new Set([...returns, ...legacyRows].map((r: any) => String(r.order_id)).filter(Boolean)));
       const routeRows = orderIds.length > 0
         ? await fetchInChunks<string, any>(orderIds, (ids) => supabase
           .from('route_orders')
@@ -213,12 +239,19 @@ export default function ReturnsManagement() {
         }
       }
 
-      setRows(returns.map((r: any) => {
+      // Os dois fluxos na mesma lista, mais recente primeiro.
+      const allRows: any[] = [
+        ...returns.map((r: any) => ({ ...r, isLegacy: false })),
+        ...legacyRows,
+      ].sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime());
+
+      setRows(allRows.map((r: any) => {
         const oid = String(r.order_id);
         const outb = outboundRouteByOrder[oid];
         return {
           ...r,
-          items: itemsByReturn[oid] || [],
+          // Os itens são agrupados pelo id da DEVOLUÇÃO (return_id), não do pedido.
+          items: itemsByReturn[String(r.id)] || [],
           activeRoute: activeRouteByOrder[oid] || null,
           wentOutBlocked: wentOutBlockedByOrder[oid] || false,
           outboundRoute: outb
@@ -266,15 +299,31 @@ export default function ReturnsManagement() {
     let alive = true;
     (async () => {
       try {
-        const xmlRows = await fetchInChunks<string, any>(missing, (ids) => supabase
-          .from('order_returns')
-          .select('id, return_xml')
-          .in('id', ids));
+        // Devolução do fluxo antigo não tem evento: o XML fica no próprio pedido.
+        const eventIds = missing.filter((id) => !isLegacyReturnRowId(id));
+        const legacyOrderIds = pageRows
+          .filter((row) => row.isLegacy && missing.includes(String(row.id)))
+          .map((row) => String(row.order_id));
+        const xmlRows = eventIds.length > 0
+          ? await fetchInChunks<string, any>(eventIds, (ids) => supabase
+            .from('order_returns')
+            .select('id, return_xml')
+            .in('id', ids))
+          : [];
+        const legacyXmlRows = legacyOrderIds.length > 0
+          ? await fetchInChunks<string, any>(legacyOrderIds, (ids) => supabase
+            .from('orders')
+            .select('id, return_nfe_xml')
+            .in('id', ids))
+          : [];
         if (!alive) return;
         setXmlInfoByReturnId((prev) => {
           const next = { ...prev };
           for (const row of xmlRows) {
             next[String(row.id)] = extractXmlInfo(String(row.return_xml || ''));
+          }
+          for (const row of legacyXmlRows) {
+            next[legacyReturnRowId(String(row.id))] = extractXmlInfo(String(row.return_nfe_xml || ''));
           }
           for (const id of missing) {
             if (!next[id]) next[id] = { motivo: '', nfOrigem: '', rawXml: '' };
@@ -306,7 +355,8 @@ export default function ReturnsManagement() {
   // já finalizada) — e ainda não foi conferido. Não aparece pra bloqueio antes
   // de sair (nunca saiu do depósito) nem pra coleta (fluxo próprio dela).
   const canConfirmStoreReturn = (row: ReturnRow) =>
-    row.wentOutBlocked
+    !row.isLegacy
+    && row.wentOutBlocked
     && !row.activeRoute
     && !row.requires_pickup
     && !row.pickup_created_at
@@ -535,11 +585,17 @@ export default function ReturnsManagement() {
     }
     setPickupSaving(true);
     try {
-      const result = await createPickupFromReturn({
-        returnId: pickupModalRow.id,
-        teamId: pickupTeamId,
-        observations: pickupObservations,
-      });
+      const result = pickupModalRow.isLegacy
+        ? await createPickupFromLegacyOrder({
+          orderId: pickupModalRow.order_id,
+          teamId: pickupTeamId,
+          observations: pickupObservations,
+        })
+        : await createPickupFromReturn({
+          returnId: pickupModalRow.id,
+          teamId: pickupTeamId,
+          observations: pickupObservations,
+        });
       if (result.status === 'already_created') {
         toast.info('Essa coleta já foi criada. Atualizando a tela...');
       } else if (result.status === 'synced_existing') {
@@ -691,9 +747,18 @@ export default function ReturnsManagement() {
                     <td className="px-4 py-3 text-gray-700">{row.order?.customer_name || '—'}</td>
                     <td className="whitespace-nowrap px-4 py-3 text-gray-700">{origem(row)}</td>
                     <td className="whitespace-nowrap px-4 py-3">
-                      <span className={`rounded-full border px-2 py-0.5 text-xs font-semibold ${String(row.return_type) === 'total' ? 'border-red-200 bg-red-50 text-red-700' : 'border-yellow-200 bg-yellow-50 text-yellow-700'}`}>
-                        {String(row.return_type) === 'total' ? 'TOTAL' : 'PARCIAL'}
-                      </span>
+                      {row.isLegacy ? (
+                        <span
+                          title="Devolução registrada pelo fluxo antigo do n8n: sem o detalhe de quais itens voltaram."
+                          className="rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 text-xs font-semibold text-gray-600"
+                        >
+                          SEM DETALHE
+                        </span>
+                      ) : (
+                        <span className={`rounded-full border px-2 py-0.5 text-xs font-semibold ${String(row.return_type) === 'total' ? 'border-red-200 bg-red-50 text-red-700' : 'border-yellow-200 bg-yellow-50 text-yellow-700'}`}>
+                          {String(row.return_type) === 'total' ? 'TOTAL' : 'PARCIAL'}
+                        </span>
+                      )}
                     </td>
                     <td className="max-w-64 px-4 py-3 text-gray-700">
                       {row.items.length === 0 ? '—' : (
@@ -797,6 +862,11 @@ export default function ReturnsManagement() {
             <p className="mt-1 text-sm text-gray-600">
               Pedido <span className="font-semibold">{pickupModalRow.order?.order_id_erp}</span> — {pickupModalRow.order?.customer_name}
             </p>
+            {pickupModalRow.isLegacy && (
+              <p className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+                Devolução registrada pelo fluxo antigo: os itens da coleta saem da nota de devolução.
+              </p>
+            )}
             {pickupModalRow.items.length > 0 && (
               <div className="mt-3 rounded-xl border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">
                 <p className="mb-1 text-xs font-semibold uppercase text-gray-500">Itens da coleta</p>

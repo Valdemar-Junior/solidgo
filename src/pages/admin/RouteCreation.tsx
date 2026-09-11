@@ -3334,6 +3334,11 @@ function RouteCreationContent() {
               .from('orders')
               .select('id, order_id_erp, customer_name, phone, address_json, items_json, status, created_at, updated_at, filial_venda, data_venda, previsao_entrega, tem_frete_full, observacoes_publicas, observacoes_internas, customer_cpf, vendedor_nome, return_flag, last_return_reason, last_return_notes, brand, department, service_type, erp_status, blocked_at, blocked_reason, requires_pickup, pickup_created_at, return_nfe_number, return_nfe_key, return_date, return_type, import_source, previsao_montagem, product_group, product_subgroup, danfe_gerada_em, requires_store_release, store_release_status, raw_operacoes:raw_json->>operacoes, raw_lancamento_venda:raw_json->>lancamento_venda')
               .in('status', ['pending', 'returned', 'assigned'])
+              // Devolução bloqueada (total, ou entregue e aguardando coleta) não é
+              // roteirizável. Esta linha sumiu por acidente no snapshot b197053 e os
+              // bloqueados vazaram pra fila. Devolução parcial não bloqueia (o banco
+              // decide), então o filtro não atrapalha o "mesmo pedido re-fila".
+              .is('blocked_at', null)
               .order('created_at', { ascending: false })
               .range(from, to));
             return { data, error: null };
@@ -7541,10 +7546,28 @@ function RouteCreationContent() {
                                       const isPickupOrder = orderERP.startsWith('C-');
 
                                       if (isPickupOrder) {
-                                        const { error: unlinkPickupError } = await supabase.rpc('clear_order_return_pickup', {
+                                        const { data: unlinkResult, error: unlinkPickupError } = await supabase.rpc('clear_order_return_pickup', {
                                           p_pickup_order_id: ro.order_id,
                                         });
                                         if (unlinkPickupError) throw unlinkPickupError;
+
+                                        // Coleta do fluxo ANTIGO (devolução sem evento em order_returns): não havia
+                                        // vínculo pra desfazer. Quem devolve o pedido original pra "coleta pendente"
+                                        // é limpar o carimbo nele — como o site antigo fazia.
+                                        const unlinkedOrderIds = Array.isArray((unlinkResult as any)?.order_ids) ? (unlinkResult as any).order_ids : [];
+                                        if (unlinkedOrderIds.length === 0) {
+                                          const { data: pickupOrderRow } = await supabase
+                                            .from('orders')
+                                            .select('source_order_id:raw_json->pickup_context->>source_order_id')
+                                            .eq('id', ro.order_id)
+                                            .maybeSingle();
+                                          const sourceOrderId = String((pickupOrderRow as any)?.source_order_id || '');
+                                          const reopenOriginal = supabase.from('orders').update({ pickup_created_at: null });
+                                          const { error: reopenError } = sourceOrderId
+                                            ? await reopenOriginal.eq('id', sourceOrderId)
+                                            : await reopenOriginal.eq('order_id_erp', orderERP.substring(2));
+                                          if (reopenError) throw reopenError;
+                                        }
 
                                         // Excluir o pedido da rota
                                         const { error: delErr } = await supabase.from('route_orders').delete().eq('id', ro.id);

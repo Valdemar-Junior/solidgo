@@ -47,10 +47,12 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         let alive = true;
         const loadReturnsAttention = async () => {
             try {
+                // Coleta pendente é contada no PEDIDO: nos dois fluxos a marca
+                // mora lá (a reconciliação do fluxo novo espelha requires_pickup
+                // no pedido; o n8n antigo carimba direto).
                 const { count: pickupPending } = await supabase
-                    .from('order_returns')
+                    .from('orders')
                     .select('id', { count: 'exact', head: true })
-                    .eq('processing_status', 'processed')
                     .eq('requires_pickup', true)
                     .is('pickup_created_at', null);
 
@@ -61,9 +63,17 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
                     .eq('processing_status', 'processed')
                     .gte('created_at', sinceIso)
                     .limit(500);
-                const orderIds: string[] = Array.from(new Set(
-                    ((recentReturns || []) as any[]).map((r) => String(r.order_id || '')).filter((id) => id.length > 0)
-                ));
+                // Devolução do fluxo antigo do n8n não tem evento: entra pelo
+                // carimbo de bloqueio do pedido.
+                const { data: recentBlocked } = await supabase
+                    .from('orders')
+                    .select('id')
+                    .gte('blocked_at', sinceIso)
+                    .limit(500);
+                const orderIds: string[] = Array.from(new Set([
+                    ...((recentReturns || []) as any[]).map((r) => String(r.order_id || '')),
+                    ...((recentBlocked || []) as any[]).map((o) => String(o.id || '')),
+                ].filter((id) => id.length > 0)));
                 let inActiveRoute = 0;
                 if (orderIds.length > 0) {
                     const routeRows = await fetchInChunks<string, any>(orderIds, (ids) => supabase

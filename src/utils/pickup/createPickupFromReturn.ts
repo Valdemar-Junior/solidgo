@@ -1,4 +1,5 @@
 import { supabase } from '../../supabase/client';
+import { legacyPickupOrderErpId, legacyPickupRouteName, normalizeReturnNfeNumber } from '../returns/legacyReturns';
 
 // Fluxo COMPLETO de "gerar coleta" a partir de um evento de devolução —
 // extraído da Gestão de Entregas pra ser usado também pela Central de
@@ -197,6 +198,32 @@ async function fetchStructuredReturnItems(returnId: string): Promise<PickupItem[
   }
 }
 
+// Equipe → motorista (drivers.id) e ajudante (users.id). Sem motorista
+// cadastrado na equipe, a rota nasce com o motorista-placeholder de coleta.
+async function resolvePickupTeam(teamId: string): Promise<{ driverIdToUse: string; helperIdToUse: string | null }> {
+  const { data: teamData, error: teamError } = await supabase
+    .from('teams_user')
+    .select('id, name, driver_user_id, helper_user_id')
+    .eq('id', teamId)
+    .single();
+  if (teamError) throw teamError;
+
+  let driverIdToUse: string | null = null;
+  if (teamData?.driver_user_id) {
+    const { data: driverRow } = await supabase
+      .from('drivers')
+      .select('id')
+      .eq('user_id', teamData.driver_user_id)
+      .maybeSingle();
+    if (driverRow?.id) driverIdToUse = String(driverRow.id);
+  }
+  if (!driverIdToUse) {
+    console.warn('[createPickupFromReturn] Motorista da equipe não encontrado. Usando placeholder.');
+    driverIdToUse = PICKUP_PLACEHOLDER_DRIVER_ID;
+  }
+  return { driverIdToUse, helperIdToUse: teamData?.helper_user_id || null };
+}
+
 // ---------- o fluxo principal ----------
 
 export async function createPickupFromReturn(params: {
@@ -234,28 +261,7 @@ export async function createPickupFromReturn(params: {
   if (orderError) throw orderError;
   if (!order) throw new Error('Pedido original da devolução não encontrado.');
 
-  // Equipe → motorista/ajudante
-  const { data: teamData, error: teamError } = await supabase
-    .from('teams_user')
-    .select('id, name, driver_user_id, helper_user_id')
-    .eq('id', teamId)
-    .single();
-  if (teamError) throw teamError;
-
-  let driverIdToUse: string | null = null;
-  if (teamData?.driver_user_id) {
-    const { data: driverRow } = await supabase
-      .from('drivers')
-      .select('id')
-      .eq('user_id', teamData.driver_user_id)
-      .maybeSingle();
-    if (driverRow?.id) driverIdToUse = String(driverRow.id);
-  }
-  if (!driverIdToUse) {
-    console.warn('[createPickupFromReturn] Motorista da equipe não encontrado. Usando placeholder.');
-    driverIdToUse = PICKUP_PLACEHOLDER_DRIVER_ID;
-  }
-  const helperIdToUse = teamData?.helper_user_id || null;
+  const { driverIdToUse, helperIdToUse } = await resolvePickupTeam(teamId);
 
   const newOrderErpId = `C-${order.order_id_erp}-RET-${String(returnId).slice(0, 8).toUpperCase()}`;
 
@@ -414,6 +420,208 @@ export async function createPickupFromReturn(params: {
     if (createdPickupOrderId) {
       const { error: cleanupOrderError } = await supabase.from('orders').delete().eq('id', createdPickupOrderId);
       if (cleanupOrderError) console.warn('[createPickupFromReturn] Falha ao limpar pedido incompleto:', cleanupOrderError);
+    }
+    throw error;
+  }
+}
+
+// ---------- coleta de devolução do fluxo ANTIGO (sem evento em order_returns) ----------
+//
+// O n8n de produção ainda grava devolução só no pedido (blocked_at,
+// requires_pickup, return_nfe_*). Sem evento em order_returns não dá pra usar
+// createPickupFromReturn — este é o fluxo do site antigo ("Coletas Pendentes"
+// da Gestão de Entregas), com as mesmas travas do fluxo novo. Os itens saem da
+// nota de devolução (XML); o pedido original ganha pickup_created_at e sai da
+// lista de coletas pendentes.
+
+export async function createPickupFromLegacyOrder(params: {
+  orderId: string;
+  teamId: string;
+  observations?: string;
+  conferenteName?: string;
+}): Promise<CreatePickupResult> {
+  const { orderId, teamId } = params;
+  const observations = String(params.observations || '').trim();
+  const conferenteName = String(params.conferenteName || 'Conferente').trim() || 'Conferente';
+
+  if (!orderId) throw new Error('Pedido da devolução não informado.');
+  if (!teamId) throw new Error('Selecione uma equipe.');
+
+  // Pedido fresco do banco (evita estado velho da tela) — sem os PDFs pesados
+  const { data: order, error: orderError } = await supabase
+    .from('orders')
+    .select('id, order_id_erp, customer_name, phone, customer_cpf, address_json, items_json, raw_json, filial_venda, data_venda, blocked_at, blocked_reason, requires_pickup, pickup_created_at, return_nfe_xml, return_nfe_number, return_nfe_key, return_date, return_type, return_danfe_base64')
+    .eq('id', orderId)
+    .single();
+  if (orderError) throw orderError;
+  if (!order) throw new Error('Pedido da devolução não encontrado.');
+  if (order.pickup_created_at) return { status: 'already_created' };
+  if (!order.requires_pickup) throw new Error('Este pedido não está aguardando coleta.');
+
+  const { driverIdToUse, helperIdToUse } = await resolvePickupTeam(teamId);
+  const returnMoment: string | null = order.return_date || order.blocked_at || null;
+
+  // Trava de duplicidade: o C- deste pedido já existe?
+  let newOrderErpId = legacyPickupOrderErpId(String(order.order_id_erp), false);
+  const { data: existingPickupOrder } = await supabase
+    .from('orders')
+    .select('id, created_at')
+    .eq('order_id_erp', newOrderErpId)
+    .maybeSingle();
+
+  if (existingPickupOrder?.id) {
+    const existingCreatedAt = new Date(existingPickupOrder.created_at || 0).getTime();
+    const returnAt = new Date(returnMoment || 0).getTime();
+
+    if (existingCreatedAt >= returnAt) {
+      // O C- é desta devolução.
+      const { data: existingRouteOrder, error: existingRouteOrderError } = await supabase
+        .from('route_orders')
+        .select('route_id')
+        .eq('order_id', existingPickupOrder.id)
+        .limit(1)
+        .maybeSingle();
+      if (existingRouteOrderError) throw existingRouteOrderError;
+
+      if (existingRouteOrder?.route_id) {
+        // Coleta criada e em rota: só faltou marcar o pedido original.
+        const { error: markExistingError } = await supabase
+          .from('orders')
+          .update({ pickup_created_at: existingPickupOrder.created_at || new Date().toISOString() })
+          .eq('id', order.id);
+        if (markExistingError) throw markExistingError;
+        return { status: 'synced_existing' };
+      }
+
+      if (Date.now() - existingCreatedAt < 2 * 60 * 1000) {
+        throw new Error('Esta coleta parece estar sendo criada em outra tela. Aguarde alguns segundos e atualize.');
+      }
+
+      // Tentativa antiga interrompida: limpa o órfão e recomeça
+      const { error: deleteOrphanError } = await supabase
+        .from('orders')
+        .delete()
+        .eq('id', existingPickupOrder.id);
+      if (deleteOrphanError) throw deleteOrphanError;
+    } else {
+      // O C- é de uma coleta ANTERIOR do mesmo pedido (segunda devolução).
+      newOrderErpId = legacyPickupOrderErpId(String(order.order_id_erp), true, returnMoment);
+      const { data: secondPickupOrder } = await supabase
+        .from('orders')
+        .select('id')
+        .eq('order_id_erp', newOrderErpId)
+        .maybeSingle();
+      if (secondPickupOrder?.id) {
+        throw new Error(`Já existe uma coleta ${newOrderErpId} para esta devolução. Atualize a tela.`);
+      }
+    }
+  }
+
+  const pickupItems = buildPickupItemsFromXml(order, String(order.return_nfe_xml || ''));
+  if (!pickupItems.length) {
+    throw new Error('Não foi possível identificar os itens desta devolução para montar a coleta.');
+  }
+
+  const nfeNumber = normalizeReturnNfeNumber(order.return_nfe_number);
+  const danfeBase64 = String(order.return_danfe_base64 || '');
+
+  let createdPickupOrderId: string | null = null;
+  let createdPickupRouteId: string | null = null;
+
+  try {
+    // Pedido-clone C- (sem montagem; nasce pendente pra rotear a coleta)
+    const { data: newOrderData, error: newOrderError } = await supabase
+      .from('orders')
+      .insert({
+        order_id_erp: newOrderErpId,
+        customer_name: order.customer_name,
+        phone: order.phone,
+        customer_cpf: order.customer_cpf,
+        address_json: order.address_json,
+        items_json: pickupItems.map((item) => ({
+          ...item,
+          tem_montagem: false,
+          has_assembly: false,
+          assembly_status: null,
+        })),
+        status: 'pending',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        raw_json: {
+          ...(order.raw_json && typeof order.raw_json === 'object' ? order.raw_json : {}),
+          pickup_context: {
+            source_order_id: order.id,
+            source_order_id_erp: order.order_id_erp,
+            source_return_id: null,
+            legacy_return: true,
+          },
+        },
+        xml_documento: null,
+        return_nfe_xml: order.return_nfe_xml || null,
+        return_nfe_number: nfeNumber,
+        return_nfe_key: order.return_nfe_key || null,
+        return_date: order.return_date || null,
+        return_type: order.return_type || null,
+        danfe_base64: null,
+        return_danfe_base64: danfeBase64 || null,
+        danfe_gerada_em: danfeBase64 ? new Date().toISOString() : null,
+        filial_venda: order.filial_venda,
+        data_venda: order.data_venda,
+        observacoes_internas: `PEDIDO DE COLETA GERADO AUTOMATICAMENTE.\nOrigem: ${order.order_id_erp}\nMotivo: ${order.blocked_reason || 'Devolução'}`.slice(0, 1000),
+        return_flag: false,
+        requires_pickup: false,
+        pickup_created_at: null,
+        blocked_at: null,
+      })
+      .select()
+      .single();
+    if (newOrderError) throw newOrderError;
+    createdPickupOrderId = String(newOrderData.id);
+
+    // Rota de coleta
+    const routeName = legacyPickupRouteName(nfeNumber, String(order.order_id_erp));
+    const { data: routeData, error: routeError } = await supabase
+      .from('routes')
+      .insert({
+        name: routeName,
+        team_id: teamId,
+        driver_id: driverIdToUse,
+        helper_id: helperIdToUse,
+        vehicle_id: null,
+        status: 'pending',
+        observations: `Coleta de devolução. NF: ${nfeNumber || '-'}. Resp: ${conferenteName}. ${observations}`.trim(),
+      })
+      .select()
+      .single();
+    if (routeError) throw routeError;
+    createdPickupRouteId = String(routeData.id);
+
+    const { error: roError } = await supabase.from('route_orders').insert({
+      route_id: routeData.id,
+      order_id: newOrderData.id,
+      sequence: 1,
+      status: 'pending',
+      delivery_observations: `Coleta de devolução. NF: ${nfeNumber || '-'}. Motivo: ${order.blocked_reason || '-'}`,
+    });
+    if (roError) throw roError;
+
+    // Marca o pedido original: sai da lista de coletas pendentes.
+    const { error: markError } = await supabase
+      .from('orders')
+      .update({ pickup_created_at: new Date().toISOString() })
+      .eq('id', order.id);
+    if (markError) throw markError;
+
+    return { status: 'created', pickupOrderErp: newOrderErpId, routeName };
+  } catch (error) {
+    // Desfaz o que criou nesta tentativa
+    if (createdPickupRouteId) {
+      const { error: cleanupRouteError } = await supabase.from('routes').delete().eq('id', createdPickupRouteId);
+      if (cleanupRouteError) console.warn('[createPickupFromLegacyOrder] Falha ao limpar rota incompleta:', cleanupRouteError);
+    }
+    if (createdPickupOrderId) {
+      const { error: cleanupOrderError } = await supabase.from('orders').delete().eq('id', createdPickupOrderId);
+      if (cleanupOrderError) console.warn('[createPickupFromLegacyOrder] Falha ao limpar pedido incompleto:', cleanupOrderError);
     }
     throw error;
   }
