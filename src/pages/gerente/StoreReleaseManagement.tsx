@@ -379,10 +379,10 @@ export default function StoreReleaseManagement() {
           [{ order, items: pickedItems, withdrawal }],
           { conferenteName: user?.name || user?.email || '-' }
         );
-        const { pdf, semNota } = await mergeReceiptWithDanfe(receipt, [String(order.id)]);
+        const { pdf, semNota, motivo } = await mergeReceiptWithDanfe(receipt, [String(order.id)]);
         DeliverySheetGenerator.openPDFInNewTab(pdf);
         if (semNota) {
-          toast.warning('Comprovante gerado, mas este pedido ainda nao tem nota fiscal.');
+          toast.warning(`Comprovante gerado, mas sem nota fiscal. ${motivo || ''}`.trim());
         }
       } catch (pdfError) {
         console.error('Falha ao gerar documentos da retirada:', pdfError);

@@ -20,6 +20,7 @@ import type {
 } from '../../types/database';
 import { pickupHoldMatchesItem } from '../../utils/pickup/pickupCore';
 import { buildPickupReceiptPdf } from '../../utils/pickup/pickupReceipt';
+import { buildPickupDanfePdf } from '../../utils/pickup/pickupDanfe';
 import { toast } from 'sonner';
 import { AssemblyPhotosViewer, DeliveryPhotosViewer } from '../../components/photos';
 import { DeliveryProofPdfGenerator } from '../../utils/pdf/deliveryProofPdfGenerator';
@@ -531,31 +532,13 @@ export default function OrderLookup() {
 
     try {
       setWithdrawalActionLoading(`${w.id}:danfe`);
-      const { data: orderData, error } = await supabase
-        .from('orders')
-        .select('danfe_base64')
-        .eq('id', selectedOrder.id)
-        .single();
-
-      if (error) throw error;
-
-      const base64 = String(orderData?.danfe_base64 || '');
-      if (!base64.startsWith('JVBER')) {
-        toast.error('Nenhuma nota fiscal encontrada para este pedido.');
-        return;
-      }
-
-      const merged = await PDFDocument.create();
-      const bytes = Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
-      const source = await PDFDocument.load(bytes);
-      const pages = await merged.copyPages(source, source.getPageIndices());
-      pages.forEach((page) => merged.addPage(page));
-      const out = await merged.save();
+      // Se a nota nao foi gerada na importacao, gera agora pelo XML e guarda no pedido.
+      const out = await buildPickupDanfePdf([String(selectedOrder.id)]);
       DeliverySheetGenerator.openPDFInNewTab(out);
       toast.success('Nota fiscal reimpressa com sucesso!');
-    } catch (error) {
+    } catch (error: any) {
       console.error(error);
-      toast.error('Erro ao reimprimir nota fiscal');
+      toast.error(error?.message || 'Erro ao reimprimir nota fiscal');
     } finally {
       setWithdrawalActionLoading(null);
     }

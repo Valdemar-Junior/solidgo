@@ -2,6 +2,7 @@
 import { useNavigate, useLocation } from 'react-router-dom';
 import { supabase } from '../../supabase/client';
 import { generateDanfeBase64 } from '../../utils/danfe/generateDanfe';
+import { buildPickupDanfePdf } from '../../utils/pickup/pickupDanfe';
 import { formatDateTimeBR, toDateBR, todayBR } from '../../utils/dateBR';
 import { ORDER_ITEM_HOLD_LABELS } from '../../types/database';
 import type { CarrierCity, DeliveryRouteCatalog, ItemFulfillmentControl, Order, OrderReturn, DriverWithUser, Vehicle, RouteWithDetails, OrderWithdrawal, RouteOrderItem, OrderItemShadowBalance, OrderItemHold, OrderItemHoldType, WaitingAutoRules } from '../../types/database';
@@ -4066,24 +4067,9 @@ function RouteCreationContent() {
     }, 'Comprovante de Retirada');
   };
 
+  // Mesmo codigo da retirada do gerente: busca a nota e, se faltar, gera pelo XML.
   const generatePickupDanfePdf = async (bundle: PickupPrintBundle) => {
-    const danfes = bundle.orders
-      .map((order: any) => String(order?.danfe_base64 || ''))
-      .filter((base64) => base64.startsWith('JVBER'));
-
-    if (danfes.length === 0) {
-      throw new Error('Nenhuma nota fiscal encontrada para os pedidos selecionados.');
-    }
-
-    const merged = await PDFDocument.create();
-    for (const base64 of danfes) {
-      const bytes = Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
-      const source = await PDFDocument.load(bytes);
-      const pages = await merged.copyPages(source, source.getPageIndices());
-      pages.forEach((page) => merged.addPage(page));
-    }
-
-    return merged.save();
+    return buildPickupDanfePdf(bundle.orders.map((order: any) => String(order?.id || '')));
   };
 
   const printPickupDocuments = async () => {
