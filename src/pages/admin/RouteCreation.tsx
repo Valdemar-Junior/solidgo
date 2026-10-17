@@ -6099,11 +6099,19 @@ function RouteCreationContent() {
 
                         setNfLoading(true);
                         try {
-                          const { data: roData, error: roErr } = await supabase.from('route_orders').select('*, order:orders(*)').eq('route_id', routeId).order('sequence');
+                          const { data: roDataAll, error: roErr } = await supabase.from('route_orders').select('*, order:orders(*)').eq('route_id', routeId).order('sequence');
                           if (roErr) throw roErr;
 
                           // Verificar se Ã© rota de coleta (usa DANFE de devoluÃ§Ã£o)
                           const isPickupRoute = isCollectionRouteName(selectedRoute.name);
+
+                          // Em rota de entrega, coleta (C-...) e assistência (...-A / ...-A-1) não têm nota fiscal: ficam fora da impressão
+                          const semNotaFiscal = (ro: any) => {
+                            const erp = String(ro?.order?.order_id_erp || '').trim().toUpperCase();
+                            return erp.startsWith('C-') || /-A(-\d+)?$/.test(erp);
+                          };
+                          const roData = isPickupRoute ? (roDataAll || []) : (roDataAll || []).filter((ro: any) => !semNotaFiscal(ro));
+                          if (roData.length === 0) { toast.error('Nenhum pedido desta rota tem nota fiscal'); setNfLoading(false); return; }
                           const pickupSourceXmlByOrderErp = isPickupRoute
                             ? await fetchPickupSourceReturnXmlMap(roData || [])
                             : new Map<string, string>();
