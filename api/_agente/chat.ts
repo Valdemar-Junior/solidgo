@@ -46,7 +46,8 @@ function limparMensagens(bruto: unknown): Mensagem[] {
 }
 
 export async function conversar(req: any, res: any, supa: SupabaseClient, adminId: string) {
-  const url = (process.env.HERMES_API_URL || '').trim().replace(/\/+$/, '')
+  // Aceita o endereço com ou sem /v1 no final (com /v1 virava /v1/v1/... = 404).
+  const url = (process.env.HERMES_API_URL || '').trim().replace(/\/+$/, '').replace(/\/v1$/i, '')
   const chave = (process.env.HERMES_API_KEY || '').trim()
   if (!url || !chave) return res.status(503).json({ error: 'Chat ainda não configurado: faltam HERMES_API_URL e HERMES_API_KEY na Vercel.' })
 
