@@ -813,9 +813,10 @@ export default function UsersTeams() {
                     onClick={async () => {
                       const temp = genPassword();
                       try {
+                        const { data: { session } } = await supabase.auth.getSession();
                         const resp = await fetch('/api/reset-password', {
                           method: 'POST',
-                          headers: { 'Content-Type': 'application/json' },
+                          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token || ''}` },
                           body: JSON.stringify({ userId: user.id, newPassword: temp }),
                         });
                         if (!resp.ok) {
@@ -843,9 +844,10 @@ export default function UsersTeams() {
                     onClick={async () => {
                       if (!window.confirm(`Remover usuário "${user.name}"?`)) return;
                       try {
+                        const { data: { session } } = await supabase.auth.getSession();
                         const resp = await fetch('/api/delete-user', {
                           method: 'POST',
-                          headers: { 'Content-Type': 'application/json' },
+                          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token || ''}` },
                           body: JSON.stringify({ userId: user.id }),
                         });
                         if (!resp.ok) {
