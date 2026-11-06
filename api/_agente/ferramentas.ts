@@ -12,14 +12,32 @@ import {
 // Mesma regra da fila "Pedidos aguardando rota" (RouteCreation.tsx / loadData):
 // status pending ou returned, sem bloqueio, fora de rota ativa e sem retirada.
 // ---------------------------------------------------------------------------
+// FULL: mesma regra da tela (RouteCreation.tsx / hasFreteFull).
+function ehFreteFull(p: Json): boolean {
+  if (String(p.tem_frete_full ?? '').trim().toUpperCase() === 'SIM' || p.tem_frete_full === true) return true
+  const obs = `${String(p.observacoes_internas ?? '')} ${String(p.observacoes_publicas ?? '')}`.toUpperCase()
+  return obs.includes('FULL')
+}
+
+// Zona rural: palavra-chave cadastrada aparece na rua, bairro ou complemento.
+// A rua e o complemento não saem para o agente; só o resultado sim/não.
+function ehZonaRural(p: Json, palavras: string[]): boolean | null {
+  if (palavras.length === 0) return null
+  const e = (p.address_json as Json | null) || {}
+  const texto = normalizar(`${String(e.street ?? '')} | ${String(e.neighborhood ?? '')} | ${String(e.complement ?? '')}`)
+  return palavras.some((k) => texto.includes(k))
+}
+
 export async function listarPedidosPendentes(supa: SupabaseClient, args: Json) {
   const cidade = lerTexto(args, 'cidade')
   const limite = lerLimite(args, 50, 200)
+  const somenteFull = args.somente_full === true
+  const excluirRural = args.excluir_zona_rural === true
 
   const pedidos = await buscarTudo((de, ate) =>
     supa
       .from('orders')
-      .select('id, order_id_erp, customer_name, address_json, items_json, status, filial_venda, data_venda, previsao_entrega, observacoes_internas, observacoes_publicas, return_flag, last_return_reason, last_return_notes, created_at')
+      .select('id, order_id_erp, customer_name, address_json, items_json, status, filial_venda, data_venda, previsao_entrega, observacoes_internas, observacoes_publicas, return_flag, last_return_reason, last_return_notes, tem_frete_full, created_at')
       .in('status', ['pending', 'returned'])
       .is('blocked_at', null)
       .order('data_venda', { ascending: true })
@@ -69,10 +87,27 @@ export async function listarPedidosPendentes(supa: SupabaseClient, args: Json) {
     fila = fila.filter((p: Json) => normalizar(cidadeDe(p)) === alvo)
   }
 
+  // Palavras-chave da zona rural cadastradas em Configurações > Zona Rural.
+  const { data: ruralCfg } = await supa.from('app_settings').select('value').eq('key', 'rural_keywords').maybeSingle()
+  const palavrasRurais = (Array.isArray((ruralCfg?.value as Json | null)?.keywords) ? (ruralCfg!.value as Json).keywords as unknown[] : [])
+    .map(normalizar).filter(Boolean)
+  const marcados = fila.map((p) => ({ p, full: ehFreteFull(p), rural: ehZonaRural(p, palavrasRurais) }))
+  const totalFull = marcados.filter((m) => m.full).length
+  const totalRural = marcados.filter((m) => m.rural === true).length
+  let selecionados = marcados
+  if (somenteFull) selecionados = selecionados.filter((m) => m.full)
+  if (excluirRural) selecionados = selecionados.filter((m) => m.rural !== true)
+  fila = selecionados.map((m) => m.p)
+  const marcas = new Map(selecionados.map((m) => [m.p, m]))
+
   return {
     total_na_fila: fila.length,
     mostrando: Math.min(fila.length, limite),
     filtro_cidade: cidade ?? null,
+    filtros: { somente_full: somenteFull, excluir_zona_rural: excluirRural },
+    total_full_antes_dos_filtros: totalFull,
+    total_zona_rural_antes_dos_filtros: palavrasRurais.length ? totalRural : null,
+    ...(palavrasRurais.length ? {} : { aviso_zona_rural: 'Nenhuma palavra-chave de zona rural cadastrada em Configurações; zona_rural vem como null.' }),
     ...(cidade ? {} : { resumo_por_cidade: porCidade }),
     pedidos: fila.slice(0, limite).map((p: Json) => {
       const endereco = (p.address_json as Json | null) || {}
@@ -84,6 +119,8 @@ export async function listarPedidosPendentes(supa: SupabaseClient, args: Json) {
         loja: p.filial_venda ?? null,
         data_venda: p.data_venda ?? null,
         previsao_entrega: p.previsao_entrega ?? null,
+        frete_full: marcas.get(p)?.full ?? false,
+        zona_rural: palavrasRurais.length ? (marcas.get(p)?.rural ?? false) : null,
         devolvido_antes: p.status === 'returned' || Boolean(p.return_flag) || Boolean(p.last_return_reason),
         // Inteiras (até 1000): uma data tipo "só recebe dia 25/11" costuma estar no fim do texto.
         observacoes_internas: observacao(p.observacoes_internas),
@@ -255,11 +292,13 @@ export const FERRAMENTAS_LEITURA: Ferramenta[] = [
   {
     name: 'listar_pedidos_pendentes',
     description:
-      'Lista os pedidos aguardando rota de entrega (mesma fila da tela Gestão de Entregas: pendentes ou devolvidos, sem bloqueio, fora de rota ativa, não retirados e com itens), do mais antigo para o mais novo. Traz observações internas e públicas completas e o motivo da última devolução: leia-os para achar restrições de data (ex.: "cliente só pode receber dia 25/11") antes de sugerir o pedido numa rota. Sem cidade, traz também o resumo de quantos pedidos há por cidade. Somente leitura.',
+      'Lista os pedidos aguardando rota de entrega (mesma fila da tela Gestão de Entregas: pendentes ou devolvidos, sem bloqueio, fora de rota ativa, não retirados e com itens), do mais antigo para o mais novo. Traz observações internas e públicas completas e o motivo da última devolução: leia-os para achar restrições de data (ex.: "cliente só pode receber dia 25/11") antes de sugerir o pedido numa rota. Cada pedido traz frete_full e zona_rural (sim/não). Sem cidade, traz também o resumo de quantos pedidos há por cidade. Somente leitura.',
     inputSchema: {
       type: 'object',
       properties: {
         cidade: { type: 'string', description: 'Filtra pela cidade de entrega (ignora acento e maiúsculas). Ex.: "São Rafael".' },
+        somente_full: { type: 'boolean', description: 'Só pedidos com frete FULL (mesma regra da tela: campo frete full = SIM ou "FULL" nas observações).' },
+        excluir_zona_rural: { type: 'boolean', description: 'Tira os pedidos de zona rural (palavras-chave cadastradas em Configurações > Zona Rural, aplicadas em rua, bairro e complemento).' },
         limite: { type: 'integer', minimum: 1, maximum: 200, default: 50, description: 'Quantos pedidos devolver (1 a 200).' },
       },
       additionalProperties: false,
