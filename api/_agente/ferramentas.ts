@@ -1,92 +1,18 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import {
+  ErroFerramenta, buscarTudo, emLotes, lerLimite, lerTexto, normalizar, observacao, resumoItens, sinal, texto,
+  type Ferramenta, type Json,
+} from './comum.js'
 
-// Ferramentas do MCP do SolidGo. FASE 1: somente leitura.
-// Regra de ouro: nada aqui grava no banco. Escrita entra na fase 2, com prévia,
-// confirmação humana e auditoria.
-// Privacidade: nunca devolver telefone, CPF ou endereço completo (só cidade/bairro).
-
-type Json = Record<string, unknown>
-
-export type Ferramenta = {
-  name: string
-  description: string
-  inputSchema: Json
-  executar: (supa: SupabaseClient, args: Json) => Promise<unknown>
-}
-
-export class ErroFerramenta extends Error {}
-
-const TIMEOUT_MS = 10_000
-const sinal = () => AbortSignal.timeout(TIMEOUT_MS)
-
-// "São Rafael" == "sao rafael" == "SAO RAFAEL"
-export function normalizar(valor: unknown): string {
-  return String(valor ?? '')
-    .normalize('NFD')
-    .replace(/[̀-ͯ]/g, '')
-    .trim()
-    .toLowerCase()
-}
-
-function texto(valor: unknown, max = 300): string | null {
-  const s = String(valor ?? '').trim()
-  if (!s) return null
-  return s.length > max ? `${s.slice(0, max)}…` : s
-}
-
-function lerTexto(args: Json, campo: string): string | undefined {
-  const v = args[campo]
-  if (v === undefined || v === null || v === '') return undefined
-  if (typeof v !== 'string') throw new ErroFerramenta(`"${campo}" precisa ser texto.`)
-  return v.trim()
-}
-
-function lerLimite(args: Json, padrao: number, maximo: number): number {
-  const v = args.limite
-  if (v === undefined || v === null) return padrao
-  const n = Number(v)
-  if (!Number.isInteger(n) || n < 1 || n > maximo) {
-    throw new ErroFerramenta(`"limite" precisa ser um número inteiro entre 1 e ${maximo}.`)
-  }
-  return n
-}
-
-// O Supabase corta cada resposta em 1000 linhas sem avisar: busca página por página.
-const PAGINA = 1000
-async function buscarTudo(
-  consulta: (de: number, ate: number) => PromiseLike<{ data: unknown[] | null; error: unknown }>,
-): Promise<Json[]> {
-  const todas: Json[] = []
-  for (let de = 0; ; de += PAGINA) {
-    const { data, error } = await consulta(de, de + PAGINA - 1)
-    if (error) throw error
-    const pagina = (data || []) as Json[]
-    todas.push(...pagina)
-    if (pagina.length < PAGINA) return todas
-    if (todas.length >= 20_000) throw new ErroFerramenta('Consulta grande demais; filtre mais.')
-  }
-}
-
-function emLotes<T>(lista: T[], tamanho: number): T[][] {
-  const lotes: T[][] = []
-  for (let i = 0; i < lista.length; i += tamanho) lotes.push(lista.slice(i, i + tamanho))
-  return lotes
-}
-
-function resumoItens(itens: unknown): { quantidade_itens: number; produtos: string[] } {
-  const lista = Array.isArray(itens) ? itens : []
-  const produtos = lista
-    .map((it) => texto((it as Json)?.name, 80))
-    .filter((n): n is string => Boolean(n))
-  return { quantidade_itens: lista.length, produtos: produtos.slice(0, 5) }
-}
+// Ferramentas de LEITURA do MCP do SolidGo. A parte que prepara rota (fase 2)
+// fica em ./rota.ts e também não grava rota: só a proposta para o admin aprovar.
 
 // ---------------------------------------------------------------------------
 // listar_pedidos_pendentes
 // Mesma regra da fila "Pedidos aguardando rota" (RouteCreation.tsx / loadData):
 // status pending ou returned, sem bloqueio, fora de rota ativa e sem retirada.
 // ---------------------------------------------------------------------------
-async function listarPedidosPendentes(supa: SupabaseClient, args: Json) {
+export async function listarPedidosPendentes(supa: SupabaseClient, args: Json) {
   const cidade = lerTexto(args, 'cidade')
   const limite = lerLimite(args, 50, 200)
 
@@ -160,10 +86,10 @@ async function listarPedidosPendentes(supa: SupabaseClient, args: Json) {
         previsao_entrega: p.previsao_entrega ?? null,
         devolvido_antes: p.status === 'returned' || Boolean(p.return_flag) || Boolean(p.last_return_reason),
         // Inteiras (até 1000): uma data tipo "só recebe dia 25/11" costuma estar no fim do texto.
-        observacoes_internas: texto(p.observacoes_internas, 1000),
-        observacoes_publicas: texto(p.observacoes_publicas, 1000),
+        observacoes_internas: observacao(p.observacoes_internas),
+        observacoes_publicas: observacao(p.observacoes_publicas),
         ultima_devolucao: p.last_return_reason || p.last_return_notes
-          ? { motivo: texto(p.last_return_reason, 300), anotacoes: texto(p.last_return_notes, 1000) }
+          ? { motivo: texto(p.last_return_reason, 300), anotacoes: observacao(p.last_return_notes) }
           : null,
         ...resumoItens(p.items_json),
       }
@@ -172,33 +98,50 @@ async function listarPedidosPendentes(supa: SupabaseClient, args: Json) {
 }
 
 // ---------------------------------------------------------------------------
-// listar_motoristas_veiculos
+// listar_motoristas_veiculos: tudo que o formulário "Nova Rota / Romaneio" pede
 // ---------------------------------------------------------------------------
+const nomeDe = (rel: unknown): string | null => {
+  const r = Array.isArray(rel) ? rel[0] : rel
+  return texto((r as Json | null)?.name, 120)
+}
+const porNome = <T extends { nome: string | null }>(lista: T[]) =>
+  lista.filter((x) => x.nome).sort((a, b) => String(a.nome).localeCompare(String(b.nome), 'pt-BR'))
+
 async function listarMotoristasVeiculos(supa: SupabaseClient) {
-  const [motoristasRes, veiculosRes] = await Promise.all([
+  const [motoristasRes, veiculosRes, equipesRes, ajudantesRes, conferentesRes, romaneiosRes] = await Promise.all([
     supa.from('drivers').select('id, active, user:users!user_id(name)').eq('active', true).abortSignal(sinal()),
     supa.from('vehicles').select('id, plate, model, capacity, active').eq('active', true).abortSignal(sinal()),
+    supa.from('teams_user')
+      .select('id, name, driver:users!teams_user_driver_user_id_fkey(name), helper:users!teams_user_helper_user_id_fkey(name)')
+      .eq('active', true).abortSignal(sinal()),
+    supa.from('users').select('id, name').eq('role', 'helper').eq('active', true).abortSignal(sinal()),
+    supa.from('users').select('id, name').eq('role', 'conferente').abortSignal(sinal()),
+    supa.from('routes')
+      .select('id, name, route_code, created_at, driver:drivers!driver_id(user:users!user_id(name)), route_orders(id)')
+      .eq('status', 'pending')
+      .not('name', 'ilike', 'RETIRADA%').not('name', 'like', 'COLETA-%')
+      .order('created_at', { ascending: false }).limit(40).abortSignal(sinal()),
   ])
-  if (motoristasRes.error) throw motoristasRes.error
-  if (veiculosRes.error) throw veiculosRes.error
+  for (const r of [motoristasRes, veiculosRes, equipesRes, ajudantesRes, conferentesRes, romaneiosRes]) {
+    if (r.error) throw r.error
+  }
 
-  const motoristas = (motoristasRes.data || [])
-    .map((d: Json) => {
-      const user = d.user as Json | Json[] | null
-      const nome = Array.isArray(user) ? user[0]?.name : user?.name
-      return { id: d.id, nome: texto(nome, 120) }
-    })
-    .filter((m) => m.nome)
-    .sort((a, b) => String(a.nome).localeCompare(String(b.nome), 'pt-BR'))
-
-  const veiculos = (veiculosRes.data || []).map((v: Json) => ({
-    id: v.id,
-    placa: v.plate,
-    modelo: v.model,
-    capacidade: v.capacity ?? null,
-  }))
-
-  return { motoristas, veiculos }
+  return {
+    motoristas: porNome((motoristasRes.data || []).map((d: Json) => ({ nome: nomeDe(d.user) }))),
+    ajudantes: porNome((ajudantesRes.data || []).map((u: Json) => ({ nome: texto(u.name, 120) }))),
+    equipes: porNome((equipesRes.data || []).map((t: Json) => ({
+      nome: texto(t.name, 120), motorista: nomeDe(t.driver), ajudante: nomeDe(t.helper),
+    }))),
+    veiculos: (veiculosRes.data || []).map((v: Json) => ({ placa: v.plate, modelo: v.model, capacidade: v.capacity ?? null })),
+    conferentes: porNome((conferentesRes.data || []).map((u: Json) => ({ nome: texto(u.name, 120) }))),
+    romaneios_em_separacao: (romaneiosRes.data || []).map((r: Json) => ({
+      route_code: r.route_code,
+      nome: r.name,
+      motorista: nomeDe((Array.isArray(r.driver) ? r.driver[0] : (r.driver as Json | null))?.user),
+      pedidos: Array.isArray(r.route_orders) ? r.route_orders.length : 0,
+      criado_em: r.created_at,
+    })),
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -293,7 +236,7 @@ async function verRota(supa: SupabaseClient, args: Json) {
     motorista,
     veiculo: veiculo ? { placa: veiculo.plate, modelo: veiculo.model } : null,
     conferente: encontrada.conferente ?? null,
-    observacoes: texto(encontrada.observations),
+    observacoes: observacao(encontrada.observations),
     total_pedidos: (itens || []).length,
     pedidos: (itens || []).map((ro: Json) => {
       const o = (ro.order as Json | null) || {}
@@ -308,7 +251,7 @@ async function verRota(supa: SupabaseClient, args: Json) {
   }
 }
 
-export const FERRAMENTAS: Ferramenta[] = [
+export const FERRAMENTAS_LEITURA: Ferramenta[] = [
   {
     name: 'listar_pedidos_pendentes',
     description:
@@ -321,18 +264,21 @@ export const FERRAMENTAS: Ferramenta[] = [
       },
       additionalProperties: false,
     },
+    somenteLeitura: true,
     executar: listarPedidosPendentes,
   },
   {
     name: 'listar_motoristas_veiculos',
-    description: 'Lista os motoristas ativos e os veículos ativos (placa, modelo, capacidade). Somente leitura.',
+    description: 'Lista tudo que o formulário de rota pede: motoristas, ajudantes, equipes (motorista + ajudante), veículos (placa, modelo, capacidade), conferentes e os romaneios ainda Em Separação (que podem receber mais pedidos). Use os nomes daqui em preparar_rota. Somente leitura.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    somenteLeitura: true,
     executar: (supa) => listarMotoristasVeiculos(supa),
   },
   {
     name: 'listar_rotas_cadastradas',
     description: 'Lista os nomes de rota cadastrados no catálogo (os únicos nomes válidos para criar uma rota de entrega). Somente leitura.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    somenteLeitura: true,
     executar: (supa) => listarRotasCadastradas(supa),
   },
   {
@@ -346,6 +292,7 @@ export const FERRAMENTAS: Ferramenta[] = [
       },
       additionalProperties: false,
     },
+    somenteLeitura: true,
     executar: verRota,
   },
 ]

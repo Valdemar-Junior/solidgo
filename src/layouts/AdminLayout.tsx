@@ -18,7 +18,8 @@ import {
     UserCircle,
     Bell,
     Box,
-    CarFront
+    CarFront,
+    Bot
 } from 'lucide-react';
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
@@ -47,6 +48,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         { name: 'Relatorios', href: '/admin/reports', icon: FileSpreadsheet },
         { name: 'Cadastros e Equipes', href: '/admin/users-teams', icon: Users },
         { name: 'Configuracoes', href: '/admin/settings', icon: Settings },
+        { name: 'Agente IA', href: '/admin/agente', icon: Bot },
         { name: 'Auditoria', href: '/admin/audit', icon: ShieldAlert },
         { name: 'Diario de Bordo', href: '/admin/diary', icon: BookMarked },
     ];

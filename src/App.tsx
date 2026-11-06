@@ -12,6 +12,8 @@ import CustomerTracking from './pages/public/CustomerTracking';
 import AdminDashboard from './pages/admin/Dashboard';
 import Settings from './pages/admin/Settings';
 import UsersTeams from './pages/admin/UsersTeams';
+import Agente from './pages/admin/agente/Agente';
+import AgenteAprovar from './pages/admin/agente/AgenteAprovar';
 import DriverDashboard from './pages/driver/Dashboard';
 import DriverRouteDetails from './pages/driver/RouteDetails';
 import ConferenteDashboard from './pages/conferente/Dashboard';
@@ -126,6 +128,26 @@ function App() {
               <ProtectedRoute allowedRoles={['admin']}>
                 <AdminLayout>
                   <Settings />
+                </AdminLayout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/agente"
+            element={
+              <ProtectedRoute allowedRoles={['admin']}>
+                <AdminLayout>
+                  <Agente />
+                </AdminLayout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/agente/aprovar/:id"
+            element={
+              <ProtectedRoute allowedRoles={['admin']}>
+                <AdminLayout>
+                  <AgenteAprovar />
                 </AdminLayout>
               </ProtectedRoute>
             }
