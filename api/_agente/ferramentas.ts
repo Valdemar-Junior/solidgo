@@ -93,7 +93,7 @@ async function listarPedidosPendentes(supa: SupabaseClient, args: Json) {
   const pedidos = await buscarTudo((de, ate) =>
     supa
       .from('orders')
-      .select('id, order_id_erp, customer_name, address_json, items_json, status, filial_venda, data_venda, previsao_entrega, observacoes_internas, observacoes_publicas, return_flag, last_return_reason, created_at')
+      .select('id, order_id_erp, customer_name, address_json, items_json, status, filial_venda, data_venda, previsao_entrega, observacoes_internas, observacoes_publicas, return_flag, last_return_reason, last_return_notes, created_at')
       .in('status', ['pending', 'returned'])
       .is('blocked_at', null)
       .order('data_venda', { ascending: true })
@@ -156,8 +156,12 @@ async function listarPedidosPendentes(supa: SupabaseClient, args: Json) {
         data_venda: p.data_venda ?? null,
         previsao_entrega: p.previsao_entrega ?? null,
         devolvido_antes: p.status === 'returned' || Boolean(p.return_flag) || Boolean(p.last_return_reason),
-        observacoes_internas: texto(p.observacoes_internas),
-        observacoes_publicas: texto(p.observacoes_publicas),
+        // Inteiras (até 1000): uma data tipo "só recebe dia 25/11" costuma estar no fim do texto.
+        observacoes_internas: texto(p.observacoes_internas, 1000),
+        observacoes_publicas: texto(p.observacoes_publicas, 1000),
+        ultima_devolucao: p.last_return_reason || p.last_return_notes
+          ? { motivo: texto(p.last_return_reason, 300), anotacoes: texto(p.last_return_notes, 1000) }
+          : null,
         ...resumoItens(p.items_json),
       }
     }),
@@ -305,7 +309,7 @@ export const FERRAMENTAS: Ferramenta[] = [
   {
     name: 'listar_pedidos_pendentes',
     description:
-      'Lista os pedidos aguardando rota de entrega (mesma fila da tela Gestão de Entregas: pendentes ou devolvidos, sem bloqueio, fora de rota ativa e não retirados). Sem cidade, traz também o resumo de quantos pedidos há por cidade. Somente leitura.',
+      'Lista os pedidos aguardando rota de entrega (mesma fila da tela Gestão de Entregas: pendentes ou devolvidos, sem bloqueio, fora de rota ativa e não retirados), do mais antigo para o mais novo. Traz observações internas e públicas completas e o motivo da última devolução: leia-os para achar restrições de data (ex.: "cliente só pode receber dia 25/11") antes de sugerir o pedido numa rota. Sem cidade, traz também o resumo de quantos pedidos há por cidade. Somente leitura.',
     inputSchema: {
       type: 'object',
       properties: {
