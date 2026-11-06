@@ -4,10 +4,11 @@ import { requireAdmin } from './_lib/auth.js'
 import { ErroFerramenta, type Contexto, type Ferramenta, type Json } from './_agente/comum.js'
 import { FERRAMENTAS_LEITURA } from './_agente/ferramentas.js'
 import { FERRAMENTAS_ROTA } from './_agente/rota.js'
+import { conversar, hermesConfigurado } from './_agente/chat.js'
 
 // Função única do agente (o plano gratuito da Vercel limita a 12 funções em api/).
 //   /api/mcp                    -> canal MCP (Hermes), protegido por token
-//   /api/agente?canal=admin&... -> telas do SolidGo (config, aprovação), só admin logado
+//   /api/agente?canal=admin&... -> telas do SolidGo (config, aprovação, chat), só admin logado
 //
 // MCP "Streamable HTTP" sem sessão, respondendo JSON simples, feito à mão
 // (só precisamos de initialize / tools/list / tools/call / ping).
@@ -188,6 +189,12 @@ async function canalAdmin(req: any, res: any) {
   const corpo = (typeof req.body === 'object' && req.body) ? req.body as Json : {}
   const ip = ipDe(req)
 
+  if (acao === 'chat' && req.method === 'POST') return conversar(req, res, supa, admin.id)
+  if (acao === 'chat_status' && req.method === 'GET') {
+    const config = await lerConfig(supa)
+    return res.status(200).json({ configurado: hermesConfigurado(), ativo: config?.ativo !== false })
+  }
+
   if (acao === 'config' && req.method === 'GET') {
     const config = await lerConfig(supa)
     if (!config) return res.status(500).json({ error: 'Tabelas do agente ainda não criadas no banco (rode a migração).' })
@@ -198,6 +205,7 @@ async function canalAdmin(req: any, res: any) {
       token_criado_em: config.token_criado_em,
       token_da_vercel_configurado: (process.env.MCP_TOKEN || '').trim().length >= 32,
       endereco_mcp: `${baseUrlDe(req)}/api/mcp`,
+      chat_configurado: hermesConfigurado(),
     })
   }
 

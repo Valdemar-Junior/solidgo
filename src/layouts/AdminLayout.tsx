@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../stores/authStore';
+import ChatAgente from '../components/agente/ChatAgente';
 import {
     LayoutDashboard,
     PackageSearch,
@@ -168,6 +169,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
                     {children}
                 </main>
             </div>
+            {user?.role === 'admin' && <ChatAgente />}
         </div>
     );
 }
