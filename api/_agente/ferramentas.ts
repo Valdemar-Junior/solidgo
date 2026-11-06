@@ -126,6 +126,9 @@ async function listarPedidosPendentes(supa: SupabaseClient, args: Json) {
     for (const r of data || []) retirados.add(String((r as Json).order_id))
   }
   fila = fila.filter((p: Json) => !retirados.has(String(p.id)))
+  // A tela só mostra pedido que tem item (RouteCreation.tsx expande pedido em linhas por item).
+  // Sem isso entravam ~20 registros-fantasma de importação por lote: sem item, cidade nem data.
+  fila = fila.filter((p: Json) => Array.isArray(p.items_json) && p.items_json.length > 0)
 
   const cidadeDe = (p: Json) => String((p.address_json as Json | null)?.city ?? '').trim()
 
@@ -309,7 +312,7 @@ export const FERRAMENTAS: Ferramenta[] = [
   {
     name: 'listar_pedidos_pendentes',
     description:
-      'Lista os pedidos aguardando rota de entrega (mesma fila da tela Gestão de Entregas: pendentes ou devolvidos, sem bloqueio, fora de rota ativa e não retirados), do mais antigo para o mais novo. Traz observações internas e públicas completas e o motivo da última devolução: leia-os para achar restrições de data (ex.: "cliente só pode receber dia 25/11") antes de sugerir o pedido numa rota. Sem cidade, traz também o resumo de quantos pedidos há por cidade. Somente leitura.',
+      'Lista os pedidos aguardando rota de entrega (mesma fila da tela Gestão de Entregas: pendentes ou devolvidos, sem bloqueio, fora de rota ativa, não retirados e com itens), do mais antigo para o mais novo. Traz observações internas e públicas completas e o motivo da última devolução: leia-os para achar restrições de data (ex.: "cliente só pode receber dia 25/11") antes de sugerir o pedido numa rota. Sem cidade, traz também o resumo de quantos pedidos há por cidade. Somente leitura.',
     inputSchema: {
       type: 'object',
       properties: {
