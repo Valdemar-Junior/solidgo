@@ -1,6 +1,10 @@
 {
   "rewrites": [
     {
+      "source": "/api/mcp",
+      "destination": "/api/agente"
+    },
+    {
       "source": "/fleet",
       "destination": "/fleet/index.html"
     },
