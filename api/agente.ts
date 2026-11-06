@@ -18,7 +18,7 @@ const INSTRUCOES =
   'Servidor do SolidGo (logística do Lojão dos Móveis). Leitura: listar_pedidos_pendentes (fila de pedidos aguardando rota, ' +
   'com observações), listar_motoristas_veiculos (motoristas, ajudantes, equipes, veículos, conferentes, romaneios Em Separação), ' +
   'listar_rotas_cadastradas e ver_rota. Escrita: preparar_rota NÃO grava, devolve prévia e link; a rota só é criada quando um ' +
-  'admin clica Confirmar no SolidGo. Sempre leia as observações dos pedidos e pergunte o dia da entrega antes de preparar.'
+  'admin clica Confirmar no SolidGo. Sempre leia as observações dos pedidos. O dia da entrega é opcional (a rota não tem campo de data).'
 
 type RpcId = string | number | null
 

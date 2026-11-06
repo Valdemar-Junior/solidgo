@@ -345,7 +345,7 @@ export const FERRAMENTAS_ROTA: Ferramenta[] = [
       'NÃO grava a rota: ela só é criada quando um admin clica Confirmar no SolidGo. Confere as mesmas regras da tela ' +
       '(pedido bloqueado, já em rota, retirado, sem itens, aguardando liberação da loja) e aponta avisos de data/restrição nas observações. ' +
       'Para rota NOVA são obrigatórios: rota_cadastrada, veiculo, conferente e motorista (ou equipe). ' +
-      'Antes, pergunte ao usuário o dia da entrega e use data_entrega. Use os nomes de listar_motoristas_veiculos e listar_rotas_cadastradas.',
+      'data_entrega é OPCIONAL (a rota não tem campo de data): se o usuário disser o dia, passe-o para comparar com as observações; se não disser, prepare sem ela. Use os nomes de listar_motoristas_veiculos e listar_rotas_cadastradas.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -358,7 +358,7 @@ export const FERRAMENTAS_ROTA: Ferramenta[] = [
         veiculo: { type: 'string', description: 'Placa ou modelo do veículo. Obrigatório para rota nova.' },
         conferente: { type: 'string', description: 'Nome do conferente. Obrigatório para rota nova.' },
         observacoes: { type: 'string', description: 'Observações da rota (opcional).' },
-        data_entrega: { type: 'string', description: 'Dia planejado da entrega, DD/MM/AAAA. Usado para conferir as observações e anotado na rota.' },
+        data_entrega: { type: 'string', description: 'OPCIONAL. Dia planejado da entrega, DD/MM/AAAA. Não é campo da rota: serve para comparar com datas citadas nas observações e é anotado nas observações da rota.' },
       },
       required: ['pedidos'],
       additionalProperties: false,
