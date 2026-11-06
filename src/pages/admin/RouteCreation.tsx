@@ -324,6 +324,9 @@ function RouteCreationContent() {
   // Realtime Refs (to access latest function version inside effect)
   const fetchRoutesRef = useRef<any>(null);
   const loadDataRef = useRef<any>(null);
+  // Cada busca de rotas recebe um número; só a mais recente pode gravar a lista.
+  // Sem isso, uma busca antiga (sem filtro) que responde depois sobrescreve a filtrada.
+  const routesRequestIdRef = useRef(0);
 
   // Tabs State - expandido para incluir bloqueados e coletas
   const [activeRoutesTab, setActiveRoutesTab] = useState<'deliveries' | 'blocked' | 'pickupOrders' | 'pickupRoutes'>('deliveries');
@@ -2338,6 +2341,7 @@ function RouteCreationContent() {
 
   // --- ROUTE FETCHING ---
   const fetchRoutes = async (resetPage: boolean = false) => {
+    const requestId = ++routesRequestIdRef.current;
     try {
       const currentPage = resetPage ? 0 : page;
       const from = currentPage * LIMIT;
@@ -2374,6 +2378,16 @@ function RouteCreationContent() {
         query = query.in('status', statusFilter);
       }
 
+      // Separa entrega x coleta no banco, antes da paginação. Se ficasse só na tela,
+      // 50 rotas de coleta/retirada mais novas ocupavam a página inteira e as de
+      // entrega sumiam (filtro "Em Separação" vazio em 06/11/2026).
+      if (activeRoutesTab === 'pickupRoutes') {
+        query = query.like('name', 'COLETA-%');
+      } else {
+        // routes.name é NOT NULL, então não há rota sem nome para perder aqui.
+        query = query.not('name', 'ilike', 'RETIRADA%').not('name', 'like', 'COLETA-%');
+      }
+
       // Apply Search Filter (Server-Side)
       if (routeSearchQuery.trim()) {
         const q = routeSearchQuery.trim();
@@ -2395,6 +2409,9 @@ function RouteCreationContent() {
       query = query.range(from, to);
 
       const { data, error, count } = await query;
+
+      // Chegou uma busca mais nova enquanto esta esperava: descarta esta resposta.
+      if (requestId !== routesRequestIdRef.current) return [];
 
       if (error) throw error;
 
@@ -2483,7 +2500,7 @@ function RouteCreationContent() {
 
   useEffect(() => {
     fetchRoutes(true);
-  }, [dateFilter, statusFilter]);
+  }, [dateFilter, statusFilter, activeRoutesTab === 'pickupRoutes']);
 
   // Debounce search
   useEffect(() => {
