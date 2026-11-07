@@ -1,5 +1,5 @@
 import { BrowserRouter as Router, Routes, Route, Navigate } from "react-router-dom";
-import { useEffect } from 'react';
+import { lazy, Suspense, useEffect } from 'react';
 import { envOk } from './supabase/client';
 import { useAuthStore } from './stores/authStore';
 import Login from './pages/Login';
@@ -14,6 +14,8 @@ import Settings from './pages/admin/Settings';
 import UsersTeams from './pages/admin/UsersTeams';
 import Agente from './pages/admin/agente/Agente';
 import AgenteAprovar from './pages/admin/agente/AgenteAprovar';
+// Mapa (Leaflet) só baixa quando alguém abre a tela Ao vivo.
+const AoVivo = lazy(() => import('./pages/admin/rastreio/AoVivo'));
 import DriverDashboard from './pages/driver/Dashboard';
 import DriverRouteDetails from './pages/driver/RouteDetails';
 import ConferenteDashboard from './pages/conferente/Dashboard';
@@ -138,6 +140,18 @@ function App() {
               <ProtectedRoute allowedRoles={['admin']}>
                 <AdminLayout>
                   <Agente />
+                </AdminLayout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/ao-vivo"
+            element={
+              <ProtectedRoute allowedRoles={['admin']}>
+                <AdminLayout>
+                  <Suspense fallback={<div className="p-4 text-sm text-gray-500">carregando mapa…</div>}>
+                    <AoVivo />
+                  </Suspense>
                 </AdminLayout>
               </ProtectedRoute>
             }

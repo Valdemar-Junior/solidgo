@@ -20,7 +20,8 @@ import {
     Bell,
     Box,
     CarFront,
-    Bot
+    Bot,
+    Radar
 } from 'lucide-react';
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
@@ -45,6 +46,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         { name: 'Gestao de Entregas', href: '/admin/routes', icon: Truck },
         { name: 'Gestao de Montagem', href: '/admin/assembly', icon: Hammer },
         { name: 'Controle de Frota', href: '/admin/fleet', icon: CarFront },
+        { name: 'Ao vivo', href: '/admin/ao-vivo', icon: Radar },
         { name: 'MDF-e', href: '/admin/mdfe', icon: FileBadge2 },
         { name: 'Relatorios', href: '/admin/reports', icon: FileSpreadsheet },
         { name: 'Cadastros e Equipes', href: '/admin/users-teams', icon: Users },

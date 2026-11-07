@@ -5,10 +5,11 @@ import { ErroFerramenta, type Contexto, type Ferramenta, type Json } from './_ag
 import { FERRAMENTAS_LEITURA } from './_agente/ferramentas.js'
 import { FERRAMENTAS_ROTA } from './_agente/rota.js'
 import { conversar, hermesConfigurado } from './_agente/chat.js'
+import { posicoesAoVivo, salvarVinculo } from './_agente/rastreio.js'
 
 // Função única do agente (o plano gratuito da Vercel limita a 12 funções em api/).
 //   /api/mcp                    -> canal MCP (Hermes), protegido por token
-//   /api/agente?canal=admin&... -> telas do SolidGo (config, aprovação, chat), só admin logado
+//   /api/agente?canal=admin&... -> telas do SolidGo (config, aprovação, chat, ao vivo), só admin logado
 //
 // MCP "Streamable HTTP" sem sessão, respondendo JSON simples, feito à mão
 // (só precisamos de initialize / tools/list / tools/call / ping).
@@ -190,6 +191,16 @@ async function canalAdmin(req: any, res: any) {
   const ip = ipDe(req)
 
   if (acao === 'chat' && req.method === 'POST') return conversar(req, res, supa, admin.id)
+
+  // Tela "Ao vivo" (rastreio pelos celulares, via Traccar). Só leitura + vínculo celular->motorista.
+  if (acao === 'ao_vivo' && req.method === 'GET') {
+    try { return res.status(200).json(await posicoesAoVivo(supa)) }
+    catch (e) { return res.status(502).json({ error: e instanceof Error ? e.message : 'Falha ao ler o Traccar.' }) }
+  }
+  if (acao === 'vincular_celular' && req.method === 'POST') {
+    try { return res.status(200).json(await salvarVinculo(supa, corpo.dispositivo_id, corpo.motorista_id)) }
+    catch (e) { return res.status(400).json({ error: e instanceof Error ? e.message : 'Falha ao vincular.' }) }
+  }
   if (acao === 'chat_status' && req.method === 'GET') {
     const config = await lerConfig(supa)
     return res.status(200).json({ configurado: hermesConfigurado(), ativo: config?.ativo !== false })
