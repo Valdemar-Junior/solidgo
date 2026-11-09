@@ -1,7 +1,7 @@
 import supabase from '../../../supabase/client';
 
 // Chamadas das telas do Agente IA para /api/agente?canal=admin (só admin logado).
-export async function chamarAgente<T = any>(acao: string, opcoes: { method?: 'GET' | 'POST'; body?: unknown; params?: Record<string, string> } = {}): Promise<T> {
+export async function chamarAgente<T = any>(acao: string, opcoes: { method?: 'GET' | 'POST'; body?: unknown; params?: Record<string, string>; headers?: Record<string, string> } = {}): Promise<T> {
   const { data: { session } } = await supabase.auth.getSession();
   const qs = new URLSearchParams({ canal: 'admin', acao, ...(opcoes.params || {}) });
   const resp = await fetch(`/api/agente?${qs.toString()}`, {
@@ -9,6 +9,7 @@ export async function chamarAgente<T = any>(acao: string, opcoes: { method?: 'GE
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${session?.access_token || ''}`,
+      ...(opcoes.headers || {}),
     },
     body: opcoes.body ? JSON.stringify(opcoes.body) : undefined,
   });

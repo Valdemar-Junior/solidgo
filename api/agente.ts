@@ -203,6 +203,12 @@ async function canalAdmin(req: any, res: any) {
     catch (e) { return res.status(400).json({ error: e instanceof Error ? e.message : 'Falha ao vincular.' }) }
   }
   if (acao.startsWith('wa_')) {
+    // Senha extra da tela, opcional: sem WA_TELA_SENHA na Vercel, vale só o login de admin.
+    // A faixa de "desconectado" fica de fora porque não mostra nenhum dado.
+    const senhaTela = (process.env.WA_TELA_SENHA || '').trim()
+    if (senhaTela && acao !== 'wa_faixa' && !iguais(cabecalho(req, 'x-wa-senha'), encodeURIComponent(senhaTela))) {
+      return res.status(403).json({ error: 'SENHA_WHATSAPP' })
+    }
     try {
       const resultado = await acaoWhatsapp(supa, acao, String(req.method), corpo, baseUrlDe(req))
       if (['wa_ativar_recebimento', 'wa_reiniciar', 'wa_desconectar'].includes(acao)) {

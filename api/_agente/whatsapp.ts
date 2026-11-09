@@ -9,6 +9,7 @@ import type { Json } from './comum.js'
 //   EVOLUTION_API_KEY   token da instância (não a chave global AUTHENTICATION_API_KEY)
 //   EVOLUTION_INSTANCE  ex.: lojao
 //   WA_WEBHOOK_TOKEN    segredo do webhook, com pelo menos 32 caracteres
+//   WA_TELA_SENHA       opcional: senha extra para abrir a tela do WhatsApp
 
 const LIMITE_MIDIA = 16 * 1024 * 1024
 

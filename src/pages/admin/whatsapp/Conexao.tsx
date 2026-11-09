@@ -29,6 +29,11 @@ type Estado = {
 };
 
 const SEGUNDOS_QR = 30;
+const CHAVE_SENHA = 'wa_tela_senha'; // só nesta aba: fechou, pede de novo
+const SENHA_PEDIDA = 'SENHA_WHATSAPP';
+
+const chamar = <T = any,>(acao: string, opcoes: { method?: 'GET' | 'POST'; body?: unknown } = {}) =>
+  chamarAgente<T>(acao, { ...opcoes, headers: { 'x-wa-senha': encodeURIComponent(sessionStorage.getItem(CHAVE_SENHA) || '') } });
 
 const srcDoQr = (b: string) => (b.startsWith('data:') ? b : `data:image/png;base64,${b}`);
 
@@ -50,27 +55,46 @@ export default function Conexao() {
   const [numero, setNumero] = useState('');
   const [codigo, setCodigo] = useState<string | null>(null);
   const [ocupado, setOcupado] = useState(false);
+  const [precisaSenha, setPrecisaSenha] = useState(false);
+  const [senha, setSenha] = useState('');
+  const [senhaErrada, setSenhaErrada] = useState(false);
   const contagem = useRef(SEGUNDOS_QR);
 
   const conectado = dados?.estado === 'open';
 
   const carregar = useCallback(async () => {
     try {
-      setDados(await chamarAgente<Estado>('wa_estado'));
+      setDados(await chamar<Estado>('wa_estado'));
       setErro(null);
+      setPrecisaSenha(false);
     } catch (e: any) {
+      if (e.message === SENHA_PEDIDA) {
+        sessionStorage.removeItem(CHAVE_SENHA);
+        setDados(null);
+        setPrecisaSenha(true);
+        return;
+      }
       setErro(e.message || 'Falha ao consultar o WhatsApp.');
     }
   }, []);
 
+  const entrar = async (e: React.FormEvent) => {
+    e.preventDefault();
+    sessionStorage.setItem(CHAVE_SENHA, senha);
+    setSenha('');
+    setSenhaErrada(true); // se a senha servir, o formulário some
+    await carregar();
+  };
+
   // Enquanto conecta, confere a cada 5 s para virar "Conectado" logo.
   useEffect(() => {
+    if (precisaSenha) return;
     carregar();
     const id = window.setInterval(() => {
       if (document.visibilityState === 'visible') carregar();
     }, modo ? 5_000 : 30_000);
     return () => window.clearInterval(id);
-  }, [carregar, modo]);
+  }, [carregar, modo, precisaSenha]);
 
   useEffect(() => {
     if (conectado) {
@@ -86,7 +110,7 @@ export default function Conexao() {
     let ativo = true;
     const gerar = async () => {
       try {
-        const r = await chamarAgente<{ base64: string | null }>('wa_qr', { method: 'POST' });
+        const r = await chamar<{ base64: string | null }>('wa_qr', { method: 'POST' });
         if (ativo) setQr(r.base64);
       } catch (e: any) {
         if (ativo) toast.error(e.message || 'Não consegui gerar o QR.');
@@ -109,7 +133,7 @@ export default function Conexao() {
   const executar = async (acao: string, sucesso: string) => {
     setOcupado(true);
     try {
-      await chamarAgente(acao, { method: 'POST' });
+      await chamar(acao, { method: 'POST' });
       toast.success(sucesso);
       await carregar();
     } catch (e: any) {
@@ -122,7 +146,7 @@ export default function Conexao() {
   const gerarCodigo = async () => {
     setOcupado(true);
     try {
-      const r = await chamarAgente<{ pairingCode: string | null }>('wa_parear', { method: 'POST', body: { numero } });
+      const r = await chamar<{ pairingCode: string | null }>('wa_parear', { method: 'POST', body: { numero } });
       if (!r.pairingCode) toast.error('A Evolution não devolveu o código. Tente de novo ou use o QR.');
       setCodigo(r.pairingCode);
     } catch (e: any) {
@@ -137,6 +161,26 @@ export default function Conexao() {
       executar('wa_desconectar', 'WhatsApp desconectado.');
     }
   };
+
+  if (precisaSenha) {
+    return (
+      <form onSubmit={entrar} className="p-6 max-w-sm mx-auto space-y-3">
+        <h2 className="text-lg font-semibold text-gray-800">Digite a senha do WhatsApp</h2>
+        <input
+          type="password"
+          autoFocus
+          autoComplete="off"
+          value={senha}
+          onChange={(e) => setSenha(e.target.value)}
+          className="w-full rounded-lg border px-3 py-2"
+        />
+        {senhaErrada && <p className="text-sm text-red-700">Senha incorreta.</p>}
+        <button disabled={!senha} className="w-full rounded-lg bg-blue-600 px-4 py-2 font-medium text-white hover:bg-blue-700 disabled:opacity-50">
+          Entrar
+        </button>
+      </form>
+    );
+  }
 
   if (!dados && !erro) {
     return <div className="p-6 flex items-center gap-2 text-gray-500"><Loader2 className="h-5 w-5 animate-spin" /> Consultando o WhatsApp…</div>;
