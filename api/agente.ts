@@ -210,7 +210,7 @@ async function canalAdmin(req: any, res: any) {
       return res.status(403).json({ error: 'SENHA_WHATSAPP' })
     }
     try {
-      const resultado = await acaoWhatsapp(supa, acao, String(req.method), corpo, baseUrlDe(req))
+      const resultado = await acaoWhatsapp(supa, acao, String(req.method), { ...req.query, ...corpo }, baseUrlDe(req), admin.id)
       if (['wa_ativar_recebimento', 'wa_reiniciar', 'wa_desconectar'].includes(acao)) {
         await auditar(supa, { origem: 'admin', acao, ok: true, ator: admin.id, ip })
       }

@@ -22,7 +22,8 @@ import {
     CarFront,
     Bot,
     Radar,
-    MessageCircle
+    MessageCircle,
+    MessagesSquare
 } from 'lucide-react';
 import { chamarAgente } from '../pages/admin/agente/api';
 
@@ -65,7 +66,10 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         { name: 'Gestao de Montagem', href: '/admin/assembly', icon: Hammer },
         { name: 'Controle de Frota', href: '/admin/fleet', icon: CarFront },
         { name: 'Ao vivo', href: '/admin/ao-vivo', icon: Radar },
-        ...(ehAdmin ? [{ name: 'WhatsApp', href: '/admin/whatsapp/conexao', icon: MessageCircle }] : []),
+        ...(ehAdmin ? [
+            { name: 'Atendimento', href: '/admin/whatsapp/atendimento', icon: MessagesSquare },
+            { name: 'WhatsApp (conexao)', href: '/admin/whatsapp/conexao', icon: MessageCircle },
+        ] : []),
         { name: 'MDF-e', href: '/admin/mdfe', icon: FileBadge2 },
         { name: 'Relatorios', href: '/admin/reports', icon: FileSpreadsheet },
         { name: 'Cadastros e Equipes', href: '/admin/users-teams', icon: Users },

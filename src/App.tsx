@@ -17,6 +17,7 @@ import AgenteAprovar from './pages/admin/agente/AgenteAprovar';
 // Mapa (Leaflet) só baixa quando alguém abre a tela Ao vivo.
 const AoVivo = lazy(() => import('./pages/admin/rastreio/AoVivo'));
 const WhatsappConexao = lazy(() => import('./pages/admin/whatsapp/Conexao'));
+const WhatsappAtendimento = lazy(() => import('./pages/admin/whatsapp/Atendimento'));
 import DriverDashboard from './pages/driver/Dashboard';
 import DriverRouteDetails from './pages/driver/RouteDetails';
 import ConferenteDashboard from './pages/conferente/Dashboard';
@@ -152,6 +153,18 @@ function App() {
                 <AdminLayout>
                   <Suspense fallback={<div className="p-4 text-sm text-gray-500">carregando mapa…</div>}>
                     <AoVivo />
+                  </Suspense>
+                </AdminLayout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/whatsapp/atendimento"
+            element={
+              <ProtectedRoute allowedRoles={['admin']}>
+                <AdminLayout>
+                  <Suspense fallback={<div className="p-4 text-sm text-gray-500">carregando…</div>}>
+                    <WhatsappAtendimento />
                   </Suspense>
                 </AdminLayout>
               </ProtectedRoute>

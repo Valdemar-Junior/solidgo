@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Json } from './comum.js'
 
@@ -312,7 +313,175 @@ function numeroParaParear(valor: unknown): string {
   return completo
 }
 
-export async function acaoWhatsapp(supa: SupabaseClient, acao: string, metodo: string, corpo: Json, baseUrl: string): Promise<Json> {
+// ===========================================================================
+// Tela de Atendimento (só admin)
+// ===========================================================================
+const CAMPOS_CONVERSA = 'id, telefone, nome_contato, order_id_erp, status, ultima_mensagem, ultima_mensagem_em, nao_lidas'
+
+async function conversaDe(supa: SupabaseClient, id: unknown) {
+  if (typeof id !== 'string' || !/^[0-9a-f-]{36}$/i.test(id)) throw new Error('Conversa inválida.')
+  const { data, error } = await supa.from('wa_conversas').select('id, remote_jid, status').eq('id', id).maybeSingle()
+  if (error) throw new Error(error.message)
+  if (!data) throw new Error('Conversa não encontrada.')
+  return data
+}
+
+async function painelAtendimento(supa: SupabaseClient, filtro: unknown, conversaId: unknown) {
+  const id = typeof conversaId === 'string' && conversaId ? conversaId : null
+  const [lista, conversa, mensagens, instancia] = await Promise.all([
+    supa.from('wa_conversas').select(CAMPOS_CONVERSA)
+      .in('status', filtro === 'fechadas' ? ['fechada'] : ['aberta', 'aguardando'])
+      .order('ultima_mensagem_em', { ascending: false, nullsFirst: false }).limit(200),
+    id ? supa.from('wa_conversas').select(CAMPOS_CONVERSA).eq('id', id).maybeSingle() : null,
+    id ? supa.from('wa_mensagens')
+      .select('id, direcao, tipo, texto, midia_path, midia_mimetype, lat, lng, local_nome, autor, status_envio, enviada_em')
+      .eq('conversa_id', id).order('enviada_em', { ascending: false }).limit(200) : null,
+    supa.from('wa_instancia_status').select('estado').eq('instancia', instanciaWhatsapp()).maybeSingle(),
+  ])
+  const erro = lista.error || conversa?.error || mensagens?.error
+  if (erro) throw new Error(erro.message)
+
+  const conversas = (lista.data || []) as any[]
+  const aberta = (conversa?.data ?? null) as any
+  const codigos = [...new Set([...conversas, ...(aberta ? [aberta] : [])].map((c) => c.order_id_erp).filter(Boolean))]
+  const pedidos = codigos.length
+    ? await supa.from('orders').select('order_id_erp, customer_name').in('order_id_erp', codigos)
+    : null
+  const clienteDo = new Map((pedidos?.data || []).map((p: any) => [p.order_id_erp, p.customer_name]))
+  const comCliente = (c: any) => ({ ...c, cliente: clienteDo.get(c.order_id_erp) ?? null })
+
+  return {
+    conversas: conversas.map(comCliente),
+    conversa: aberta ? comCliente(aberta) : null,
+    mensagens: ((mensagens?.data || []) as any[]).reverse(),
+    estado: instancia.data?.estado ?? null,
+  }
+}
+
+const MIME_POR_EXTENSAO = Object.fromEntries(Object.entries(EXTENSOES).map(([m, e]) => [e, m]))
+
+// O arquivo vai direto do navegador para o Storage, porque a Vercel recusa corpo acima de 4,5 MB.
+async function prepararAnexo(supa: SupabaseClient, corpo: Json) {
+  const conversa = await conversaDe(supa, corpo.conversa_id)
+  const extensao = EXTENSOES[String(corpo.mimetype ?? '').split(';')[0].trim().toLowerCase()]
+  if (!extensao) throw new Error('Tipo de arquivo não permitido.')
+  const { data, error } = await supa.storage.from('wa-midia')
+    .createSignedUploadUrl(`conversas/${conversa.id}/envio/${randomUUID()}.${extensao}`)
+  if (error || !data) throw new Error('Não consegui preparar o envio do arquivo.')
+  return { caminho: data.path, token: data.token }
+}
+
+async function enviarMensagem(supa: SupabaseClient, corpo: Json, adminId: string) {
+  const conversa = await conversaDe(supa, corpo.conversa_id)
+  const texto = String(corpo.texto ?? '').trim().slice(0, 4096)
+  const anexo = corpo.anexo as Json | undefined
+  if (!texto && !anexo) throw new Error('Mensagem vazia.')
+
+  const instancia = encodeURIComponent(instanciaWhatsapp())
+  const number = conversa.remote_jid // o endereço real, que pode não ter o 9º dígito
+  let tipo: Conteudo['tipo'] = 'texto'
+  let midia: { midia_path: string; midia_mimetype: string } | null = null
+  let envio
+
+  if (anexo) {
+    const caminho = String(anexo.caminho ?? '')
+    const extensao = caminho.split('.').pop() || ''
+    const mimetype = MIME_POR_EXTENSAO[extensao]
+    if (!caminho.startsWith(`conversas/${conversa.id}/envio/`) || caminho.includes('..') || !mimetype) throw new Error('Anexo inválido.')
+    const assinada = await supa.storage.from('wa-midia').createSignedUrl(caminho, 600)
+    if (assinada.error || !assinada.data) throw new Error('Não encontrei o arquivo enviado.')
+
+    const mediatype = mimetype.startsWith('image/') ? 'image' : mimetype.startsWith('video/') ? 'video' : 'document'
+    tipo = mediatype === 'image' ? 'imagem' : mediatype === 'video' ? 'video' : 'documento'
+    midia = { midia_path: caminho, midia_mimetype: mimetype }
+    const fileName = String(anexo.nome ?? '').replace(/[/\\]/g, '_').slice(0, 120) || `arquivo.${extensao}`
+    envio = await evolution(`/message/sendMedia/${instancia}`, 'POST',
+      { number, mediatype, mimetype, caption: texto, media: assinada.data.signedUrl, fileName }, 45000)
+  } else {
+    envio = await evolution(`/message/sendText/${instancia}`, 'POST', { number, text: texto })
+  }
+  exigirSucesso(envio, 'enviar a mensagem')
+  const messageId = String(envio.json?.key?.id ?? '')
+  if (!messageId) throw new Error('A Evolution não confirmou o envio.')
+
+  const { data: usuario } = await supa.from('users').select('name').eq('id', adminId).maybeSingle()
+  // Sem ignoreDuplicates: se o webhook chegou primeiro, aqui ele ganha o nome do atendente.
+  const { error } = await supa.from('wa_mensagens').upsert({
+    conversa_id: conversa.id,
+    message_id: messageId,
+    direcao: 'out',
+    tipo,
+    texto: texto || null,
+    ...midia,
+    autor: usuario?.name || 'Atendente',
+    status_envio: 'sent',
+    enviada_em: new Date().toISOString(),
+    chave: envio.json?.key ?? null,
+  }, { onConflict: 'message_id' })
+  if (error) throw new Error('A mensagem foi enviada, mas não consegui registrar aqui. Não envie de novo.')
+
+  if (conversa.status === 'fechada') await supa.from('wa_conversas').update({ status: 'aberta' }).eq('id', conversa.id)
+  return { ok: true }
+}
+
+async function urlDaMidia(supa: SupabaseClient, mensagemId: unknown) {
+  if (typeof mensagemId !== 'string' || !/^[0-9a-f-]{36}$/i.test(mensagemId)) throw new Error('Mensagem inválida.')
+  const { data } = await supa.from('wa_mensagens').select('midia_path').eq('id', mensagemId).maybeSingle()
+  if (!data?.midia_path) throw new Error('Arquivo não guardado.')
+  const assinada = await supa.storage.from('wa-midia').createSignedUrl(data.midia_path, 6 * 60 * 60)
+  if (assinada.error || !assinada.data) throw new Error('Não consegui abrir o arquivo.')
+  return { url: assinada.data.signedUrl }
+}
+
+async function buscarPedidos(supa: SupabaseClient, termo: unknown) {
+  const q = String(termo ?? '').replace(/[^\p{L}\p{N} ]/gu, ' ').replace(/\s+/g, ' ').trim()
+  if (q.length < 3) return { pedidos: [] }
+  const digitos = q.replace(/\D/g, '')
+  const filtros: string[] = []
+  if (digitos.length >= 3) filtros.push(`order_id_erp.ilike.%${digitos}%`)
+  // Telefone: compara os 8 últimos dígitos, com ou sem traço no cadastro.
+  if (digitos.length >= 8) filtros.push(`phone.ilike.%${digitos.slice(-8, -4)}%${digitos.slice(-4)}%`)
+  if (digitos.length === 0) filtros.push(`customer_name.ilike."%${q}%"`)
+  if (filtros.length === 0) return { pedidos: [] }
+
+  const { data, error } = await supa.from('orders').select('order_id_erp, customer_name, phone, status')
+    .or(filtros.join(',')).order('created_at', { ascending: false }).limit(20)
+  if (error) throw new Error('Não consegui buscar os pedidos.')
+  return { pedidos: data || [] }
+}
+
+async function acaoAtendimento(supa: SupabaseClient, acao: string, metodo: string, corpo: Json, adminId: string): Promise<Json | null> {
+  if (metodo === 'GET') {
+    if (acao === 'wa_atendimento') return painelAtendimento(supa, corpo.filtro, corpo.conversa_id)
+    if (acao === 'wa_midia_url') return urlDaMidia(supa, corpo.mensagem_id)
+    if (acao === 'wa_buscar_pedido') return buscarPedidos(supa, corpo.q)
+    return null
+  }
+  if (metodo !== 'POST') return null
+  if (acao === 'wa_preparar_anexo') return prepararAnexo(supa, corpo)
+  if (acao === 'wa_enviar') return enviarMensagem(supa, corpo, adminId)
+
+  let mudanca: Json | null = null
+  if (acao === 'wa_marcar_lida') mudanca = { nao_lidas: 0 }
+  if (acao === 'wa_fechar') mudanca = { status: 'fechada', nao_lidas: 0 }
+  if (acao === 'wa_reabrir') mudanca = { status: 'aberta' }
+  if (acao === 'wa_vincular') {
+    const codigo = typeof corpo.order_id_erp === 'string' && corpo.order_id_erp.trim() ? corpo.order_id_erp.trim() : null
+    if (codigo) {
+      const { data } = await supa.from('orders').select('id').eq('order_id_erp', codigo).limit(1)
+      if (!data?.length) throw new Error('Pedido não encontrado.')
+    }
+    mudanca = { order_id_erp: codigo }
+  }
+  if (!mudanca) return null
+
+  const conversa = await conversaDe(supa, corpo.conversa_id)
+  const { error } = await supa.from('wa_conversas').update({ ...mudanca, updated_at: new Date().toISOString() }).eq('id', conversa.id)
+  if (error) throw new Error('Não consegui salvar.')
+  return { ok: true }
+}
+
+export async function acaoWhatsapp(supa: SupabaseClient, acao: string, metodo: string, corpo: Json, baseUrl: string, adminId: string): Promise<Json> {
   // A faixa vermelha lê só o banco, para não consultar a Evolution em toda tela.
   if (acao === 'wa_faixa' && metodo === 'GET') {
     const { data } = await supa.from('wa_instancia_status').select('estado').eq('instancia', instanciaWhatsapp()).maybeSingle()
@@ -325,6 +494,9 @@ export async function acaoWhatsapp(supa: SupabaseClient, acao: string, metodo: s
 
   const instancia = encodeURIComponent(instanciaWhatsapp())
   if (acao === 'wa_estado' && metodo === 'GET') return lerEstado(supa, baseUrl)
+
+  const atendimento = await acaoAtendimento(supa, acao, metodo, corpo, adminId)
+  if (atendimento) return atendimento
 
   if (metodo === 'POST') {
     if (acao === 'wa_ativar_recebimento') {
