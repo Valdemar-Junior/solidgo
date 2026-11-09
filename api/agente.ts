@@ -6,6 +6,7 @@ import { FERRAMENTAS_LEITURA } from './_agente/ferramentas.js'
 import { FERRAMENTAS_ROTA } from './_agente/rota.js'
 import { conversar, hermesConfigurado } from './_agente/chat.js'
 import { posicoesAoVivo, salvarVinculo } from './_agente/rastreio.js'
+import { acaoWhatsapp, processarWebhookWhatsapp, tokenWebhookWhatsapp } from './_agente/whatsapp.js'
 
 // Função única do agente (o plano gratuito da Vercel limita a 12 funções em api/).
 //   /api/mcp                    -> canal MCP (Hermes), protegido por token
@@ -201,6 +202,17 @@ async function canalAdmin(req: any, res: any) {
     try { return res.status(200).json(await salvarVinculo(supa, corpo.dispositivo_id, corpo.motorista_id)) }
     catch (e) { return res.status(400).json({ error: e instanceof Error ? e.message : 'Falha ao vincular.' }) }
   }
+  if (acao.startsWith('wa_')) {
+    try {
+      const resultado = await acaoWhatsapp(supa, acao, String(req.method), corpo, baseUrlDe(req))
+      if (['wa_ativar_recebimento', 'wa_reiniciar', 'wa_desconectar'].includes(acao)) {
+        await auditar(supa, { origem: 'admin', acao, ok: true, ator: admin.id, ip })
+      }
+      return res.status(200).json(resultado)
+    } catch (e) {
+      return res.status(502).json({ error: e instanceof Error ? e.message : 'Falha ao falar com o WhatsApp.' })
+    }
+  }
   if (acao === 'chat_status' && req.method === 'GET') {
     const config = await lerConfig(supa)
     return res.status(200).json({ configurado: hermesConfigurado(), ativo: config?.ativo !== false })
@@ -299,7 +311,41 @@ async function canalAdmin(req: any, res: any) {
   return res.status(404).json({ error: 'Ação desconhecida' })
 }
 
+// ===========================================================================
+// Webhook do WhatsApp. A Evolution não assina o envio: o segredo vai na URL.
+// Grava antes de responder: depois da resposta a Vercel pode encerrar a função.
+// Se falhar, responde 500 e o reenvio não duplica nada (message_id é único).
+// ===========================================================================
+async function canalWhatsapp(req: any, res: any) {
+  if (req.method !== 'POST') {
+    res.setHeader('Allow', 'POST')
+    return res.status(405).json({ error: 'Use POST' })
+  }
+  const esperado = tokenWebhookWhatsapp()
+  if (esperado.length < 32 || !iguais(String(req.query?.token ?? ''), esperado)) {
+    return res.status(401).json({ error: 'Não autorizado' })
+  }
+  const supa = clienteBanco()
+  if (!supa) return res.status(500).json({ error: 'Servidor sem configuração do banco' })
+
+  let corpo: unknown = req.body
+  if (typeof corpo === 'string') {
+    try { corpo = JSON.parse(corpo) } catch { return res.status(400).json({ error: 'JSON inválido' }) }
+  }
+  if (!corpo || typeof corpo !== 'object') return res.status(400).json({ error: 'Requisição inválida' })
+
+  try {
+    await processarWebhookWhatsapp(supa, corpo as Json)
+    return res.status(200).json({ ok: true })
+  } catch (e) {
+    console.error('[whatsapp] webhook falhou:', e instanceof Error ? e.message : e)
+    return res.status(500).json({ error: 'Falha ao gravar' })
+  }
+}
+
 export default async function handler(req: any, res: any) {
-  if (String(req.query?.canal ?? '') === 'admin') return canalAdmin(req, res)
+  const canal = String(req.query?.canal ?? '')
+  if (canal === 'admin') return canalAdmin(req, res)
+  if (canal === 'whatsapp') return canalWhatsapp(req, res)
   return canalMcp(req, res)
 }

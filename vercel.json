@@ -10,6 +10,10 @@
       "destination": "/api/agente"
     },
     {
+      "source": "/api/whatsapp/webhook",
+      "destination": "/api/agente?canal=whatsapp"
+    },
+    {
       "source": "/fleet",
       "destination": "/fleet/index.html"
     },

@@ -21,18 +21,36 @@ import {
     Box,
     CarFront,
     Bot,
-    Radar
+    Radar,
+    MessageCircle
 } from 'lucide-react';
+import { chamarAgente } from '../pages/admin/agente/api';
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
     const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
     const { user, logout } = useAuthStore();
     const location = useLocation();
     const navigate = useNavigate();
+    const [whatsappCaiu, setWhatsappCaiu] = useState(false);
+    const ehAdmin = user?.role === 'admin';
 
     useEffect(() => {
         setIsMobileMenuOpen(false);
     }, [location.pathname]);
+
+    // Faixa de "WhatsApp desconectado": confere ao trocar de tela e a cada minuto.
+    useEffect(() => {
+        if (!ehAdmin) return;
+        const conferir = () => {
+            if (document.visibilityState !== 'visible') return;
+            chamarAgente<{ desconectado?: boolean }>('wa_faixa')
+                .then((r) => setWhatsappCaiu(r.desconectado === true))
+                .catch(() => { /* a faixa nunca atrapalha a tela */ });
+        };
+        conferir();
+        const id = window.setInterval(conferir, 60_000);
+        return () => window.clearInterval(id);
+    }, [ehAdmin, location.pathname]);
 
     const handleLogout = async () => {
         await logout();
@@ -47,6 +65,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         { name: 'Gestao de Montagem', href: '/admin/assembly', icon: Hammer },
         { name: 'Controle de Frota', href: '/admin/fleet', icon: CarFront },
         { name: 'Ao vivo', href: '/admin/ao-vivo', icon: Radar },
+        ...(ehAdmin ? [{ name: 'WhatsApp', href: '/admin/whatsapp/conexao', icon: MessageCircle }] : []),
         { name: 'MDF-e', href: '/admin/mdfe', icon: FileBadge2 },
         { name: 'Relatorios', href: '/admin/reports', icon: FileSpreadsheet },
         { name: 'Cadastros e Equipes', href: '/admin/users-teams', icon: Users },
@@ -167,6 +186,11 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
                     </div>
                 </header>
 
+                {whatsappCaiu && location.pathname !== '/admin/whatsapp/conexao' && (
+                    <Link to="/admin/whatsapp/conexao" className="shrink-0 bg-red-600 px-4 py-2 text-center text-sm font-semibold text-white hover:bg-red-700">
+                        WhatsApp desconectado — reconectar
+                    </Link>
+                )}
                 <main className="flex-1 overflow-auto bg-gray-50">
                     {children}
                 </main>
