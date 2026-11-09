@@ -345,10 +345,13 @@ async function painelAtendimento(supa: SupabaseClient, filtro: unknown, conversa
   const aberta = (conversa?.data ?? null) as any
   const codigos = [...new Set([...conversas, ...(aberta ? [aberta] : [])].map((c) => c.order_id_erp).filter(Boolean))]
   const pedidos = codigos.length
-    ? await supa.from('orders').select('order_id_erp, customer_name').in('order_id_erp', codigos)
+    ? await supa.from('orders').select('order_id_erp, customer_name, address_json').in('order_id_erp', codigos)
     : null
-  const clienteDo = new Map((pedidos?.data || []).map((p: any) => [p.order_id_erp, p.customer_name]))
-  const comCliente = (c: any) => ({ ...c, cliente: clienteDo.get(c.order_id_erp) ?? null })
+  const pedidoDo = new Map((pedidos?.data || []).map((p: any) => [p.order_id_erp, p]))
+  const comCliente = (c: any) => {
+    const pedido: any = pedidoDo.get(c.order_id_erp)
+    return { ...c, cliente: pedido?.customer_name ?? null, pedido_lat: pedido?.address_json?.lat ?? null, pedido_lng: pedido?.address_json?.lng ?? null }
+  }
 
   return {
     conversas: conversas.map(comCliente),
@@ -450,6 +453,83 @@ async function buscarPedidos(supa: SupabaseClient, termo: unknown) {
   return { pedidos: data || [] }
 }
 
+// Só com o clique do atendente: a conversa recebe localização de todo tipo, e um pino
+// errado manda o caminhão para o lugar errado. Grava em address_json, que é o que o
+// motorista e o mapa leem; a reimportação de pedidos não mexe nesse campo.
+async function usarLocalizacao(supa: SupabaseClient, mensagemId: unknown, adminId: string) {
+  if (typeof mensagemId !== 'string' || !/^[0-9a-f-]{36}$/i.test(mensagemId)) throw new Error('Mensagem inválida.')
+  const { data: mensagem } = await supa.from('wa_mensagens').select('conversa_id, tipo, lat, lng').eq('id', mensagemId).maybeSingle()
+  if (mensagem?.tipo !== 'localizacao' || mensagem.lat === null || mensagem.lng === null) throw new Error('Essa mensagem não tem localização.')
+
+  const { data: conversa } = await supa.from('wa_conversas').select('order_id_erp').eq('id', mensagem.conversa_id).maybeSingle()
+  if (!conversa?.order_id_erp) throw new Error('Vincule a conversa a um pedido primeiro.')
+
+  const { data: pedidos, error } = await supa.from('orders').select('id, address_json').eq('order_id_erp', conversa.order_id_erp)
+  if (error || !pedidos?.length) throw new Error('Pedido não encontrado.')
+
+  const agora = new Date().toISOString()
+  for (const pedido of pedidos as any[]) {
+    const atualizacao = await supa.from('orders').update({
+      address_json: {
+        ...(pedido.address_json || {}),
+        lat: mensagem.lat,
+        lng: mensagem.lng,
+        geo_origem: 'cliente_zap',
+        geo_confirmado_por: adminId,
+        geo_confirmado_em: agora,
+      },
+    }).eq('id', pedido.id)
+    if (atualizacao.error) throw new Error('Não consegui salvar a localização no pedido.')
+  }
+
+  const { data: entradas } = await supa.from('route_orders')
+    .select('status, route:routes(status, route_code, name)')
+    .in('order_id', (pedidos as any[]).map((p) => p.id)).eq('status', 'pending')
+  const rotas = ((entradas || []) as any[]).map((e) => (Array.isArray(e.route) ? e.route[0] : e.route))
+  const rota = rotas.find((r) => r && r.status !== 'completed')
+  return { ok: true, pedido: conversa.order_id_erp, rota: rota ? String(rota.route_code || rota.name || 'sem código') : null }
+}
+
+// Botão da consulta de pedido: abre a conversa daquele telefone já vinculada ao pedido.
+async function abrirConversaDoPedido(supa: SupabaseClient, codigo: unknown) {
+  const orderIdErp = String(codigo ?? '').trim()
+  const { data: pedidos } = orderIdErp
+    ? await supa.from('orders').select('customer_name, phone, raw_json').eq('order_id_erp', orderIdErp).limit(1)
+    : { data: null }
+  const pedido: any = pedidos?.[0]
+  if (!pedido) throw new Error('Pedido não encontrado.')
+
+  const digitos = String(pedido.phone || pedido.raw_json?.cliente_celular || '').replace(/\D/g, '')
+  const numero = telefoneCanonico(digitos.length === 10 || digitos.length === 11 ? `55${digitos}` : digitos)
+  if (numero.length < 12) throw new Error('Esse pedido não tem um telefone válido.')
+
+  const { data: existente } = await supa.from('wa_conversas').select('id, status').eq('telefone', numero).maybeSingle()
+  if (existente) {
+    const { error } = await supa.from('wa_conversas').update({
+      order_id_erp: orderIdErp,
+      status: existente.status === 'fechada' ? 'aberta' : existente.status,
+      updated_at: new Date().toISOString(),
+    }).eq('id', existente.id)
+    if (error) throw new Error('Não consegui abrir a conversa.')
+    return { conversa_id: existente.id }
+  }
+
+  // Pergunta ao WhatsApp o endereço real, que pode não ter o 9º dígito.
+  const consulta = await evolution(`/chat/whatsappNumbers/${encodeURIComponent(instanciaWhatsapp())}`, 'POST', { numbers: [numero] })
+  exigirSucesso(consulta, 'consultar o número')
+  const achado = (Array.isArray(consulta.json) ? consulta.json : []).find((n: any) => n?.exists && n?.jid)
+  if (!achado) throw new Error('Esse telefone não tem WhatsApp.')
+
+  const { data: nova, error } = await supa.from('wa_conversas').upsert({
+    telefone: numero,
+    remote_jid: String(achado.jid),
+    nome_contato: pedido.customer_name ?? null,
+    order_id_erp: orderIdErp,
+  }, { onConflict: 'telefone' }).select('id').single()
+  if (error || !nova) throw new Error('Não consegui abrir a conversa.')
+  return { conversa_id: nova.id }
+}
+
 async function acaoAtendimento(supa: SupabaseClient, acao: string, metodo: string, corpo: Json, adminId: string): Promise<Json | null> {
   if (metodo === 'GET') {
     if (acao === 'wa_atendimento') return painelAtendimento(supa, corpo.filtro, corpo.conversa_id)
@@ -460,6 +540,8 @@ async function acaoAtendimento(supa: SupabaseClient, acao: string, metodo: strin
   if (metodo !== 'POST') return null
   if (acao === 'wa_preparar_anexo') return prepararAnexo(supa, corpo)
   if (acao === 'wa_enviar') return enviarMensagem(supa, corpo, adminId)
+  if (acao === 'wa_usar_localizacao') return usarLocalizacao(supa, corpo.mensagem_id, adminId)
+  if (acao === 'wa_abrir_conversa') return abrirConversaDoPedido(supa, corpo.order_id_erp)
 
   let mudanca: Json | null = null
   if (acao === 'wa_marcar_lida') mudanca = { nao_lidas: 0 }

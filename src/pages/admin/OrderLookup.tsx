@@ -1383,6 +1383,15 @@ export default function OrderLookup() {
                       </svg>
                     </a>
                   )}
+                  {selectedOrder.phone && (
+                    <button
+                      type="button"
+                      onClick={() => navigate(`/admin/whatsapp/atendimento?pedido=${encodeURIComponent(selectedOrder.order_id_erp)}`)}
+                      className="ml-1 rounded-full bg-green-100 px-2.5 py-1 text-xs font-medium text-green-800 hover:bg-green-200 transition-colors"
+                    >
+                      Conversar pelo SolidGo
+                    </button>
+                  )}
                 </div>
                 {/* Vendedor */}
                 {(() => {

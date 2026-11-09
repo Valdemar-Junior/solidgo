@@ -211,7 +211,7 @@ async function canalAdmin(req: any, res: any) {
     }
     try {
       const resultado = await acaoWhatsapp(supa, acao, String(req.method), { ...req.query, ...corpo }, baseUrlDe(req), admin.id)
-      if (['wa_ativar_recebimento', 'wa_reiniciar', 'wa_desconectar'].includes(acao)) {
+      if (['wa_ativar_recebimento', 'wa_reiniciar', 'wa_desconectar', 'wa_usar_localizacao'].includes(acao)) {
         await auditar(supa, { origem: 'admin', acao, ok: true, ator: admin.id, ip })
       }
       return res.status(200).json(resultado)

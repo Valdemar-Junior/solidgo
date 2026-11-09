@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { ArrowLeft, Check, CheckCheck, FileText, Link2, Loader2, MapPin, Paperclip, Search, Send, X } from 'lucide-react';
 import supabase from '../../../supabase/client';
@@ -18,6 +18,8 @@ type Conversa = {
   ultima_mensagem_em: string | null;
   nao_lidas: number;
   cliente: string | null;
+  pedido_lat: number | null;
+  pedido_lng: number | null;
 };
 type Mensagem = {
   id: string;
@@ -89,8 +91,29 @@ function Midia({ m }: { m: Mensagem }) {
   );
 }
 
-function Localizacao({ m }: { m: Mensagem }) {
+function Localizacao({ m, conversa, aoSalvar }: { m: Mensagem; conversa: Conversa; aoSalvar: () => void }) {
   const [semMapa, setSemMapa] = useState(false);
+  const [salvando, setSalvando] = useState(false);
+  const emUso = conversa.pedido_lat === m.lat && conversa.pedido_lng === m.lng;
+
+  const usar = async () => {
+    if (!window.confirm(`Usar esta localização como endereço de entrega do pedido ${conversa.order_id_erp}?`)) return;
+    setSalvando(true);
+    try {
+      const r = await chamarWhatsapp<{ pedido: string; rota: string | null }>('wa_usar_localizacao', { method: 'POST', body: { mensagem_id: m.id } });
+      if (r.rota) {
+        toast.warning(`Localização salva. O pedido já está na rota ${r.rota}: confirme que o motorista atualizou a rota no celular.`, { duration: 10000 });
+      } else {
+        toast.success(`Localização salva no pedido ${r.pedido}.`);
+      }
+      aoSalvar();
+    } catch (e: any) {
+      toast.error(e.message || 'Não consegui salvar a localização.');
+    } finally {
+      setSalvando(false);
+    }
+  };
+
   return (
     <div className="space-y-1">
       {!semMapa && (
@@ -100,11 +123,20 @@ function Localizacao({ m }: { m: Mensagem }) {
       <a href={`https://www.google.com/maps?q=${m.lat},${m.lng}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-sm text-blue-700 underline">
         <MapPin className="h-4 w-4" /> Abrir no Google Maps
       </a>
+      {emUso ? (
+        <p className="flex items-center gap-1 text-sm font-medium text-green-700"><Check className="h-4 w-4" /> Em uso no pedido {conversa.order_id_erp}</p>
+      ) : conversa.order_id_erp ? (
+        <button onClick={usar} disabled={salvando} className="block rounded-lg bg-blue-600 px-3 py-1 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50">
+          Usar neste pedido
+        </button>
+      ) : (
+        <p className="text-xs text-gray-500">Vincule a conversa a um pedido para usar esta localização.</p>
+      )}
     </div>
   );
 }
 
-function Balao({ m }: { m: Mensagem }) {
+function Balao({ m, conversa, aoSalvar }: { m: Mensagem; conversa: Conversa; aoSalvar: () => void }) {
   const saida = m.direcao === 'out';
   const temMidia = ['imagem', 'audio', 'video', 'documento'].includes(m.tipo);
   return (
@@ -112,7 +144,7 @@ function Balao({ m }: { m: Mensagem }) {
       <div className={`max-w-[85%] sm:max-w-[70%] rounded-lg px-3 py-2 shadow-sm ${saida ? 'bg-green-100' : 'bg-white'}`}>
         {saida && m.autor && <p className="text-xs font-semibold text-green-800">{m.autor === 'celular' ? 'Pelo celular' : m.autor}</p>}
         {temMidia && (m.midia_path ? <Midia m={m} /> : <p className="text-xs italic text-gray-500">Arquivo não guardado ({m.tipo})</p>)}
-        {m.tipo === 'localizacao' && m.lat !== null && <Localizacao m={m} />}
+        {m.tipo === 'localizacao' && m.lat !== null && <Localizacao m={m} conversa={conversa} aoSalvar={aoSalvar} />}
         {m.tipo === 'outro' && !m.texto && <p className="text-xs italic text-gray-500">Mensagem não exibida (figurinha ou outro formato)</p>}
         {m.texto && <p className="whitespace-pre-wrap break-words text-gray-900">{m.texto}</p>}
         <p className="mt-1 flex items-center justify-end gap-1 text-[11px] text-gray-500">
@@ -206,6 +238,9 @@ export default function Atendimento() {
   const caixaMensagens = useRef<HTMLDivElement>(null);
   const pertoDoFim = useRef(true);
   const inputArquivo = useRef<HTMLInputElement>(null);
+  const [parametros, setParametros] = useSearchParams();
+  const pedidoPedido = parametros.get('pedido');
+  const pedidoAberto = useRef<string | null>(null);
 
   const carregar = useCallback(async () => {
     const consulta = ++ultimaConsulta.current;
@@ -233,6 +268,17 @@ export default function Atendimento() {
     const id = window.setInterval(() => { if (document.visibilityState === 'visible') carregar(); }, INTERVALO_MS);
     return () => window.clearInterval(id);
   }, [carregar, precisaSenha]);
+
+  // Veio da consulta de pedido. Espera o painel carregar, porque ele confirma a senha.
+  const senhaOk = painel !== null;
+  useEffect(() => {
+    if (!pedidoPedido || !senhaOk || pedidoAberto.current === pedidoPedido) return;
+    pedidoAberto.current = pedidoPedido;
+    chamarWhatsapp<{ conversa_id: string }>('wa_abrir_conversa', { method: 'POST', body: { order_id_erp: pedidoPedido } })
+      .then((r) => setSelecionada(r.conversa_id))
+      .catch((e) => toast.error(e.message || 'Não consegui abrir a conversa.'))
+      .finally(() => setParametros({}, { replace: true }));
+  }, [pedidoPedido, senhaOk, setParametros]);
 
   const conversa = painel?.conversa?.id === selecionada ? painel?.conversa ?? null : null;
   const mensagens = useMemo(() => (conversa ? painel?.mensagens ?? [] : []), [conversa, painel?.mensagens]);
@@ -399,13 +445,13 @@ export default function Atendimento() {
                   return (
                     <Fragment key={m.id}>
                       {novoDia && <p className="mx-auto w-fit rounded-md bg-white/80 px-2 py-0.5 text-xs text-gray-600">{dia}</p>}
-                      <Balao m={m} />
+                      <Balao m={m} conversa={conversa} aoSalvar={carregar} />
                     </Fragment>
                   );
                 })}
               </div>
 
-              <footer className="shrink-0 bg-white p-2 border-t">
+              <footer className="shrink-0 bg-white p-2 pr-36 border-t">
                 {anexo && (
                   <div className="mb-2 flex items-center justify-between rounded-lg bg-gray-100 px-3 py-1 text-sm">
                     <span className="truncate">{anexo.name}</span>

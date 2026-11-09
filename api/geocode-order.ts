@@ -20,6 +20,10 @@ export default async function handler(req: any, res: any) {
     if (loadError || !order) return res.status(404).json({ error: 'Order not found' })
 
     const addr = typeof order.address_json === 'string' ? JSON.parse(order.address_json) : (order.address_json || {})
+    // A localização que o cliente mandou e o atendente confirmou vale mais que o geocode.
+    if (addr.geo_origem === 'cliente_zap' && typeof addr.lat === 'number' && typeof addr.lng === 'number') {
+      return res.status(200).json({ ok: true, lat: addr.lat, lng: addr.lng, method: 'cliente_zap' })
+    }
     const raw = order.raw_json || {}
     const enriched: any = {
       street: addr.street || raw.destinatario_endereco || '',
