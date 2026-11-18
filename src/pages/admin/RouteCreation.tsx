@@ -2678,35 +2678,53 @@ function RouteCreationContent() {
         let releasedNotesMap: Record<string, string> = {};
         if (rawOrders.length > 0) {
           try {
-            const { data: carrierFlagsData, error: carrierFlagsError } = await supabase
-              .from('orders')
-              .select('id, is_carrier_delivery')
-              .in('id', rawOrders.map((order) => String(order.id)));
+            // A fila passa de 600 pedidos. Mandar todos os ids num unico .in() estoura o
+            // tamanho da URL e a consulta falha; antes a falha era ignorada em silencio e
+            // pedido RETIRADO aparecia na fila (caso 137983, 18/11/2026). Por isso as tres
+            // consultas abaixo vao em blocos, como ja faz a Auditoria.
+            const rawOrderIds = rawOrders.map((order) => String(order.id));
+            const ID_CHUNK_SIZE = 150;
+            const fetchInChunks = async (
+              buildQuery: (ids: string[]) => PromiseLike<{ data: any[] | null; error: any }>
+            ): Promise<{ rows: any[]; failed: boolean }> => {
+              const rows: any[] = [];
+              let failed = false;
+              for (let index = 0; index < rawOrderIds.length; index += ID_CHUNK_SIZE) {
+                const { data, error } = await buildQuery(rawOrderIds.slice(index, index + ID_CHUNK_SIZE));
+                if (error) {
+                  failed = true;
+                  console.error('[RouteCreation] Falha em consulta por blocos:', error);
+                  continue;
+                }
+                rows.push(...(data || []));
+              }
+              return { rows, failed };
+            };
 
-            if (!carrierFlagsError) {
-              carrierDeliveryMap = new Map(
-                (carrierFlagsData || []).map((row: any) => [String(row.id), Boolean(row.is_carrier_delivery)])
-              );
+            const [carrierFlags, withdrawals, releaseAssignments] = await Promise.all([
+              fetchInChunks((ids) => supabase.from('orders').select('id, is_carrier_delivery').in('id', ids)),
+              fetchInChunks((ids) => supabase.from('order_withdrawals').select('order_id').in('order_id', ids)),
+              fetchInChunks((ids) => supabase
+                .from('store_release_assignments')
+                .select('order_id, status, release_notes, updated_at')
+                .in('order_id', ids)
+                .eq('status', 'released')),
+            ]);
+
+            carrierDeliveryMap = new Map(
+              carrierFlags.rows.map((row: any) => [String(row.id), Boolean(row.is_carrier_delivery)])
+            );
+
+            withdrawnOrderIds = new Set(withdrawals.rows.map((row: any) => String(row.order_id)));
+            if (withdrawals.failed) {
+              toast.warning('Não foi possível conferir todas as retiradas. Algum pedido já retirado pode aparecer na fila; recarregue a tela.');
             }
 
-            const { data: withdrawalsData, error: withdrawalsError } = await supabase
-              .from('order_withdrawals')
-              .select('order_id')
-              .in('order_id', rawOrders.map((order) => String(order.id)));
-
-            if (!withdrawalsError) {
-              withdrawnOrderIds = new Set((withdrawalsData || []).map((row: any) => String(row.order_id)));
-            }
-
-            const { data: releaseAssignmentsData, error: releaseAssignmentsError } = await supabase
-              .from('store_release_assignments')
-              .select('order_id, status, release_notes, updated_at')
-              .in('order_id', rawOrders.map((order) => String(order.id)))
-              .eq('status', 'released')
-              .order('updated_at', { ascending: false });
-
-            if (!releaseAssignmentsError) {
-              for (const row of releaseAssignmentsData || []) {
+            const releaseAssignmentsData = [...releaseAssignments.rows].sort((a: any, b: any) =>
+              String(b.updated_at || '').localeCompare(String(a.updated_at || ''))
+            );
+            {
+              for (const row of releaseAssignmentsData) {
                 const orderId = String((row as any).order_id || '');
                 if (!orderId || releasedNotesMap[orderId]) continue;
                 const notes = String((row as any).release_notes || '').trim();
