@@ -1,4 +1,4 @@
-import { ArrowRight, FileSpreadsheet, Goal, Hammer, Package, PackageSearch, Truck } from 'lucide-react';
+import { ArrowRight, FileSpreadsheet, Goal, Hammer, LayoutDashboard, Package, PackageSearch, Truck } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
 type ReportCard = {
@@ -47,6 +47,15 @@ const REPORT_CARDS: ReportCard[] = [
     icon: Goal,
     accent: 'from-orange-600 to-amber-500',
     iconBg: 'bg-orange-50 text-orange-700',
+  },
+  {
+    id: 'assembly-panel',
+    title: 'Painel de Montagem',
+    description: 'Montagens geradas, realizadas e agendadas por periodo, cidade e montador, com medias e impressao em PDF.',
+    href: '/admin/reports/assembly-panel',
+    icon: LayoutDashboard,
+    accent: 'from-amber-500 to-orange-600',
+    iconBg: 'bg-amber-50 text-amber-700',
   },
   {
     id: 'product-commitment',
