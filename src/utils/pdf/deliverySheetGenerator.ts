@@ -204,8 +204,11 @@ export class DeliverySheetGenerator {
       const obsInternalLinesPre = obsInternalPre ? this.wrapText(String(obsInternalPre), width - margin * 2 - obsIWPre, helveticaFont, 10) : [];
 
       // Table config & height estimation
-      const headersPre = ['Código', 'Produto', 'Local', 'Data', 'Qtde', 'Marca'];
-      const colsPre = [38, 240, 92, 58, 24, 79];
+      // Romaneio de entrega ganha a coluna Vol (volumes como o ERP manda, sem conta); montagem e retirada não
+      const showVolumes = !isAssemblySheet && !isPickupSheet;
+      const headersPre = showVolumes ? ['Código', 'Produto', 'Local', 'Data', 'Qtde', 'Vol', 'Marca'] : ['Código', 'Produto', 'Local', 'Data', 'Qtde', 'Marca'];
+      const colsPre = showVolumes ? [38, 216, 92, 58, 24, 24, 79] : [38, 240, 92, 58, 24, 79];
+      const marcaColPre = colsPre.length - 1;
       const itemsAll = Array.isArray(order.items_json) && order.items_json.length > 0 ? order.items_json : [];
       const itemsPre = isAssemblySheet ? itemsAll.filter(isAssemblyItem) : itemsAll;
       let contentHeightPre = 16; // header row height
@@ -231,7 +234,7 @@ export class DeliverySheetGenerator {
 
         // marca
         const marcaPre = String(it?.brand || '');
-        const marcaLinesPre = this.wrapText(marcaPre, colsPre[5] - 8, helveticaFont, 9);
+        const marcaLinesPre = this.wrapText(marcaPre, colsPre[marcaColPre] - 8, helveticaFont, 9);
         const lineHPre = 11;
         const rowHPre = Math.max(11, productLinesPre.length * lineHPre, localLinesPre.length * lineHPre, marcaLinesPre.length * lineHPre);
         contentHeightPre += rowHPre + 4;
@@ -473,11 +476,11 @@ export class DeliverySheetGenerator {
         const produtoFmt = color ? `${produto} - ${color}` : produto;
         const productLines = this.wrapText(produtoFmt, cols[1] - 8, helveticaFont, 9);
         const localLines = this.wrapText(String(local || ''), cols[2] - 8, helveticaFont, 9);
-        const marcaLines = this.wrapText(String(marca || ''), cols[5] - 8, helveticaFont, 9);
+        const marcaLines = this.wrapText(String(marca || ''), cols[marcaColPre] - 8, helveticaFont, 9);
         const lineH = 11;
         const rowHeight = Math.max(11, productLines.length * lineH, localLines.length * lineH, marcaLines.length * lineH);
 
-        // Colunas na ordem: Código | Produto(+Cor) | Local | Data | Qtde | Marca
+        // Colunas na ordem: Código | Produto(+Cor) | Local | Data | Qtde | [Vol, só na entrega] | Marca
         let xx = margin + 2;
         this.drawText(page, String(codigo), xx, hy, { font: helveticaFont, size: 9, color: { r: 0, g: 0, b: 0 } });
         xx += cols[0];
@@ -493,6 +496,13 @@ export class DeliverySheetGenerator {
 
         this.drawText(page, String(qtde), xx, hy, { font: helveticaFont, size: 9, color: { r: 0, g: 0, b: 0 } });
         xx += cols[4];
+
+        if (showVolumes) {
+          // Mesmo número que a conferência usa (quantidade_volumes do ERP, gravado em quantity)
+          const volumes = it.quantity ?? it.volumes_per_unit;
+          this.drawText(page, volumes == null || volumes === '' ? '-' : String(volumes), xx, hy, { font: helveticaFont, size: 9, color: { r: 0, g: 0, b: 0 } });
+          xx += cols[5];
+        }
 
         marcaLines.forEach((ml, mi) => { this.drawText(page, ml, xx, hy - mi * lineH, { font: helveticaFont, size: 9, color: { r: 0, g: 0, b: 0 } }); });
 
