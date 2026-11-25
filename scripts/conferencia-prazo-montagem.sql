@@ -1,6 +1,7 @@
 -- Conferência (só leitura) do relatório "Prazo de montagem".
 -- Regra: entram as montagens GERADAS no período (assembly_products.created_at).
 -- A rota "BAIXA DE MONTAGENS" fica de fora.
+-- Montagem gerada depois da previsão conta como "chegou vencida da entrega", fora do % no prazo.
 -- Rode no SQL Editor do Supabase de PRODUÇÃO.
 -- Troque as datas nas duas linhas marcadas com <<<.
 --
@@ -12,6 +13,9 @@ with base as (
   select
     ap.status,
     o.previsao_montagem,
+    -- gerada depois da previsão = chegou vencida da entrega (fora do % no prazo)
+    (ap.created_at at time zone 'America/Sao_Paulo')::date
+  > (o.previsao_montagem at time zone 'America/Sao_Paulo')::date as chegou_vencida,
     case when ap.status = 'completed' and o.previsao_montagem is not null then
       (ap.completion_date  at time zone 'America/Sao_Paulo')::date
     - (o.previsao_montagem at time zone 'America/Sao_Paulo')::date
@@ -32,10 +36,11 @@ with base as (
 )
 select
   count(*)                                                        as geradas,
-  count(*) filter (where status = 'completed' and atraso <= 0)    as montadas_no_prazo,
-  count(*) filter (where status = 'completed' and atraso > 0)     as montadas_fora_do_prazo,
-  round(avg(atraso) filter (where atraso > 0), 1)                 as atraso_medio_dias,
-  max(atraso)                                                     as maior_atraso_dias,
+  count(*) filter (where status = 'completed' and not chegou_vencida and atraso <= 0) as no_prazo,
+  count(*) filter (where status = 'completed' and not chegou_vencida and atraso > 0)  as atrasou_na_montagem,
+  round(avg(atraso) filter (where not chegou_vencida and atraso > 0), 1)               as atraso_medio_dias,
+  max(atraso) filter (where not chegou_vencida)                                        as maior_atraso_dias,
+  count(*) filter (where status = 'completed' and chegou_vencida)                      as chegou_vencida_da_entrega,
   count(*) filter (where status = 'completed' and previsao_montagem is null) as montadas_sem_previsao,
   count(*) filter (where status <> 'completed')                   as ainda_nao_montadas,
   count(*) filter (where atraso_em_aberto > 0)                    as nao_montadas_ja_vencidas

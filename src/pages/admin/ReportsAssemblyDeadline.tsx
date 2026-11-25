@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { AlarmClock, ArrowLeft, CheckCircle2, Clock, HelpCircle, Loader2, MapPin, Printer, RotateCcw, Timer, Users } from 'lucide-react';
+import { AlarmClock, ArrowLeft, CheckCircle2, Clock, HelpCircle, PackageX, Loader2, MapPin, Printer, RotateCcw, Timer, Users } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { MultiSelect } from '../../components/ui/MultiSelect';
@@ -17,6 +17,7 @@ import type { AssemblyProductWithDetails } from '../../types/database';
 // - A rota "BAIXA DE MONTAGENS" (baixa em lote, data não real) fica de fora.
 // - O período filtra a data em que a montagem foi GERADA (assembly_products.created_at). Assim
 //   montagem antiga que ficou parada em rota "Aguardando" não entra no mês (pedido do dono, 25/11/2026).
+// - Gerada DEPOIS da previsão = "chegou vencida da entrega": fica à parte, fora do % (opção B do dono, 25/11/2026).
 // - "Ainda não montadas": geradas no período e sem montagem; mostra quantas já passaram da previsão.
 
 const GENERIC_ASSEMBLER_EMAILS = new Set(['montador@solidgo.local', 'montadorteste@solidgo.local']);
@@ -55,6 +56,7 @@ type ProductRow = {
   product_name: string;
   status: string;
   completion_date: string | null;
+  created_at: string;
   assembly_route_id: string | null;
   route: { id: string; name: string | null; assembler_id: string | null } | null;
   order: {
@@ -79,8 +81,14 @@ type AssemblyUnit = {
   product: string;
   assemblerId: string;
   forecastDay: string; // '' quando o pedido não tem previsão
+  generatedDay: string;
   doneDay: string; // '' quando ainda não foi montada
   delayDays: number | null; // null sem previsão; <= 0 no prazo
+  // Gerada DEPOIS da previsão: a entrega atrasou e a montagem já nasceu vencida.
+  // Não conta como atraso da montagem (decisão do dono, 25/11/2026).
+  arrivedLate: boolean;
+  arrivedLateDays: number; // quantos dias depois da previsão a montagem foi gerada
+  daysToAssemble: number | null; // dias entre gerada e montada
 };
 
 type ReportData = {
@@ -88,16 +96,18 @@ type ReportData = {
   open: AssemblyUnit[];
 };
 
-type GroupRow = {
-  key: string;
-  label: string;
+type Summary = {
   total: number;
   onTime: number;
   late: number;
+  arrivedLate: number;
   noForecast: number;
   avgDelay: number;
   maxDelay: number;
+  arrivedAvgDaysToAssemble: number;
 };
+
+type GroupRow = Summary & { key: string; label: string };
 
 const PRODUCT_SELECT = `
   id,
@@ -106,6 +116,7 @@ const PRODUCT_SELECT = `
   product_name,
   status,
   completion_date,
+  created_at,
   assembly_route_id,
   route:assembly_routes!assembly_route_id(id, name, assembler_id),
   order:orders!order_id(id, order_id_erp, customer_name, service_type, previsao_montagem, address_json, items_json, raw_items:raw_json->items)
@@ -185,7 +196,13 @@ const countAssemblies = (rows: ProductRow[]) => calculateAssemblyStats(toStatsIn
 
 const buildUnit = (key: string, pieces: ProductRow[], reference: ProductRow, doneDay: string, delayBaseDay: string): AssemblyUnit => {
   const forecastDay = toDateBR(reference.order?.previsao_montagem);
+  // Kit: vale a última peça gerada, porque só dá para montar quando todas existem.
+  const generatedDay = pieces.reduce((latest, piece) => {
+    const day = toDateBR(piece.created_at);
+    return day > latest ? day : latest;
+  }, '');
   const isKit = Boolean(kitCodeOf(reference));
+  const arrivedLate = Boolean(forecastDay && generatedDay && generatedDay > forecastDay);
   return {
     key,
     weight: isKit ? countAssemblies(pieces) : 1,
@@ -195,8 +212,12 @@ const buildUnit = (key: string, pieces: ProductRow[], reference: ProductRow, don
     product: isKit ? kitNameOf(reference) : normalizeText(reference.product_name) || '-',
     assemblerId: normalizeText(reference.route?.assembler_id),
     forecastDay,
+    generatedDay,
     doneDay,
     delayDays: forecastDay && delayBaseDay ? diffDays(forecastDay, delayBaseDay) : null,
+    arrivedLate,
+    arrivedLateDays: arrivedLate ? diffDays(forecastDay, generatedDay) : 0,
+    daysToAssemble: doneDay && generatedDay ? diffDays(generatedDay, doneDay) : null,
   };
 };
 
@@ -272,18 +293,26 @@ async function fetchReportData(startDate: string, endDate: string): Promise<Repo
 
 const sumWeight = (units: AssemblyUnit[]) => units.reduce((sum, unit) => sum + unit.weight, 0);
 
-const summarize = (units: AssemblyUnit[]) => {
+const isAssemblyLate = (unit: AssemblyUnit) => !unit.arrivedLate && (unit.delayDays ?? 0) > 0;
+
+const summarize = (units: AssemblyUnit[]): Summary => {
   const withForecast = units.filter((unit) => unit.delayDays !== null);
-  const lateUnits = withForecast.filter((unit) => (unit.delayDays ?? 0) > 0);
+  const judged = withForecast.filter((unit) => !unit.arrivedLate);
+  const lateUnits = judged.filter(isAssemblyLate);
+  const arrivedUnits = withForecast.filter((unit) => unit.arrivedLate);
   const late = sumWeight(lateUnits);
+  const arrivedLate = sumWeight(arrivedUnits);
   const delaySum = lateUnits.reduce((sum, unit) => sum + unit.weight * (unit.delayDays ?? 0), 0);
+  const arrivedDaysSum = arrivedUnits.reduce((sum, unit) => sum + unit.weight * (unit.daysToAssemble ?? 0), 0);
   return {
     total: sumWeight(units),
-    onTime: sumWeight(withForecast) - late,
+    onTime: sumWeight(judged) - late,
     late,
+    arrivedLate,
     noForecast: sumWeight(units.filter((unit) => unit.delayDays === null)),
     avgDelay: late > 0 ? delaySum / late : 0,
     maxDelay: lateUnits.reduce((max, unit) => Math.max(max, unit.delayDays ?? 0), 0),
+    arrivedAvgDaysToAssemble: arrivedLate > 0 ? arrivedDaysSum / arrivedLate : 0,
   };
 };
 
@@ -306,6 +335,7 @@ export default function ReportsAssemblyDeadline() {
   const [loading, setLoading] = useState(false);
   const [loadedPeriod, setLoadedPeriod] = useState('');
   const [showAllLate, setShowAllLate] = useState(false);
+  const [showAllArrived, setShowAllArrived] = useState(false);
 
   useEffect(() => {
     const loadAssemblers = async () => {
@@ -380,8 +410,11 @@ export default function ReportsAssemblyDeadline() {
     const open = data.open.filter(inCity);
     const openLate = open.filter((unit) => (unit.delayDays ?? 0) > 0);
     const lateUnits = done
-      .filter((unit) => (unit.delayDays ?? 0) > 0)
+      .filter(isAssemblyLate)
       .sort((a, b) => (b.delayDays ?? 0) - (a.delayDays ?? 0) || a.orderErp.localeCompare(b.orderErp));
+    const arrivedUnits = done
+      .filter((unit) => unit.arrivedLate)
+      .sort((a, b) => b.arrivedLateDays - a.arrivedLateDays || a.orderErp.localeCompare(b.orderErp));
 
     const bands = DELAY_BANDS.map((band) => ({
       label: band.label,
@@ -390,7 +423,11 @@ export default function ReportsAssemblyDeadline() {
 
     return {
       summary: summarize(done),
-      open: { count: sumWeight(open), late: sumWeight(openLate) },
+      open: {
+        count: sumWeight(open),
+        late: sumWeight(openLate),
+        arrivedLate: sumWeight(openLate.filter((unit) => unit.arrivedLate)),
+      },
       generatedCount: sumWeight(done) + sumWeight(open),
       bands,
       byCity: groupBy(done, (unit) => normalizeKey(unit.city) || 'SEM CIDADE', (key) =>
@@ -398,6 +435,7 @@ export default function ReportsAssemblyDeadline() {
       ),
       byAssembler: groupBy(done, (unit) => unit.assemblerId, (id) => assemblerById.get(id)?.label || 'Montador'),
       lateUnits,
+      arrivedUnits,
     };
   }, [data, filters.cities, filters.assemblerIds, assemblerById]);
 
@@ -411,6 +449,7 @@ export default function ReportsAssemblyDeadline() {
   const { summary } = view;
   const withForecast = summary.onTime + summary.late;
   const visibleLate = showAllLate ? view.lateUnits : view.lateUnits.slice(0, 30);
+  const visibleArrived = showAllArrived ? view.arrivedUnits : view.arrivedUnits.slice(0, 30);
 
   const printPdf = () => {
     const printWindow = window.open('', '_blank');
@@ -442,7 +481,7 @@ export default function ReportsAssemblyDeadline() {
               </button>
               <h1 className="text-2xl font-bold text-gray-900">Prazo de montagem</h1>
               <p className="mt-1 text-sm text-gray-500">
-                Montagens geradas no período e se foram montadas dentro da previsão do pedido. Kit conta como uma montagem. Troca, assistência e a rota Baixa de montagens ficam de fora.
+                Montagens geradas no período e se foram montadas dentro da previsão do pedido. Quando a montagem só foi gerada depois da previsão (a entrega atrasou), ela aparece à parte e não conta como atraso da montagem. Kit conta como uma montagem. Troca, assistência e a rota Baixa de montagens ficam de fora.
               </p>
             </div>
             <div className="flex gap-2">
@@ -502,22 +541,30 @@ export default function ReportsAssemblyDeadline() {
         ) : (
           <>
             {/* SINTÉTICO */}
-            <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+            <section className="grid grid-cols-1 gap-4 md:grid-cols-3 xl:grid-cols-5">
               <StatCard
                 title="No prazo"
                 value={formatNumber(summary.onTime)}
                 icon={<CheckCircle2 className="h-5 w-5" />}
                 tone="bg-emerald-50 text-emerald-700"
-                line={`${formatPercent(summary.onTime, withForecast)} das montagens com previsão`}
+                line={`${formatPercent(summary.onTime, withForecast)} das montagens avaliadas`}
                 note="Montadas no dia da previsão ou antes."
               />
               <StatCard
-                title="Fora do prazo"
+                title="Atrasou na montagem"
                 value={formatNumber(summary.late)}
                 icon={<AlarmClock className="h-5 w-5" />}
                 tone="bg-red-50 text-red-700"
-                line={`${formatPercent(summary.late, withForecast)} das montagens com previsão`}
-                note={summary.late > 0 ? `Atraso médio de ${formatNumber(summary.avgDelay, 1)} dias; o maior foi de ${daysLabel(summary.maxDelay)}.` : 'Nenhuma montagem atrasada no período.'}
+                line={`${formatPercent(summary.late, withForecast)} das montagens avaliadas`}
+                note={summary.late > 0 ? `Gerada antes da previsão e montada depois. Atraso médio de ${formatNumber(summary.avgDelay, 1)} dias; o maior foi de ${daysLabel(summary.maxDelay)}.` : 'Gerada antes da previsão e montada depois. Nenhuma no período.'}
+              />
+              <StatCard
+                title="Chegou vencida da entrega"
+                value={formatNumber(summary.arrivedLate)}
+                icon={<PackageX className="h-5 w-5" />}
+                tone="bg-violet-50 text-violet-700"
+                line={summary.arrivedLate > 0 ? `A montagem levou, em média, ${formatNumber(summary.arrivedAvgDaysToAssemble, 1)} dias depois de gerada` : 'Nenhuma no período'}
+                note="Montagem gerada depois da data da previsão, porque a entrega atrasou. Não entra no percentual."
               />
               <StatCard
                 title="Sem previsão"
@@ -525,23 +572,23 @@ export default function ReportsAssemblyDeadline() {
                 icon={<HelpCircle className="h-5 w-5" />}
                 tone="bg-gray-100 text-gray-600"
                 line={`de ${formatNumber(summary.total)} já montadas`}
-                note="Pedido sem data de previsão de montagem. Não entram no percentual."
+                note="Pedido sem data de previsão de montagem. Não entra no percentual."
               />
               <StatCard
                 title="Ainda não montadas"
                 value={formatNumber(view.open.count)}
                 icon={<Clock className="h-5 w-5" />}
                 tone="bg-amber-50 text-amber-700"
-                line={view.open.late > 0 ? `${formatNumber(view.open.late)} já passaram da previsão` : 'Nenhuma passou da previsão'}
+                line={view.open.late > 0 ? `${formatNumber(view.open.late)} já passaram da previsão${view.open.arrivedLate > 0 ? ` (${formatNumber(view.open.arrivedLate)} já chegaram vencidas)` : ''}` : 'Nenhuma passou da previsão'}
                 note="Geradas no período e ainda sem montagem. Não usa o filtro de montador."
               />
             </section>
 
             {/* ANALÍTICO: faixas de atraso */}
             <section className="overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm">
-              <SectionTitle icon={<Timer className="h-5 w-5 text-orange-600" />} title="Fora do prazo por dias de atraso" />
+              <SectionTitle icon={<Timer className="h-5 w-5 text-orange-600" />} title="Atrasou na montagem: dias de atraso" />
               {summary.late === 0 ? (
-                <p className="px-6 py-8 text-sm text-gray-500">Nenhuma montagem fora do prazo com esses filtros.</p>
+                <p className="px-6 py-8 text-sm text-gray-500">Nenhuma montagem atrasada com esses filtros.</p>
               ) : (
                 <div className="space-y-3 px-6 py-5">
                   {view.bands.map((band) => (
@@ -580,9 +627,9 @@ export default function ReportsAssemblyDeadline() {
 
             {/* ANALÍTICO: lista */}
             <section className="overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm">
-              <SectionTitle icon={<AlarmClock className="h-5 w-5 text-orange-600" />} title="Montagens fora do prazo, do maior atraso para o menor" />
+              <SectionTitle icon={<AlarmClock className="h-5 w-5 text-orange-600" />} title="Atrasou na montagem, do maior atraso para o menor" />
               {view.lateUnits.length === 0 ? (
-                <p className="px-6 py-8 text-sm text-gray-500">Nenhuma montagem fora do prazo com esses filtros.</p>
+                <p className="px-6 py-8 text-sm text-gray-500">Nenhuma montagem atrasada com esses filtros.</p>
               ) : (
                 <>
                   <div className="overflow-x-auto">
@@ -623,6 +670,61 @@ export default function ReportsAssemblyDeadline() {
                         className="text-sm font-semibold text-orange-600 hover:text-orange-700"
                       >
                         {showAllLate ? 'Mostrar só os 30 maiores' : `Mostrar todas as ${formatNumber(view.lateUnits.length)}`}
+                      </button>
+                    </div>
+                  )}
+                </>
+              )}
+            </section>
+
+            <section className="overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm">
+              <SectionTitle icon={<PackageX className="h-5 w-5 text-violet-600" />} title="Chegaram vencidas da entrega" />
+              {view.arrivedUnits.length === 0 ? (
+                <p className="px-6 py-8 text-sm text-gray-500">Nenhuma montagem chegou vencida com esses filtros.</p>
+              ) : (
+                <>
+                  <div className="overflow-x-auto">
+                    <table className="min-w-full text-sm">
+                      <thead className="bg-gray-50 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+                        <tr>
+                          <th className="px-4 py-3">Pedido</th>
+                          <th className="px-4 py-3">Cliente</th>
+                          <th className="px-4 py-3">Produto</th>
+                          <th className="px-4 py-3">Cidade</th>
+                          <th className="px-4 py-3">Montador</th>
+                          <th className="px-4 py-3">Previsão</th>
+                          <th className="px-4 py-3">Gerada em</th>
+                          <th className="px-4 py-3">Montado em</th>
+                          <th className="px-4 py-3 text-right">Chegou vencida há</th>
+                          <th className="px-4 py-3 text-right">Montagem levou</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100">
+                        {visibleArrived.map((unit) => (
+                          <tr key={unit.key}>
+                            <td className="px-4 py-2 font-medium text-gray-900">{unit.orderErp}</td>
+                            <td className="px-4 py-2">{unit.customer}</td>
+                            <td className="px-4 py-2">{unit.product}{unit.weight !== 1 ? ` (${formatNumber(unit.weight)})` : ''}</td>
+                            <td className="px-4 py-2">{unit.city || '-'}</td>
+                            <td className="px-4 py-2">{assemblerById.get(unit.assemblerId)?.label || '-'}</td>
+                            <td className="px-4 py-2">{dayLabel(unit.forecastDay)}</td>
+                            <td className="px-4 py-2">{dayLabel(unit.generatedDay)}</td>
+                            <td className="px-4 py-2">{dayLabel(unit.doneDay)}</td>
+                            <td className="px-4 py-2 text-right text-violet-700">{daysLabel(unit.arrivedLateDays)}</td>
+                            <td className="px-4 py-2 text-right font-semibold">{daysLabel(unit.daysToAssemble ?? 0)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  {view.arrivedUnits.length > 30 && (
+                    <div className="border-t border-gray-100 px-6 py-3">
+                      <button
+                        type="button"
+                        onClick={() => setShowAllArrived((value) => !value)}
+                        className="text-sm font-semibold text-orange-600 hover:text-orange-700"
+                      >
+                        {showAllArrived ? 'Mostrar só as 30 primeiras' : `Mostrar todas as ${formatNumber(view.arrivedUnits.length)}`}
                       </button>
                     </div>
                   )}
@@ -687,10 +789,11 @@ function GroupTable({ icon, title, firstColumn, rows, emptyText }: { icon: React
                 <th className="px-6 py-3">{firstColumn}</th>
                 <th className="px-6 py-3 text-right">Montadas</th>
                 <th className="px-6 py-3 text-right">No prazo</th>
-                <th className="px-6 py-3 text-right">Fora do prazo</th>
+                <th className="px-6 py-3 text-right">Atrasou na montagem</th>
                 <th className="px-6 py-3 text-right">% no prazo</th>
                 <th className="px-6 py-3 text-right">Atraso médio</th>
                 <th className="px-6 py-3 text-right">Maior atraso</th>
+                <th className="px-6 py-3 text-right">Chegou vencida</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
@@ -703,6 +806,7 @@ function GroupTable({ icon, title, firstColumn, rows, emptyText }: { icon: React
                   <td className="px-6 py-3 text-right">{formatPercent(row.onTime, row.onTime + row.late)}</td>
                   <td className="px-6 py-3 text-right">{row.late > 0 ? `${formatNumber(row.avgDelay, 1)} dias` : '-'}</td>
                   <td className="px-6 py-3 text-right">{row.late > 0 ? daysLabel(row.maxDelay) : '-'}</td>
+                  <td className="px-6 py-3 text-right text-violet-700">{formatNumber(row.arrivedLate)}</td>
                 </tr>
               ))}
             </tbody>
@@ -710,7 +814,7 @@ function GroupTable({ icon, title, firstColumn, rows, emptyText }: { icon: React
         </div>
       )}
       <p className="border-t border-gray-100 px-6 py-2 text-xs text-gray-400">
-        Ordenado pelo atraso médio. Atraso médio considera só as montagens fora do prazo.
+        Ordenado pelo atraso médio. Atraso médio considera só as que atrasaram na montagem. Chegou vencida não entra no % no prazo.
       </p>
     </section>
   );
@@ -724,12 +828,13 @@ function buildPrintHtml(params: {
   citiesLabel: string;
   assemblersLabel: string;
   view: {
-    summary: ReturnType<typeof summarize>;
-    open: { count: number; late: number };
+    summary: Summary;
+    open: { count: number; late: number; arrivedLate: number };
     bands: Array<{ label: string; count: number }>;
     byCity: GroupRow[];
     byAssembler: GroupRow[];
     lateUnits: AssemblyUnit[];
+    arrivedUnits: AssemblyUnit[];
   };
   assemblerById: Map<string, AssemblerOption>;
 }) {
@@ -741,13 +846,13 @@ function buildPrintHtml(params: {
   const groupTable = (title: string, firstColumn: string, rows: GroupRow[]) => `
     <h2>${title}</h2>
     <table>
-      <thead><tr><th>${firstColumn}</th><th class="num">Montadas</th><th class="num">No prazo</th><th class="num">Fora</th><th class="num">% no prazo</th><th class="num">Atraso médio</th><th class="num">Maior atraso</th></tr></thead>
+      <thead><tr><th>${firstColumn}</th><th class="num">Montadas</th><th class="num">No prazo</th><th class="num">Atrasou</th><th class="num">% no prazo</th><th class="num">Atraso médio</th><th class="num">Maior atraso</th><th class="num">Chegou vencida</th></tr></thead>
       <tbody>${
         rows
           .map(
-            (row) => `<tr><td>${escapeHtml(row.label)}</td><td class="num">${formatNumber(row.total)}</td><td class="num">${formatNumber(row.onTime)}</td><td class="num">${formatNumber(row.late)}</td><td class="num">${formatPercent(row.onTime, row.onTime + row.late)}</td><td class="num">${row.late > 0 ? `${formatNumber(row.avgDelay, 1)} dias` : '-'}</td><td class="num">${row.late > 0 ? daysLabel(row.maxDelay) : '-'}</td></tr>`
+            (row) => `<tr><td>${escapeHtml(row.label)}</td><td class="num">${formatNumber(row.total)}</td><td class="num">${formatNumber(row.onTime)}</td><td class="num">${formatNumber(row.late)}</td><td class="num">${formatPercent(row.onTime, row.onTime + row.late)}</td><td class="num">${row.late > 0 ? `${formatNumber(row.avgDelay, 1)} dias` : '-'}</td><td class="num">${row.late > 0 ? daysLabel(row.maxDelay) : '-'}</td><td class="num">${formatNumber(row.arrivedLate)}</td></tr>`
           )
-          .join('') || '<tr><td colspan="7">Nenhuma montagem com esses filtros.</td></tr>'
+          .join('') || '<tr><td colspan="8">Nenhuma montagem com esses filtros.</td></tr>'
       }</tbody>
     </table>`;
   const bandsHtml = view.bands
@@ -756,6 +861,11 @@ function buildPrintHtml(params: {
   const lateHtml = view.lateUnits
     .map(
       (unit) => `<tr><td>${escapeHtml(unit.orderErp)}</td><td>${escapeHtml(unit.customer)}</td><td>${escapeHtml(unit.product)}${unit.weight !== 1 ? ` (${formatNumber(unit.weight)})` : ''}</td><td>${escapeHtml(unit.city || '-')}</td><td>${escapeHtml(assemblerById.get(unit.assemblerId)?.label || '-')}</td><td>${dayLabel(unit.forecastDay)}</td><td>${dayLabel(unit.doneDay)}</td><td class="num">${daysLabel(unit.delayDays ?? 0)}</td></tr>`
+    )
+    .join('');
+  const arrivedHtml = view.arrivedUnits
+    .map(
+      (unit) => `<tr><td>${escapeHtml(unit.orderErp)}</td><td>${escapeHtml(unit.customer)}</td><td>${escapeHtml(unit.product)}${unit.weight !== 1 ? ` (${formatNumber(unit.weight)})` : ''}</td><td>${escapeHtml(unit.city || '-')}</td><td>${dayLabel(unit.forecastDay)}</td><td>${dayLabel(unit.generatedDay)}</td><td>${dayLabel(unit.doneDay)}</td><td class="num">${daysLabel(unit.arrivedLateDays)}</td><td class="num">${daysLabel(unit.daysToAssemble ?? 0)}</td></tr>`
     )
     .join('');
 
@@ -792,24 +902,30 @@ function buildPrintHtml(params: {
     <div><b>Montadores:</b> ${escapeHtml(params.assemblersLabel)}</div>
   </div>
   <div class="cards">
-    ${card('No prazo', formatNumber(summary.onTime), `${formatPercent(summary.onTime, withForecast)} das montagens com previsão`)}
-    ${card('Fora do prazo', formatNumber(summary.late), summary.late > 0 ? `${formatPercent(summary.late, withForecast)} · atraso médio ${formatNumber(summary.avgDelay, 1)} dias · maior ${daysLabel(summary.maxDelay)}` : 'Nenhuma no período')}
+    ${card('No prazo', formatNumber(summary.onTime), `${formatPercent(summary.onTime, withForecast)} das montagens avaliadas`)}
+    ${card('Atrasou na montagem', formatNumber(summary.late), summary.late > 0 ? `${formatPercent(summary.late, withForecast)} · atraso médio ${formatNumber(summary.avgDelay, 1)} dias · maior ${daysLabel(summary.maxDelay)}` : 'Nenhuma no período')}
+    ${card('Chegou vencida da entrega', formatNumber(summary.arrivedLate), summary.arrivedLate > 0 ? `Montagem levou em média ${formatNumber(summary.arrivedAvgDaysToAssemble, 1)} dias depois de gerada` : 'Nenhuma no período')}
     ${card('Sem previsão', formatNumber(summary.noForecast), `de ${formatNumber(summary.total)} já montadas`)}
-    ${card('Ainda não montadas', formatNumber(view.open.count), `${formatNumber(view.open.late)} já passaram da previsão (no momento da impressão)`)}
+    ${card('Ainda não montadas', formatNumber(view.open.count), `${formatNumber(view.open.late)} já passaram da previsão, ${formatNumber(view.open.arrivedLate)} delas chegaram vencidas (no momento da impressão)`)}
   </div>
-  <h2>Fora do prazo por dias de atraso</h2>
+  <h2>Atrasou na montagem: dias de atraso</h2>
   <table>
     <thead><tr><th>Faixa</th><th class="num">Montagens</th><th class="num">% das atrasadas</th></tr></thead>
     <tbody>${bandsHtml}</tbody>
   </table>
   ${groupTable('Atraso por cidade', 'Cidade', view.byCity)}
   ${groupTable('Atraso por montador', 'Montador', view.byAssembler)}
-  <h2>Montagens fora do prazo</h2>
+  <h2>Atrasou na montagem</h2>
   <table>
     <thead><tr><th>Pedido</th><th>Cliente</th><th>Produto</th><th>Cidade</th><th>Montador</th><th>Previsão</th><th>Montado em</th><th class="num">Atraso</th></tr></thead>
-    <tbody>${lateHtml || '<tr><td colspan="8">Nenhuma montagem fora do prazo.</td></tr>'}</tbody>
+    <tbody>${lateHtml || '<tr><td colspan="8">Nenhuma montagem atrasada.</td></tr>'}</tbody>
   </table>
-  <div class="footer">No prazo = montado no dia da previsão ou antes. Kit conta como uma montagem, no dia da última peça. Troca, assistência e a rota Baixa de montagens ficam de fora. Gerado em ${escapeHtml(new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }))}.</div>
+  <h2>Chegaram vencidas da entrega</h2>
+  <table>
+    <thead><tr><th>Pedido</th><th>Cliente</th><th>Produto</th><th>Cidade</th><th>Previsão</th><th>Gerada em</th><th>Montado em</th><th class="num">Chegou vencida há</th><th class="num">Montagem levou</th></tr></thead>
+    <tbody>${arrivedHtml || '<tr><td colspan="9">Nenhuma montagem chegou vencida.</td></tr>'}</tbody>
+  </table>
+  <div class="footer">No prazo = montado no dia da previsão ou antes. Chegou vencida = montagem gerada depois da previsão (atraso da entrega), fora do percentual. Kit conta como uma montagem, no dia da última peça. Troca, assistência e a rota Baixa de montagens ficam de fora. Gerado em ${escapeHtml(new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }))}.</div>
 </body>
 </html>`;
 }
