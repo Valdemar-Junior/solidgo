@@ -4,8 +4,9 @@
 -- Rode no SQL Editor do Supabase de PRODUÇÃO.
 -- Troque as datas nas duas linhas marcadas com <<<.
 --
--- Conta por PRODUTO (não junta kit como a tela faz) e não tira troca/assistência,
--- então pode ficar um pouco acima da tela. Serve para conferir a ordem de grandeza.
+-- Troca e assistência ficam de fora, como na tela.
+-- Conta por PRODUTO (não junta kit como a tela faz),
+-- então pode ficar um pouco acima da tela quando houver kit. Serve para conferir a ordem de grandeza.
 
 with base as (
   select
@@ -24,6 +25,8 @@ with base as (
   left join assembly_routes r on r.id = ap.assembly_route_id
   where ap.status <> 'cancelled'
     and coalesce(r.name, '') not ilike 'BAIXA DE MONTAGE%'
+    and coalesce(upper(o.service_type), '') not in ('TROCA', 'ASSISTENCIA', 'ASSISTÊNCIA')
+    and coalesce(o.order_id_erp, '') !~ '-(A|T)-[0-9]+$'   -- sem troca (-T-) e assistência (-A-)
     and ap.created_at >= '2026-11-01 00:00:00-03'   -- <<< início
     and ap.created_at <  '2026-11-26 00:00:00-03'   -- <<< dia seguinte ao fim
 )
