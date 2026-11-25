@@ -32,6 +32,7 @@ import ReportsAssemblyOperational from './pages/admin/ReportsAssemblyOperational
 import ReportsDeliveryGoal from './pages/admin/ReportsDeliveryGoal';
 import ReportsAssemblyGoal from './pages/admin/ReportsAssemblyGoal';
 import ReportsAssemblyPanel from './pages/admin/ReportsAssemblyPanel';
+import ReportsAssemblyDeadline from './pages/admin/ReportsAssemblyDeadline';
 import ReportsProductCommitment from './pages/admin/ReportsProductCommitment';
 import ReportsWithdrawals from './pages/admin/ReportsWithdrawals';
 import StoreReleaseManagement from './pages/gerente/StoreReleaseManagement';
@@ -279,6 +280,16 @@ function App() {
               <ProtectedRoute allowedRoles={['admin']}>
                 <AdminLayout>
                   <ReportsAssemblyPanel />
+                </AdminLayout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/reports/assembly-deadline"
+            element={
+              <ProtectedRoute allowedRoles={['admin']}>
+                <AdminLayout>
+                  <ReportsAssemblyDeadline />
                 </AdminLayout>
               </ProtectedRoute>
             }

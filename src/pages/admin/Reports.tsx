@@ -1,4 +1,4 @@
-import { ArrowRight, FileSpreadsheet, Goal, Hammer, LayoutDashboard, Package, PackageSearch, Truck } from 'lucide-react';
+import { AlarmClock, ArrowRight, FileSpreadsheet, Goal, Hammer, LayoutDashboard, Package, PackageSearch, Truck } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
 type ReportCard = {
@@ -56,6 +56,15 @@ const REPORT_CARDS: ReportCard[] = [
     icon: LayoutDashboard,
     accent: 'from-amber-500 to-orange-600',
     iconBg: 'bg-amber-50 text-amber-700',
+  },
+  {
+    id: 'assembly-deadline',
+    title: 'Prazo de Montagem',
+    description: 'Montagens no prazo e fora do prazo, dias de atraso, atraso por cidade e por montador, com impressao em PDF.',
+    href: '/admin/reports/assembly-deadline',
+    icon: AlarmClock,
+    accent: 'from-red-500 to-orange-500',
+    iconBg: 'bg-red-50 text-red-700',
   },
   {
     id: 'product-commitment',
