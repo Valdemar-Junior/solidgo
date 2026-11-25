@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { supabase } from '../../supabase/client';
 import { generateDanfeBase64 } from '../../utils/danfe/generateDanfe';
 import { buildPickupDanfePdf } from '../../utils/pickup/pickupDanfe';
-import { formatDateTimeBR } from '../../utils/dateBR';
+import { formatDateBR, formatDateTimeBR } from '../../utils/dateBR';
 import { useAuthStore } from '../../stores/authStore';
 import type { Order, OrderWithdrawal, StoreReleaseAssignment, StoreReleaseHistory } from '../../types/database';
 import { toast } from 'sonner';
@@ -280,7 +280,7 @@ export default function OrderLookup() {
       .rpc('search_orders_by_cpf', { p_cpf: numeric })
       .select(ORDERS_LOOKUP_COLS)
       .order('data_venda', { ascending: false, nullsFirst: false })
-      .limit(10);
+      .limit(30);
 
     if (!indexedError) return (indexedOrders || []) as unknown as Order[];
     // Função ainda não criada neste banco: cai na busca antiga (lenta) para não quebrar.
@@ -321,13 +321,24 @@ export default function OrderLookup() {
     setProofPdfLoadingByRouteOrder({});
   };
 
+  // Clicar num pedido da lista só troca o pedido aberto: a lista e o que foi digitado ficam,
+  // para dar para olhar outro pedido do mesmo CPF sem buscar de novo.
   const selectSuggestedOrder = (order: Order) => {
     searchSequenceRef.current += 1;
     suggestionSequenceRef.current += 1;
     setSuggestionsLoading(false);
-    setQuery(String(order.order_id_erp || ''));
-    setOrders([order]);
+    lastDefinitiveQueryRef.current = query.trim();
     setSelectedOrder(order);
+  };
+
+  // Resumo dos produtos para reconhecer o pedido na lista sem abrir.
+  const summarizeProducts = (order: Order) => {
+    const names = (order.items_json || [])
+      .map((item) => String(item?.name || '').trim())
+      .filter(Boolean);
+    if (names.length === 0) return 'Sem produtos';
+    const shown = names.slice(0, 2).join(' · ');
+    return names.length > 2 ? `${shown} · +${names.length - 2}` : shown;
   };
 
   const handleSearch = async (term?: string) => {
@@ -1330,14 +1341,22 @@ export default function OrderLookup() {
             </div>
           )}
           {orders.length > 0 && (
-            <div className="flex flex-wrap gap-2">
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
               {orders.map(o => (
                 <button
                   key={o.id}
+                  type="button"
                   onClick={() => selectSuggestedOrder(o)}
-                  className={`px-3 py-2 rounded-lg border text-sm ${selectedOrder?.id === o.id ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-gray-200 bg-gray-50 text-gray-700'}`}
+                  className={`rounded-lg border px-3 py-2 text-left text-sm ${selectedOrder?.id === o.id ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-gray-200 bg-gray-50 text-gray-700 hover:bg-gray-100'}`}
                 >
-                  {o.order_id_erp} — {o.customer_name}
+                  <span className="flex items-center justify-between gap-2">
+                    <span className="font-semibold">Pedido {o.order_id_erp}</span>
+                    <span className="text-xs text-gray-500">{o.data_venda ? formatDateBR(o.data_venda) : '-'}</span>
+                  </span>
+                  <span className="block truncate text-xs text-gray-500">{o.customer_name}</span>
+                  <span className="block truncate text-xs" title={(o.items_json || []).map((item) => item?.name).filter(Boolean).join(' · ')}>
+                    {summarizeProducts(o)}
+                  </span>
                 </button>
               ))}
             </div>
