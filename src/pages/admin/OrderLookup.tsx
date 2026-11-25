@@ -179,6 +179,9 @@ export default function OrderLookup() {
   const [withdrawalActionLoading, setWithdrawalActionLoading] = useState<'receipt' | 'danfe' | 'return_danfe' | null>(null);
   const searchSequenceRef = useRef(0);
   const suggestionSequenceRef = useRef(0);
+  // Último termo buscado pelo botão Buscar. As sugestões não rodam de novo para ele: como elas
+  // não procuram CPF, voltariam vazias e apagariam a lista de pedidos do cliente.
+  const lastDefinitiveQueryRef = useRef('');
 
   // Check if user is consultor to hide certain elements
   const { user, logout } = useAuthStore();
@@ -335,6 +338,7 @@ export default function OrderLookup() {
     }
     const requestId = ++searchSequenceRef.current;
     suggestionSequenceRef.current += 1;
+    lastDefinitiveQueryRef.current = q;
     try {
       setLoading(true);
       setSuggestionsLoading(false);
@@ -360,6 +364,11 @@ export default function OrderLookup() {
   useEffect(() => {
     const q = query.trim();
     const requestId = ++suggestionSequenceRef.current;
+
+    if (q && q === lastDefinitiveQueryRef.current) {
+      setSuggestionsLoading(false);
+      return;
+    }
 
     if (loading || q.length < 3 || (selectedOrder && q === String(selectedOrder.order_id_erp || ''))) {
       setSuggestionsLoading(false);
