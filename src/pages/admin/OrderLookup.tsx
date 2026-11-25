@@ -196,25 +196,15 @@ export default function OrderLookup() {
     const q = term.trim();
     if (!q) return [];
     try {
-      const numeric = q.replace(/\D/g, '');
-      const formatCpf = (digits: string) => {
-        if (digits.length !== 11) return null;
-        return `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6, 9)}-${digits.slice(9)}`;
-      };
-      const formattedCpf = formatCpf(numeric);
       const likeTerm = `%${q}%`;
-      const likeNum = numeric ? `%${numeric}%` : '';
+      // Sugestões procuram só por número do pedido e nome do cliente. Procurar CPF aqui
+      // varria a tabela inteira (inclusive raw_json) a cada tecla e estourava o limite de
+      // 8 s do banco, travando a busca. CPF fica só no botão Buscar, com os 11 dígitos
+      // (fetchDefinitiveOrders). Decisão do dono em 25/11/2026.
       const filters: string[] = [
         `order_id_erp.ilike.${likeTerm}`,
         `customer_name.ilike.${likeTerm}`,
       ];
-      if (numeric) {
-        filters.push(`customer_cpf.ilike.${likeNum}`);
-        if (formattedCpf) filters.push(`customer_cpf.ilike.%${formattedCpf}%`);
-        filters.push(`raw_json->>destinatario_cpf.ilike.${likeNum}`);
-        filters.push(`raw_json->>cliente_cpf.ilike.${likeNum}`);
-        filters.push(`raw_json->>cpf.ilike.${likeNum}`);
-      }
       const filterStr = filters.join(',');
 
       const { data, error } = await supabase
