@@ -17,22 +17,29 @@ where public.orders_cpf_keys(o.customer_cpf, o.raw_json) @> array['00000000000']
 
 -- 3) A busca nova acha pelo menos o que a antiga achava? Compara 5 clientes sorteados.
 --    Esperado: coluna "faltando" = 0 em todas as linhas (a nova pode achar MAIS, nunca menos).
+--    Sorteia pelo CPF só com números, porque em produção ele fica gravado com pontos e traço.
 with amostra as (
-  select regexp_replace(customer_cpf, '[^0-9]', '', 'g') as cpf
-  from orders
-  where customer_cpf ~ '[0-9]{11}'
+  select d as cpf,
+         substr(d,1,3)||'.'||substr(d,4,3)||'.'||substr(d,7,3)||'-'||substr(d,10,2) as cpf_formatado
+  from (
+    select distinct regexp_replace(customer_cpf, '[^0-9]', '', 'g') as d
+    from orders
+    where regexp_replace(coalesce(customer_cpf, ''), '[^0-9]', '', 'g') ~ '^[0-9]{11}$'
+  ) x
   order by random()
   limit 5
 ),
 comparacao as (
   select
-    a.cpf,
     (select count(*) from orders o
       where o.customer_cpf ilike a.cpf
-         or o.customer_cpf ilike substr(a.cpf,1,3)||'.'||substr(a.cpf,4,3)||'.'||substr(a.cpf,7,3)||'-'||substr(a.cpf,10,2)
+         or o.customer_cpf ilike a.cpf_formatado
          or o.raw_json->>'destinatario_cpf' ilike a.cpf
+         or o.raw_json->>'destinatario_cpf' ilike a.cpf_formatado
          or o.raw_json->>'cliente_cpf' ilike a.cpf
-         or o.raw_json->>'cpf' ilike a.cpf)                              as busca_antiga,
+         or o.raw_json->>'cliente_cpf' ilike a.cpf_formatado
+         or o.raw_json->>'cpf' ilike a.cpf
+         or o.raw_json->>'cpf' ilike a.cpf_formatado)                    as busca_antiga,
     (select count(*) from public.search_orders_by_cpf(a.cpf))            as busca_nova
   from amostra a
 )
