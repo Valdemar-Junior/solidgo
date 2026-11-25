@@ -271,6 +271,19 @@ export default function OrderLookup() {
     // Só interpreta uma entrada numérica como CPF quando ela possui os 11 dígitos completos.
     if (numeric.length !== 11) return [];
 
+    // Busca indexada (migration 20261125120000_orders_cpf_search_index.sql): olha todos os CPFs
+    // do pedido de uma vez, sem varrer a tabela. Mais recentes primeiro.
+    const { data: indexedOrders, error: indexedError } = await supabase
+      .rpc('search_orders_by_cpf', { p_cpf: numeric })
+      .select(ORDERS_LOOKUP_COLS)
+      .order('data_venda', { ascending: false, nullsFirst: false })
+      .limit(10);
+
+    if (!indexedError) return (indexedOrders || []) as unknown as Order[];
+    // Função ainda não criada neste banco: cai na busca antiga (lenta) para não quebrar.
+    if (indexedError.code !== 'PGRST202') throw indexedError;
+    console.warn('[OrderLookup] search_orders_by_cpf ausente; usando busca antiga por CPF.');
+
     const formattedCpf = `${numeric.slice(0, 3)}.${numeric.slice(3, 6)}.${numeric.slice(6, 9)}-${numeric.slice(9)}`;
     const cpfFilters = [
       `customer_cpf.ilike.${numeric}`,
