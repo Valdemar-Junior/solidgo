@@ -40,6 +40,16 @@ export class DeliverySheetGenerator {
     const helveticaBoldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
     const isAssemblySheet = String(title || '').toLowerCase().includes('montagem');
     const isPickupSheet = String(title || '').toLowerCase().includes('retirada');
+    // Volumes no fim da descrição do produto, nos romaneios de entrega e de montagem (pedido do
+    // dono em 28/11/2026, no lugar da coluna Vol desfeita em 19/11). Mesmo número da conferência:
+    // quantidade_volumes do ERP, gravado em quantity. Retirada não mostra.
+    const withVolumes = (description: string, item: any): string => {
+      if (isPickupSheet) return description;
+      const raw = item?.quantity ?? item?.volumes_per_unit;
+      const volumes = Number(raw);
+      if (raw == null || raw === '' || !Number.isFinite(volumes) || volumes <= 0) return description;
+      return `${description} - ${volumes} VOL`;
+    };
     const isAssemblyItem = (it: any): boolean => {
       const v1 = String(it?.has_assembly ?? '').toLowerCase();
       const v2 = String(it?.possui_montagem ?? '').toLowerCase();
@@ -214,7 +224,7 @@ export class DeliverySheetGenerator {
       for (const it of (itemsPre.length ? itemsPre : [{} as any])) {
         const produtoNomePre = String((it as any).name || '');
         const colorStrPre = String((it as any).color || '');
-        const produtoFmtPre = colorStrPre ? `${produtoNomePre} - ${colorStrPre}` : produtoNomePre;
+        const produtoFmtPre = withVolumes(colorStrPre ? `${produtoNomePre} - ${colorStrPre}` : produtoNomePre, it);
         const productLinesPre = this.wrapText(produtoFmtPre, colsPre[1] - 8, helveticaFont, 9);
 
         // local (precompute same as render)
@@ -470,7 +480,7 @@ export class DeliverySheetGenerator {
         };
         const local = resolveLocal();
         const produto = String(it.name ?? '');
-        const produtoFmt = color ? `${produto} - ${color}` : produto;
+        const produtoFmt = withVolumes(color ? `${produto} - ${color}` : produto, it);
         const productLines = this.wrapText(produtoFmt, cols[1] - 8, helveticaFont, 9);
         const localLines = this.wrapText(String(local || ''), cols[2] - 8, helveticaFont, 9);
         const marcaLines = this.wrapText(String(marca || ''), cols[5] - 8, helveticaFont, 9);
